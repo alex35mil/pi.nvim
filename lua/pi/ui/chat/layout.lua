@@ -15,6 +15,9 @@ local Config = require("pi.config")
 local Prompt = require("pi.ui.chat.prompt")
 local Highlights = require("pi.ui.highlights")
 
+--- Low z-index so other floats naturally sit on top.
+local FLOAT_ZINDEX = 10
+
 -- Capture editor options to inherit in π windows.
 local editor_foldcolumn = vim.wo.foldcolumn
 
@@ -110,6 +113,7 @@ function Layout:_open_attachments_in_float_layout(col, row, width, border)
         row = row,
         style = "minimal",
         border = border,
+        zindex = FLOAT_ZINDEX,
         title = " " .. Config.options.ui.panels.attachments.title .. " ",
         title_pos = "center",
     })
@@ -353,6 +357,7 @@ function Layout:_open_in_float_layout()
             row = row,
             style = "minimal",
             border = border,
+            zindex = FLOAT_ZINDEX,
             title = " " .. Config.options.ui.panels.history.title .. " ",
             title_pos = "center",
         }, user_win)
@@ -373,6 +378,7 @@ function Layout:_open_in_float_layout()
             row = row + history_height + 2,
             style = "minimal",
             border = border,
+            zindex = FLOAT_ZINDEX,
             title = " " .. Config.options.ui.panels.prompt.title .. " ",
             title_pos = "center",
         }, user_win)
