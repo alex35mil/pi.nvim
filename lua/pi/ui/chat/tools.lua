@@ -81,13 +81,136 @@ local function render_output(history, text)
     })
 end
 
+--- Build a structured collapsed view for a tool block.
+--- Input: ≤ input_visible as-is, otherwise first input_visible line(s) + "+N lines".
+--- Separator: always shown if output exists.
+--- Output: ≤ output_visible as-is, otherwise "…N lines" + last output_visible line(s).
+---@param input_lines string[]
+---@param output_lines string[] actual output (no separator/code fences)
+---@param has_output boolean
+---@param input_visible integer
+---@param output_visible integer
+---@return string[] lines
+---@return string[] specs  parallel array: "input"|"summary"|"separator"|"output"
+function M.build_collapsed_view(input_lines, output_lines, has_output, input_visible, output_visible)
+    local lines, specs = {}, {}
+
+    -- Input
+    if #input_lines <= input_visible then
+        for _, l in ipairs(input_lines) do
+            lines[#lines + 1] = l
+            specs[#specs + 1] = "input"
+        end
+    else
+        for i = 1, input_visible do
+            lines[#lines + 1] = input_lines[i]
+            specs[#specs + 1] = "input"
+        end
+        lines[#lines + 1] = " +" .. (#input_lines - input_visible) .. " lines"
+        specs[#specs + 1] = "summary"
+    end
+
+    -- Separator
+    if has_output then
+        lines[#lines + 1] = ""
+        specs[#specs + 1] = "separator"
+    end
+
+    -- Output
+    if #output_lines <= output_visible then
+        for _, l in ipairs(output_lines) do
+            lines[#lines + 1] = l
+            specs[#specs + 1] = "output"
+        end
+    elseif #output_lines > 0 then
+        lines[#lines + 1] = "…" .. (#output_lines - output_visible) .. " lines"
+        specs[#specs + 1] = "summary"
+        for i = #output_lines - output_visible + 1, #output_lines do
+            lines[#lines + 1] = output_lines[i]
+            specs[#specs + 1] = "output"
+        end
+    end
+
+    return lines, specs
+end
+
+--- Apply border and highlight extmarks to collapsed lines.
+---@param history pi.ChatHistory
+---@param base_row integer 0-indexed first row
+---@param specs string[] parallel array of line types
+---@param lines string[]
+function M.apply_collapsed_extmarks(history, base_row, specs, lines)
+    local hl_map = { input = "PiToolCall", summary = "PiToolCollapsed", output = "PiToolOutput" }
+    for i, spec in ipairs(specs) do
+        local row = base_row + i - 1
+        local glyph = spec == "separator" and M.GLYPHS.SEP or M.GLYPHS.MID
+        M.set_border(history, row, glyph)
+        local hl = hl_map[spec]
+        if hl and #lines[i] > 0 then
+            vim.api.nvim_buf_set_extmark(history:buf(), history:ns(), row, 0, {
+                end_col = #lines[i],
+                hl_group = hl,
+            })
+        end
+    end
+end
+
+--- Extract input lines and actual output lines from a tool block's inner range.
+---@param history pi.ChatHistory
+---@param block pi.ToolBlock
+---@return string[] input_lines
+---@return string[] output_lines  (actual content, no separator/code fences)
+---@return boolean has_output
+function M.extract_tool_sections(history, block)
+    local buf = history:buf()
+    local ns_id = history:ns()
+    local header_row = vim.api.nvim_buf_get_extmark_by_id(buf, ns_id, block.icon_extmark, {})[1]
+    local footer_row = vim.api.nvim_buf_get_extmark_by_id(buf, ns_id, block.end_extmark, {})[1]
+    local has_output = block.output_extmark ~= nil
+
+    local input_end = footer_row
+    if has_output then
+        input_end = vim.api.nvim_buf_get_extmark_by_id(buf, ns_id, block.output_extmark, {})[1]
+    end
+    local input_lines = vim.api.nvim_buf_get_lines(buf, header_row + 1, input_end, false)
+
+    local output_lines = {}
+    if has_output then
+        local output_row = vim.api.nvim_buf_get_extmark_by_id(buf, ns_id, block.output_extmark, {})[1]
+        -- Output section: separator, ```, actual lines..., ```
+        local content_start = output_row + 2 -- skip separator + opening ```
+        local content_end = footer_row - 1 -- skip closing ```
+        if content_end > content_start then
+            output_lines = vim.api.nvim_buf_get_lines(buf, content_start, content_end, false)
+        end
+    end
+
+    return input_lines, output_lines, has_output
+end
+
+--- Check whether a tool block should be collapsed based on renderer thresholds.
+---@param input_lines string[]
+---@param output_lines string[]
+---@param input_visible integer
+---@param output_visible integer
+---@return boolean
+function M.should_collapse(input_lines, output_lines, input_visible, output_visible)
+    return #input_lines > input_visible or #output_lines > output_visible
+end
+
+--- Renderers ---
+
 ---@class pi.ToolRenderer
 ---@field on_start? fun(history: pi.ChatHistory, args: table?)
 ---@field on_end? fun(history: pi.ChatHistory, args: table?, result: table?, is_error: boolean?)
+---@field input_visible? integer  lines to show when collapsed (default: show all)
+---@field output_visible? integer lines to show when collapsed (default: show all)
 
 ---@type table<string, pi.ToolRenderer>
 local renderers = {
     bash = {
+        input_visible = 1,
+        output_visible = 1,
         on_start = function(history, args)
             if args and (args.command or args.cmd) then
                 local cmd = args.command or args.cmd
@@ -129,6 +252,8 @@ local renderers = {
 
 ---@type pi.ToolRenderer
 local default_renderer = {
+    input_visible = 1,
+    output_visible = 1,
     on_end = function(history, _, result)
         local text = extract_result_text(result)
         if text and text ~= "" then

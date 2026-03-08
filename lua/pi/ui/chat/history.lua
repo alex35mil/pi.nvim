@@ -20,9 +20,21 @@
 ---@field _needs_separator boolean
 ---@field _thinking_accum pi.ThinkingAccum?
 ---@field _thinking_blocks pi.ThinkingBlock[]
----@field _tool_blocks table<string, { icon_extmark: integer, tool_input?: table }>
+---@field _tool_blocks table<string, pi.ToolBlock>
 local History = {}
 History.__index = History
+
+---@class pi.ToolBlock
+---@field tool_name string
+---@field icon_extmark integer
+---@field output_extmark? integer
+---@field end_extmark? integer
+---@field tool_input? table
+---@field expanded boolean
+---@field expanded_inner_lines? string[]
+---@field expanded_inner_extmarks? table[]
+---@field collapsed_inner_lines? string[]
+---@field collapsed_specs? string[]
 
 ---@class pi.ThinkingAccum
 ---@field lines string[]
@@ -44,6 +56,46 @@ local Tools = require("pi.ui.chat.tools")
 local ns = vim.api.nvim_create_namespace("pi-chat")
 
 local SCROLL_THRESHOLD = 10
+
+--- Capture extmarks in a row range (positions saved relative to start_row).
+---@param buf integer
+---@param ns_id integer
+---@param start_row integer 0-indexed inclusive
+---@param end_row integer 0-indexed inclusive
+---@return table[]
+local function capture_extmarks(buf, ns_id, start_row, end_row)
+    local marks = vim.api.nvim_buf_get_extmarks(buf, ns_id, { start_row, 0 }, { end_row, -1 }, { details = true })
+    local result = {}
+    for _, m in ipairs(marks) do
+        local details = m[4] or {}
+        local opts = {}
+        for _, key in ipairs({ "hl_group", "virt_text", "virt_text_pos", "hl_mode", "conceal", "priority", "end_col" }) do
+            if details[key] ~= nil then
+                opts[key] = details[key]
+            end
+        end
+        if details.end_row then
+            opts.end_row = details.end_row - start_row -- relative
+        end
+        result[#result + 1] = { row = m[2] - start_row, col = m[3], opts = opts }
+    end
+    return result
+end
+
+--- Restore previously captured extmarks offset by base_row.
+---@param buf integer
+---@param ns_id integer
+---@param base_row integer 0-indexed
+---@param saved table[]
+local function restore_extmarks(buf, ns_id, base_row, saved)
+    for _, em in ipairs(saved) do
+        local opts = vim.deepcopy(em.opts)
+        if opts.end_row then
+            opts.end_row = base_row + opts.end_row
+        end
+        pcall(vim.api.nvim_buf_set_extmark, buf, ns_id, base_row + em.row, em.col, opts)
+    end
+end
 
 ---@class pi.SpinnerDef
 ---@field refresh_rate integer ms between frames
@@ -613,8 +665,10 @@ function History:on_tool_start(tool_name, tool_call_id, tool_input)
 
         if tool_call_id then
             self._tool_blocks[tool_call_id] = {
+                tool_name = tool_name,
                 icon_extmark = icon_extmark,
                 tool_input = tool_input,
+                expanded = true,
             }
         end
     end)
@@ -633,16 +687,24 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
         local should_scroll = self:_should_auto_scroll()
 
         local block = tool_call_id and self._tool_blocks[tool_call_id]
+        local pre_output_line = vim.api.nvim_buf_line_count(self._buf) - 1
+
         local renderer = Tools.get_renderer(tool_name)
         if renderer.on_end then
             renderer.on_end(self, block and block.tool_input, result, is_error)
+        end
+
+        -- Mark the first output line (if renderer.on_end added anything)
+        local post_output_line = vim.api.nvim_buf_line_count(self._buf) - 1
+        if block and post_output_line > pre_output_line then
+            block.output_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, pre_output_line + 1, 0, {})
         end
 
         local footer = is_error and " error" or " completed"
         local footer_hl = is_error and "PiToolError" or "PiToolStatus"
         local start = self:_append_lines({ footer })
         Tools.set_border(self, start, Tools.GLYPHS.BOT)
-        vim.api.nvim_buf_set_extmark(self._buf, ns, start, 0, {
+        local footer_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, start, 0, {
             end_col = #footer,
             hl_group = footer_hl,
         })
@@ -656,6 +718,9 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
                 end_col = #icon,
                 hl_group = icon_hl,
             })
+            block.end_extmark = footer_extmark
+            block.expanded = true
+            self:_maybe_collapse_tool(tool_call_id)
         end
 
         self._needs_separator = true
@@ -663,9 +728,91 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
         if should_scroll then
             self:_scroll_to_bottom()
         end
+    end)
+end
 
-        if tool_call_id then
-            self._tool_blocks[tool_call_id] = nil
+--- Collapse a tool block based on per-renderer visible line thresholds.
+---@param tool_call_id string
+function History:_maybe_collapse_tool(tool_call_id)
+    local block = self._tool_blocks[tool_call_id]
+    if not block or not block.end_extmark then
+        return
+    end
+
+    local header_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})[1]
+    local footer_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.end_extmark, {})[1]
+    local inner_start = header_row + 1
+
+    local renderer = Tools.get_renderer(block.tool_name)
+    local input_vis = renderer.input_visible or math.huge
+    local output_vis = renderer.output_visible or math.huge
+
+    local input_lines, output_lines, has_output = Tools.extract_tool_sections(self, block)
+    if not Tools.should_collapse(input_lines, output_lines, input_vis, output_vis) then
+        return
+    end
+    local collapsed, specs = Tools.build_collapsed_view(input_lines, output_lines, has_output, input_vis, output_vis)
+
+    -- Save expanded state
+    block.expanded_inner_lines = vim.api.nvim_buf_get_lines(self._buf, inner_start, footer_row, false)
+    block.expanded_inner_extmarks = capture_extmarks(self._buf, ns, inner_start, footer_row - 1)
+    block.collapsed_inner_lines = collapsed
+    block.collapsed_specs = specs
+
+    -- Replace inner content
+    vim.api.nvim_buf_clear_namespace(self._buf, ns, inner_start, footer_row)
+    self:_with_modifiable(function()
+        vim.api.nvim_buf_set_lines(self._buf, inner_start, footer_row, false, collapsed)
+    end)
+    Tools.apply_collapsed_extmarks(self, inner_start, specs, collapsed)
+
+    block.expanded = false
+end
+
+--- Toggle expand/collapse for the tool block under the cursor.
+function History:toggle_tool_block()
+    local win = self:win()
+    if not win then
+        return
+    end
+    local cursor_row = vim.api.nvim_win_get_cursor(win)[1] - 1 -- 0-indexed
+
+    -- Find the block containing the cursor
+    local target_block
+    for _, block in pairs(self._tool_blocks) do
+        if block.end_extmark and block.collapsed_inner_lines then
+            local h = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})[1]
+            local f = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.end_extmark, {})[1]
+            if cursor_row >= h and cursor_row <= f then
+                target_block = block
+                break
+            end
+        end
+    end
+
+    if not target_block then
+        return
+    end
+
+    local header_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, target_block.icon_extmark, {})[1]
+    local footer_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, target_block.end_extmark, {})[1]
+    local inner_start = header_row + 1
+
+    vim.api.nvim_buf_clear_namespace(self._buf, ns, inner_start, footer_row)
+    self:_with_modifiable(function()
+        if target_block.expanded then
+            vim.api.nvim_buf_set_lines(self._buf, inner_start, footer_row, false, target_block.collapsed_inner_lines)
+            Tools.apply_collapsed_extmarks(
+                self,
+                inner_start,
+                target_block.collapsed_specs,
+                target_block.collapsed_inner_lines
+            )
+            target_block.expanded = false
+        else
+            vim.api.nvim_buf_set_lines(self._buf, inner_start, footer_row, false, target_block.expanded_inner_lines)
+            restore_extmarks(self._buf, ns, inner_start, target_block.expanded_inner_extmarks)
+            target_block.expanded = true
         end
     end)
 end
@@ -830,6 +977,7 @@ function History:clear()
     self._status_extmark_id = nil
     self._thinking_accum = nil
     self._thinking_blocks = {}
+    self._tool_blocks = {}
     self:_with_modifiable(function()
         vim.api.nvim_buf_set_lines(self._buf, 0, -1, false, { "" })
     end)

@@ -104,6 +104,11 @@ function Chat:_set_keymaps()
     vim.keymap.set("i", "<S-CR>", function()
         vim.api.nvim_put({ "", "" }, "c", false, true)
     end, { buffer = pbuf, desc = "New line" })
+
+    -- Toggle tool block expand/collapse
+    vim.keymap.set("n", "<Tab>", function()
+        self._history:toggle_tool_block()
+    end, { buffer = hbuf, desc = "Toggle tool block" })
 end
 
 function Chat:show()
