@@ -52,7 +52,7 @@ local function set_defaults()
 
     vim.api.nvim_set_hl(0, "PiFloat", { default = true, bg = normal.bg })
     vim.api.nvim_set_hl(0, "PiFloatBorder", { default = true, fg = comment.fg, bg = normal.bg })
-    vim.api.nvim_set_hl(0, "PiDialogTitle", { default = true, fg = normal.bg, bg = agent.fg, bold = true })
+    vim.api.nvim_set_hl(0, "PiDialogTitle", { default = true, fg = title.fg, bold = true })
     vim.api.nvim_set_hl(0, "PiChatHistoryFloatTitle", { default = true, fg = normal.bg, bg = user.fg })
     vim.api.nvim_set_hl(0, "PiChatPromptFloatTitle", { default = true, fg = comment.fg, bg = normal.bg })
     vim.api.nvim_set_hl(0, "PiChatAttachmentsFloatTitle", { default = true, fg = comment.fg, bg = normal.bg })
