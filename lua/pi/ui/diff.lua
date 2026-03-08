@@ -73,20 +73,93 @@ local function abs(path)
     return vim.fn.getcwd() .. "/" .. path
 end
 
+-- AI models cannot reliably reproduce Unicode characters outside the basic
+-- multilingual plane — in particular Nerd Font icons in the private-use
+-- area (U+E000–U+F8FF). When the model reads a file it *sees* the icon,
+-- but when it writes the oldText parameter of an Edit tool call the
+-- multi-byte sequence (e.g. ef 81 97 for U+F057) is silently dropped or
+-- replaced by a plain ASCII space. The oldText then has different bytes
+-- than the file content and string.find fails.
+--
+-- Workaround: when exact byte match fails, fallback to a line-by-line
+-- comparison that strips non-ASCII bytes (the "ASCII fingerprint").
+-- Unchanged lines in the replacement are copied from the original content
+-- so their multi-byte characters are preserved in the result.
+
+--- Keep only printable ASCII — used to compare lines while ignoring
+--- multi-byte encoding differences introduced by the AI model.
+---@param s string
+---@return string
+local function ascii_fingerprint(s)
+    return (s:gsub("[^\x20-\x7e]", ""))
+end
+
+--- Find the 1-based line index where `old_lines` match inside
+--- `content_lines` using ASCII fingerprints.
+---@param content_lines string[]
+---@param old_lines string[]
+---@return integer?
+local function find_lines_fuzzy(content_lines, old_lines)
+    for i = 1, #content_lines - #old_lines + 1 do
+        local ok = true
+        for j = 1, #old_lines do
+            if ascii_fingerprint(content_lines[i + j - 1]) ~= ascii_fingerprint(old_lines[j]) then
+                ok = false
+                break
+            end
+        end
+        if ok then
+            return i
+        end
+    end
+    return nil
+end
+
 --- Apply an edit to lines in memory.
 ---@param lines string[]
 ---@param old_str string
 ---@param new_str string
 ---@return string[]
 local function apply_edit(lines, old_str, new_str)
+    -- Fast path: exact byte match.
     local content = table.concat(lines, "\n")
     local start, finish = content:find(old_str, 1, true)
-    if not start then
+    if start then
+        local result = content:sub(1, start - 1) .. new_str .. content:sub(finish + 1)
+        return vim.split(result, "\n", { plain = true })
+    end
+
+    -- Slow path: line-by-line ASCII-fingerprint match (see comment above).
+    local old_lines = vim.split(old_str, "\n", { plain = true })
+    local new_lines = vim.split(new_str, "\n", { plain = true })
+    local match_start = find_lines_fuzzy(lines, old_lines)
+    if not match_start then
         Notify.error("diff: old content not found in file")
         return lines
     end
-    local result = content:sub(1, start - 1) .. new_str .. content:sub(finish + 1)
-    return vim.split(result, "\n", { plain = true })
+
+    -- Build a lookup so unchanged lines keep their original encoding.
+    local orig_by_fp = {}
+    for i = match_start, match_start + #old_lines - 1 do
+        local fp = ascii_fingerprint(lines[i])
+        if not orig_by_fp[fp] then
+            orig_by_fp[fp] = lines[i]
+        end
+    end
+
+    local result = {}
+    for i = 1, match_start - 1 do
+        result[#result + 1] = lines[i]
+    end
+    for _, nl in ipairs(new_lines) do
+        local fp = ascii_fingerprint(nl)
+        -- Preserve original bytes for lines the edit didn't change.
+        result[#result + 1] = orig_by_fp[fp] or nl
+    end
+    for i = match_start + #old_lines, #lines do
+        result[#result + 1] = lines[i]
+    end
+    return result
 end
 
 --- Open a diff review for a tool call.
@@ -100,7 +173,21 @@ function M.open(payload, callback)
         return
     end
 
-    local before_lines = read_file(path)
+    -- Prefer buffer content over disk — the tool already matched against the
+    -- buffer, so reading from disk can fail on multi-byte characters.
+    local before_lines
+    local bufnr = nil
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_loaded(b) and vim.api.nvim_buf_get_name(b) == path then
+            bufnr = b
+            break
+        end
+    end
+    if bufnr then
+        before_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    else
+        before_lines = read_file(path)
+    end
     local proposed_lines
 
     if payload.toolName == "edit" then
@@ -146,7 +233,20 @@ function M.open(payload, callback)
         vim.bo[after_buf].filetype = ft
     end
 
-    vim.wo[right_win].number = true
+    -- Reset window options that may be inherited from π windows.
+    for _, w in ipairs({ left_win, right_win }) do
+        vim.wo[w].number = true
+        vim.wo[w].relativenumber = vim.go.relativenumber
+        vim.wo[w].signcolumn = vim.go.signcolumn
+        vim.wo[w].conceallevel = 0
+        vim.wo[w].concealcursor = ""
+        vim.wo[w].wrap = vim.go.wrap
+        vim.wo[w].linebreak = vim.go.linebreak
+        vim.wo[w].list = vim.go.list
+        vim.wo[w].cursorline = vim.go.cursorline
+        vim.wo[w].winfixbuf = false
+        vim.wo[w].foldenable = true
+    end
     vim.cmd("wincmd =")
 
     -- Defer diffthis until async handlers have settled
@@ -200,6 +300,10 @@ function M.open(payload, callback)
         if review_tab and vim.api.nvim_tabpage_is_valid(review_tab) then
             vim.api.nvim_set_current_tabpage(review_tab)
             vim.cmd("tabclose")
+        end
+        -- Wipe the scratch review buffer
+        if vim.api.nvim_buf_is_valid(after_buf) then
+            vim.api.nvim_buf_delete(after_buf, { force = true })
         end
         if vim.api.nvim_tabpage_is_valid(prev_tab) then
             vim.api.nvim_set_current_tabpage(prev_tab)
