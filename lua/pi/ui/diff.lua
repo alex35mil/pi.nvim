@@ -126,16 +126,12 @@ function M.open(payload, callback)
 
     -- Left: open the real original file
     local left_win = vim.api.nvim_get_current_win()
-    vim.cmd("noautocmd edit " .. vim.fn.fnameescape(path))
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
     local before_buf = vim.api.nvim_win_get_buf(left_win)
     local prev_modifiable = vim.bo[before_buf].modifiable
     local prev_readonly = vim.bo[before_buf].readonly
     vim.bo[before_buf].modifiable = false
     vim.bo[before_buf].readonly = true
-    vim.cmd("diffthis")
-    if ft ~= "" then
-        vim.bo[before_buf].filetype = ft
-    end
 
     -- Right: proposed changes (editable)
     wipe_stale_buf(after_name)
@@ -149,26 +145,28 @@ function M.open(payload, callback)
     if ft ~= "" then
         vim.bo[after_buf].filetype = ft
     end
-    vim.cmd("diffthis")
 
     vim.wo[right_win].number = true
     vim.cmd("wincmd =")
 
-    vim.schedule(function()
+    -- Defer diffthis until async handlers have settled
+    vim.defer_fn(function()
         if not vim.api.nvim_tabpage_is_valid(review_tab) then
             return
+        end
+        for _, win in ipairs({ right_win, left_win }) do -- should go right then left
+            if vim.api.nvim_win_is_valid(win) then
+                vim.api.nvim_win_call(win, function()
+                    vim.cmd("diffthis")
+                end)
+            end
         end
         pcall(vim.api.nvim_win_call, left_win, function()
             vim.cmd("normal! gg]c")
         end)
         vim.api.nvim_set_current_win(right_win)
         vim.cmd("stopinsert")
-        vim.defer_fn(function()
-            if vim.api.nvim_tabpage_is_valid(review_tab) then
-                vim.cmd("diffupdate")
-            end
-        end, 50)
-    end)
+    end, 50)
 
     local keymaps = Config.options.keymaps
     local accept_key = keymaps.diff_accept
@@ -185,9 +183,10 @@ function M.open(payload, callback)
     local responded = false
 
     local function close_review_tab()
-        -- diffoff on both windows to restore fold/scroll settings
+        -- Clear winbar and diffoff on both windows to restore original state
         for _, w in ipairs({ left_win, right_win }) do
             if vim.api.nvim_win_is_valid(w) then
+                vim.wo[w].winbar = ""
                 vim.api.nvim_win_call(w, function()
                     vim.cmd("diffoff")
                 end)
