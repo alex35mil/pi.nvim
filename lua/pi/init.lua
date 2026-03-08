@@ -1,0 +1,182 @@
+--- Pi public API.
+
+---@class Pi
+local M = {}
+
+local Config = require("pi.config")
+
+local is_initialized = false
+
+---@param opts? pi.Options
+function M.setup(opts)
+    Config.setup(opts)
+
+    if is_initialized then
+        return
+    end
+
+    is_initialized = true
+
+    vim.treesitter.language.register("markdown", require("pi.filetypes").history)
+    require("pi.ui.highlights").setup()
+    require("pi.sessions.manager").setup_autocmds()
+    require("pi.commands").setup()
+end
+
+--- Open or toggle the chat. Creates a session if none exists.
+---@param opts? pi.SessionCreateOpts
+function M.open(opts)
+    local Sessions = require("pi.sessions.manager")
+    local existing = Sessions.get()
+    if existing then
+        if existing.chat:is_visible() then
+            existing.chat:hide()
+        else
+            if opts and opts.layout then
+                existing.chat:set_layout(opts.layout)
+            end
+            existing.chat:ensure_shown_and_focus_prompt()
+        end
+    else
+        local session = Sessions.get_or_create(opts)
+        if session then
+            session.chat:ensure_shown_and_focus_prompt()
+        end
+    end
+end
+
+--- Continue the most recent session for the current cwd.
+---@param opts? pi.SessionCreateOpts
+function M.continue_session(opts)
+    require("pi.sessions.manager").continue_session(opts)
+end
+
+--- Show a picker to resume a past session.
+---@param opts? pi.SessionCreateOpts
+function M.resume_session(opts)
+    require("pi.sessions.manager").resume_session(opts)
+end
+
+--- Toggle chat visibility. No-op if no session exists.
+function M.toggle_chat()
+    local session = require("pi.sessions.manager").get()
+    if not session then
+        return
+    end
+    session.chat:toggle()
+end
+
+--- Toggle between side and float layout. No-op if no session exists.
+function M.toggle_layout()
+    local session = require("pi.sessions.manager").get()
+    if not session then
+        return
+    end
+    session.chat:toggle_layout()
+end
+
+--- Abort the current agent operation.
+function M.abort()
+    local session = require("pi.sessions.manager").get()
+    if session and session.rpc:is_running() then
+        session.rpc:send({ type = "abort" })
+    end
+end
+
+--- Stop the process and close the chat.
+function M.stop()
+    require("pi.sessions.manager").stop()
+end
+
+--- Start a new conversation in the current session.
+function M.new_session()
+    local session = require("pi.sessions.manager").get()
+    if session and session.rpc:is_running() then
+        session.rpc:send({ type = "new_session" })
+        session.chat:clear()
+    end
+end
+
+--- Toggle thinking block visibility.
+function M.toggle_thinking()
+    local session = require("pi.sessions.manager").get()
+    if session then
+        session.chat:toggle_thinking()
+    end
+end
+
+--- Send an @-mention to the prompt.
+--- With no args or command args: mentions current buffer (with visual selection if any).
+--- With a loc table: mentions the given path and optional line range.
+---@param args? table|{ path: string, start_line?: integer, end_line?: integer }
+---@param opts? { focus?: boolean } default: focus = true
+function M.send_mention(args, opts)
+    local Mentions = require("pi.ui.chat.mentions")
+    if args and args.path then
+        Mentions.send(args, opts)
+    else
+        Mentions.send_current(args, opts)
+    end
+end
+
+--- Attach an image file to the prompt.
+---@param path string
+---@return boolean
+function M.attach_image(path)
+    local session = require("pi.sessions.manager").get()
+    if session then
+        return session.chat:attach_image(path)
+    end
+    return false
+end
+
+--- Paste an image from clipboard as an attachment.
+---@return boolean
+function M.paste_image()
+    local session = require("pi.sessions.manager").get()
+    if session then
+        local in_prompt = vim.bo.filetype == require("pi.filetypes").prompt
+        local cursor = in_prompt and vim.api.nvim_win_get_cursor(0) or nil
+        local ok = session.chat:attach_from_clipboard()
+        if ok and cursor then
+            vim.schedule(function()
+                pcall(vim.api.nvim_win_set_cursor, 0, cursor)
+                vim.cmd("startinsert")
+            end)
+        end
+        return ok
+    end
+    return false
+end
+
+--- Toggle RPC debug logging.
+function M.toggle_debug()
+    require("pi.rpc").toggle_debug()
+end
+
+--- Focus the chat history window.
+function M.focus_chat_history()
+    local session = require("pi.sessions.manager").get()
+    if session then
+        session.chat:focus_history()
+    end
+end
+
+--- Focus the chat prompt window.
+function M.focus_chat_prompt()
+    local session = require("pi.sessions.manager").get()
+    if session then
+        session.chat:focus_prompt()
+    end
+end
+
+--- Focus the chat attachments window.
+function M.focus_chat_attachments()
+    local session = require("pi.sessions.manager").get()
+    if session then
+        session.chat:focus_attachments()
+    end
+end
+
+return M
+
