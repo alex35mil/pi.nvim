@@ -154,6 +154,25 @@ function M.toggle_debug()
     require("pi.rpc").toggle_debug()
 end
 
+--- Scroll the chat history by a number of lines.
+--- Can be called from the prompt buffer to scroll without leaving it.
+---@param direction "up"|"down"
+---@param lines? integer lines to scroll (default 15)
+function M.scroll_chat_history(direction, lines)
+    local session = require("pi.sessions.manager").get()
+    if session then
+        session.chat:scroll_history(direction, lines)
+    end
+end
+
+--- Scroll the chat history to the bottom (most recent message).
+function M.scroll_chat_history_to_bottom()
+    local session = require("pi.sessions.manager").get()
+    if session then
+        session.chat:scroll_history_to_bottom()
+    end
+end
+
 --- Focus the chat history window.
 function M.focus_chat_history()
     local session = require("pi.sessions.manager").get()

@@ -296,6 +296,18 @@ function Chat:clear()
     self._history:clear()
 end
 
+--- Scroll the history window by a number of lines.
+---@param direction "up"|"down"
+---@param lines? integer lines to scroll (default 15)
+function Chat:scroll_history(direction, lines)
+    self._history:scroll(direction, lines)
+end
+
+--- Scroll the history window to the bottom (most recent message).
+function Chat:scroll_history_to_bottom()
+    self._history:scroll_to_bottom()
+end
+
 ---@param path string
 ---@return boolean
 function Chat:attach_image(path)

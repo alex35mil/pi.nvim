@@ -174,6 +174,27 @@ function History:_scroll_to_bottom()
     end)
 end
 
+local DEFAULT_SCROLL_LINES = 15
+
+--- Scroll the history window by a number of lines.
+---@param direction "up"|"down"
+---@param lines? integer lines to scroll (default 15)
+function History:scroll(direction, lines)
+    if not self._win or not vim.api.nvim_win_is_valid(self._win) then
+        return
+    end
+    local count = lines or DEFAULT_SCROLL_LINES
+    local key = direction == "up" and "\x19" or "\x05"
+    vim.api.nvim_win_call(self._win, function()
+        vim.cmd("normal! " .. count .. key)
+    end)
+end
+
+--- Scroll the history window to the bottom (most recent message).
+function History:scroll_to_bottom()
+    self:_scroll_to_bottom()
+end
+
 function History:_pick_spinner()
     local opt = Config.options.ui.spinner
     ---@type pi.SpinnerDef
