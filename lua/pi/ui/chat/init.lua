@@ -78,6 +78,11 @@ function Chat:_set_keymaps()
         buffer = pbuf,
         callback = function()
             vim.schedule(function()
+                -- Guard: by the time this runs, focus may have moved elsewhere
+                local buf = vim.api.nvim_get_current_buf()
+                if buf ~= pbuf then
+                    return
+                end
                 if vim.api.nvim_get_mode().mode ~= "i" then
                     vim.cmd("startinsert")
                 end
