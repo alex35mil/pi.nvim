@@ -435,6 +435,7 @@ function History:on_agent_start(timestamp)
         end
         self._agent_start_time = vim.uv.hrtime() / 1e9
         self._first_delta = true
+        self._needs_separator = false
         self:_pick_spinner()
         local label = " " .. Config.options.ui.labels.agent_response .. " "
         local time = timestamp or (os.time() * 1000)
