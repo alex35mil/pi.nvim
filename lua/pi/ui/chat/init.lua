@@ -217,9 +217,9 @@ function Chat:active_verb()
     return self._active_verb
 end
 
----@param text string?
-function Chat:set_status(text)
-    self._history:set_status(text)
+---@param status pi.Status?
+function Chat:set_status(status)
+    self._history:set_status(status)
 end
 
 ---@param msg string
@@ -235,7 +235,7 @@ function Chat:on_agent_start(timestamp)
     self._active_verb = verbs[1]
     self._done_verb = verbs[2]
     self._history:on_agent_start(timestamp)
-    self:set_status(verbs[1] .. "…")
+    self:set_status({ type = "agent", text = verbs[1] .. "…" })
 end
 
 ---@param delta string

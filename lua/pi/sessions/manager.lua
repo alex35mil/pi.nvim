@@ -64,13 +64,19 @@ local function handle_event(session, msg)
     elseif t == "tool_execution_end" then
         chat:on_tool_end(msg.toolName or "tool", msg.toolCallId, msg.result, msg.isError)
     elseif t == "auto_compaction_start" then
-        chat:set_status("Compacting…")
+        chat:set_status({ type = "compaction" })
     elseif t == "auto_compaction_end" then
-        chat:set_status((chat:active_verb() or "Working") .. "…")
+        -- Compaction can fire after agent_end (between turns).
+        -- Only restore the spinner if an agent loop is still active.
+        if chat:active_verb() then
+            chat:set_status({ type = "agent", text = chat:active_verb() .. "…" })
+        else
+            chat:set_status(nil)
+        end
     elseif t == "auto_retry_start" then
-        chat:set_status("Retrying…")
+        chat:set_status({ type = "agent", text = "Retrying…" })
     elseif t == "auto_retry_end" then
-        chat:set_status((chat:active_verb() or "Working") .. "…")
+        chat:set_status({ type = "agent", text = (chat:active_verb() or "Working") .. "…" })
     elseif t == "extension_ui_request" then
         vim.schedule(function()
             Extension.handle(session, msg)

@@ -136,6 +136,15 @@ local spinner = {
             "󱚦",
         },
     },
+    compaction = {
+        refresh_rate = 400,
+        frames = {
+            "󰏗",
+            "󰏖",
+            "󱧕",
+            "󱧘",
+        },
+    },
 }
 
 --- Format an epoch-ms timestamp for display
@@ -419,12 +428,30 @@ function History:win()
     return nil
 end
 
----@param text string?
-function History:set_status(text)
+---@alias pi.Status { type: "agent", text: string } | { type: "compaction" }
+
+---@param status pi.Status?
+function History:set_status(status)
     vim.schedule(function()
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
         end
+
+        local text ---@type string?
+        if status then
+            if status.type == "compaction" then
+                local s = spinner.compaction
+                self._spinner_frames = s.frames
+                self._spinner_rate = s.refresh_rate
+                text = "Compacting…"
+            else
+                self:_pick_spinner()
+                text = status.text
+            end
+        else
+            self:_pick_spinner()
+        end
+
         if text == self._status_text then
             return
         end
@@ -434,7 +461,14 @@ function History:set_status(text)
         self:_update_status_extmark()
         self:_maybe_scroll()
 
-        if text and not self._spinner_timer then
+        -- Stop existing timer — rate may have changed between spinner types.
+        if self._spinner_timer then
+            self._spinner_timer:stop()
+            self._spinner_timer:close()
+            self._spinner_timer = nil
+        end
+
+        if text then
             self._spinner_timer = assert(vim.uv.new_timer())
             self._spinner_timer:start(
                 self._spinner_rate,
@@ -447,10 +481,6 @@ function History:set_status(text)
                     self:_update_status_extmark()
                 end)
             )
-        elseif not text and self._spinner_timer then
-            self._spinner_timer:stop()
-            self._spinner_timer:close()
-            self._spinner_timer = nil
         end
     end)
 end
