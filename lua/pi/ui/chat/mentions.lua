@@ -116,7 +116,7 @@ function M.send(loc, opts)
     opts = opts or {}
     local rel = vim.fn.fnamemodify(loc.path, ":.")
     local mention = "@" .. rel
-    if loc.start_line and loc.end_line then
+    if loc.start_line and loc.end_line and loc.start_line ~= loc.end_line then
         mention = mention .. "#L" .. loc.start_line .. "-" .. loc.end_line
     elseif loc.start_line then
         mention = mention .. "#L" .. loc.start_line
