@@ -69,7 +69,17 @@ local function capture_extmarks(buf, ns_id, start_row, end_row)
     for _, m in ipairs(marks) do
         local details = m[4] or {}
         local opts = {}
-        for _, key in ipairs({ "hl_group", "virt_text", "virt_text_pos", "hl_mode", "conceal", "priority", "end_col" }) do
+        for _, key in ipairs({
+            "hl_group",
+            "virt_text",
+            "virt_text_pos",
+            "hl_mode",
+            "conceal",
+            "priority",
+            "end_col",
+            "line_hl_group",
+            "hl_eol",
+        }) do
             if details[key] ~= nil then
                 opts[key] = details[key]
             end
