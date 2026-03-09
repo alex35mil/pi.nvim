@@ -239,9 +239,13 @@ function History:_scroll_to_bottom()
     if not self._win or not vim.api.nvim_win_is_valid(self._win) then
         return
     end
-    -- G=last line, 0=col 1, zb=redraw with cursor at bottom
     vim.api.nvim_win_call(self._win, function()
+        -- G=last line, zb=cursor at bottom of window
+        -- Then scroll down to reveal any virt_lines (spinner) below the last real line
         vim.cmd("normal! G0zb")
+        if self._status_extmark_id then
+            vim.cmd("normal! 3\5") -- 3 * Ctrl-E (scroll view down)
+        end
     end)
 end
 
