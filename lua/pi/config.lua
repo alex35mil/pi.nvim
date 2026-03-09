@@ -35,8 +35,8 @@
 ---@field float pi.FloatLayout
 
 ---@class pi.Keymaps
----@field diff_accept string
----@field diff_reject string
+---@field diff_accept pi.DialogKey
+---@field diff_reject pi.DialogKey
 
 ---@alias pi.SpinnerPreset "classic"|"robot"
 

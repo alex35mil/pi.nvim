@@ -134,7 +134,9 @@ local function apply_edit(lines, old_str, new_str)
     local new_lines = vim.split(new_str, "\n", { plain = true })
     local match_start = find_lines_fuzzy(lines, old_lines)
     if not match_start then
-        Notify.error("diff: The original content not found in file. The agent likely used stale content — add 'Always re-read files before editing' to your AGENTS.md")
+        Notify.error(
+            "diff: The original content not found in file. The agent likely used stale content — add 'Always re-read files before editing' to your AGENTS.md"
+        )
         return lines
     end
 
@@ -288,13 +290,15 @@ function M.open(payload, callback)
     local keymaps = Config.options.keymaps
     local accept_key = keymaps.diff_accept
     local reject_key = keymaps.diff_reject
+    local accept_lhs = type(accept_key) == "table" and accept_key[1] or accept_key --[[@as string]]
+    local reject_lhs = type(reject_key) == "table" and reject_key[1] or reject_key --[[@as string]]
     vim.wo[left_win].winbar = " %#PiDiffStatusCurrent#CURRENT: " .. rel_path .. "%*"
     vim.wo[right_win].winbar = " %#PiDiffStatusProposed#PROPOSED: "
         .. rel_path
         .. "%*  ["
-        .. accept_key
+        .. accept_lhs
         .. "=accept  "
-        .. reject_key
+        .. reject_lhs
         .. "=reject]"
 
     local responded = false
@@ -383,8 +387,10 @@ function M.open(payload, callback)
     end
 
     for _, b in ipairs({ before_buf, after_buf }) do
-        vim.keymap.set("n", accept_key, accept, { buffer = b, desc = "Accept edit" })
-        vim.keymap.set("n", reject_key, reject, { buffer = b, desc = "Reject edit" })
+        local accept_modes = type(accept_key) == "table" and accept_key.modes or "n"
+        local reject_modes = type(reject_key) == "table" and reject_key.modes or "n"
+        vim.keymap.set(accept_modes, accept_lhs, accept, { buffer = b, desc = "Accept edit" })
+        vim.keymap.set(reject_modes, reject_lhs, reject, { buffer = b, desc = "Reject edit" })
     end
 
     -- :w on the proposed buffer accepts the diff
