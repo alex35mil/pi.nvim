@@ -654,7 +654,7 @@ function History:on_stderr(text)
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
         end
-        local label = " " .. Config.options.ui.labels.debug .. " "
+        local label = " " .. Config.options.ui.labels.debug_message .. " "
         local time_str = format_time(os.time() * 1000)
         local label_line = label .. time_str
         local start = self:_append_lines({ "", label_line, text })
@@ -745,7 +745,8 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
             block.output_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, pre_output_line + 1, 0, {})
         end
 
-        local footer = is_error and " error" or " completed"
+        local labels = Config.options.ui.labels
+        local footer = is_error and (labels.tool_failure .. " error") or (labels.tool_success .. " completed")
         local footer_hl = is_error and "PiToolError" or "PiToolStatus"
         local start = self:_append_lines({ footer })
         Tools.set_border(self, start, Tools.GLYPHS.BOT)

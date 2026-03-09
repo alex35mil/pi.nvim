@@ -43,12 +43,15 @@
 ---@alias pi.VerbPair [string, string] [0]=active (e.g. "Cooking"), [1]=done (e.g. "Cooked")
 
 ---@class pi.Labels
----@field thinking string
 ---@field user_message string
 ---@field agent_response string
+---@field debug_message string
+---@field tool string
+---@field tool_success string
+---@field tool_failure string
+---@field thinking string
 ---@field attachment string
 ---@field attachments string
----@field debug string
 ---@field error string
 
 ---@class pi.UiConfig
@@ -103,13 +106,15 @@ local defaults = {
             attachments = { title = "󰫮󰬁󰬁󰫮󰫰󰫵󰫺󰫲󰫻󰬁󰬀" },
         },
         labels = {
-            tool = "󰻂",
-            thinking = "󰟶",
             user_message = "",
             agent_response = "󰚩",
+            debug_message = "",
+            tool = "󰻂",
+            tool_success = "",
+            tool_failure = "",
+            thinking = "󰟶",
             attachment = "",
             attachments = "",
-            debug = "",
             error = " 󱚟 ",
         },
         layout = {
