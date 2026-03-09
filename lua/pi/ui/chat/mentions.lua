@@ -5,6 +5,23 @@ local M = {}
 local Notify = require("pi.notify")
 local Decorators = require("pi.ui.chat.decorators")
 
+--- Punctuation pattern for characters that may follow an @-mention
+--- but are not part of the path (e.g. `(@file)` or `@file.`).
+local TRAILING_PUNCT = "[%.,;:!%?%)]+"
+
+--- Strip trailing punctuation from a raw @-mention capture.
+---@param ref string  raw capture from `@(%S+)`
+---@return string clean  ref without trailing punctuation
+---@return string trailing  the stripped punctuation (may be empty)
+function M.strip_trailing(ref)
+    local trailing = ""
+    local clean = ref:gsub("(" .. TRAILING_PUNCT .. ")$", function(m)
+        trailing = m
+        return ""
+    end)
+    return clean, trailing
+end
+
 --- Expand @-mentions into context hints the agent understands.
 --- `@path/to/file` → `[file: path/to/file]`
 --- `@path/to/file#L10` → `[file: path/to/file, line: 10]`
@@ -14,12 +31,7 @@ local Decorators = require("pi.ui.chat.decorators")
 ---@return string
 function M.expand(text)
     local result = text:gsub("@(%S+)", function(ref)
-        -- Strip trailing punctuation that's not part of the path
-        local trailing = ""
-        local clean = ref:gsub("([%.,;:!%?]+)$", function(m)
-            trailing = m
-            return ""
-        end)
+        local clean, trailing = M.strip_trailing(ref)
         local path, range = clean:match("^(.-)#L(%d+%-?%d*)$")
         if not path then
             path = clean

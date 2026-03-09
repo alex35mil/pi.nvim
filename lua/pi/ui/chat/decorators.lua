@@ -47,8 +47,8 @@ function M.update(buf)
             if not start then
                 break
             end
-            -- Strip trailing punctuation for path resolution
-            local clean = ref:gsub("[%.,;:!%?]+$", "")
+            local Mentions = require("pi.ui.chat.mentions")
+            local clean = Mentions.strip_trailing(ref)
             finish = start + #clean -- adjust end to exclude punctuation
             local path = parse_path(clean)
             if FilesCache.exists(path) then
