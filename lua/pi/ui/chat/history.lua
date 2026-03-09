@@ -803,10 +803,17 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
             })
 
             -- Append status as virtual text at end of line
+            local renderer = Tools.get_renderer(tool_name)
+            local extra = renderer.inline_status and renderer.inline_status(result, is_error) or nil
             local row = pos[1]
             local line = vim.api.nvim_buf_get_lines(self._buf, row, row + 1, false)[1] or ""
+            local virt = {}
+            if extra then
+                virt[#virt + 1] = { " " .. extra, "PiToolStatus" }
+            end
+            virt[#virt + 1] = { "  " .. status_icon, status_hl }
             vim.api.nvim_buf_set_extmark(self._buf, ns, row, #line, {
-                virt_text = { { " " .. status_icon, status_hl } },
+                virt_text = virt,
                 virt_text_pos = "inline",
             })
 
@@ -880,10 +887,19 @@ function History:_maybe_collapse_tool(tool_call_id)
     local output_vis = renderer.output_visible or math.huge
 
     local input_lines, output_lines, has_output = Tools.extract_tool_sections(self, block)
-    if not Tools.should_collapse(input_lines, output_lines, input_vis, output_vis) then
+    -- Subtract border glyph width so truncation accounts for inline virt_text
+    local win_width = self._win and vim.api.nvim_win_is_valid(self._win)
+        and vim.api.nvim_win_get_width(self._win) or 0
+    local border_w = vim.fn.strdisplaywidth(Tools.GLYPHS.MID)
+    local gutters = (self._win and vim.wo[self._win].foldcolumn or "0")
+    local gutter_w = tonumber(gutters) or 0
+    local max_width = win_width > 0 and (win_width - border_w - gutter_w - border_w) or 0
+    if not Tools.should_collapse(input_lines, output_lines, input_vis, output_vis, max_width) then
         return
     end
-    local collapsed, specs = Tools.build_collapsed_view(input_lines, output_lines, has_output, input_vis, output_vis)
+    local collapsed, specs = Tools.build_collapsed_view(
+        input_lines, output_lines, has_output, input_vis, output_vis, max_width
+    )
 
     -- Save expanded state
     block.expanded_inner_lines = vim.api.nvim_buf_get_lines(self._buf, inner_start, footer_row, false)

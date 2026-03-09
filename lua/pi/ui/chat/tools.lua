@@ -282,32 +282,52 @@ local function render_diff(history, old_text, new_text, line_offset, path)
     end
 end
 
--- ── Collapse helpers ────────────────────────────────────────────────
+--- Truncate a line to max_width, appending "…" if truncated.
+---@param line string
+---@param max_width integer
+---@return string
+local function truncate_line(line, max_width)
+    if max_width <= 0 or vim.fn.strdisplaywidth(line) <= max_width then
+        return line
+    end
+    -- Binary-ish search for the cut point in bytes
+    local cut = max_width - 1 -- leave room for …
+    while cut > 0 and vim.fn.strdisplaywidth(line:sub(1, cut)) > cut do
+        cut = cut - 1
+    end
+    return line:sub(1, cut) .. "…"
+end
 
 --- Build a structured collapsed view for a tool block.
 --- Input: ≤ input_visible as-is, otherwise first input_visible line(s) + "+N lines".
 --- Separator + output hidden entirely when output_visible = 0.
 --- Output: ≤ output_visible as-is, otherwise "…N lines" + last output_visible line(s).
+--- Lines longer than max_width are truncated with "…".
 ---@param input_lines string[]
 ---@param output_lines string[] actual output (no separator/code fences)
 ---@param has_output boolean
 ---@param input_visible integer
 ---@param output_visible integer
+---@param max_width? integer  truncate lines wider than this (0 = no limit)
 ---@return string[] lines
 ---@return string[] specs  parallel array: "input"|"summary"|"separator"|"output"
-function M.build_collapsed_view(input_lines, output_lines, has_output, input_visible, output_visible)
+function M.build_collapsed_view(input_lines, output_lines, has_output, input_visible, output_visible, max_width)
     local lines, specs = {}, {}
+    max_width = max_width or 0
+
+    local function add(line, spec)
+        lines[#lines + 1] = max_width > 0 and truncate_line(line, max_width) or line
+        specs[#specs + 1] = spec
+    end
 
     -- Input
     if #input_lines <= input_visible then
         for _, l in ipairs(input_lines) do
-            lines[#lines + 1] = l
-            specs[#specs + 1] = "input"
+            add(l, "input")
         end
     else
         for i = 1, input_visible do
-            lines[#lines + 1] = input_lines[i]
-            specs[#specs + 1] = "input"
+            add(input_lines[i], "input")
         end
         lines[#lines + 1] = " +" .. (#input_lines - input_visible) .. " lines"
         specs[#specs + 1] = "summary"
@@ -320,15 +340,13 @@ function M.build_collapsed_view(input_lines, output_lines, has_output, input_vis
 
         if #output_lines <= output_visible then
             for _, l in ipairs(output_lines) do
-                lines[#lines + 1] = l
-                specs[#specs + 1] = "output"
+                add(l, "output")
             end
         elseif #output_lines > 0 then
             lines[#lines + 1] = "…" .. (#output_lines - output_visible) .. " lines"
             specs[#specs + 1] = "summary"
             for i = #output_lines - output_visible + 1, #output_lines do
-                lines[#lines + 1] = output_lines[i]
-                specs[#specs + 1] = "output"
+                add(output_lines[i], "output")
             end
         end
     end
@@ -389,14 +407,31 @@ function M.extract_tool_sections(history, block)
     return input_lines, output_lines, has_output
 end
 
---- Check whether a tool block should be collapsed based on renderer thresholds.
+--- Check whether a tool block should be collapsed based on renderer thresholds
+--- or line width exceeding max_width.
 ---@param input_lines string[]
 ---@param output_lines string[]
 ---@param input_visible integer
 ---@param output_visible integer
+---@param max_width? integer
 ---@return boolean
-function M.should_collapse(input_lines, output_lines, input_visible, output_visible)
-    return #input_lines > input_visible or #output_lines > output_visible
+function M.should_collapse(input_lines, output_lines, input_visible, output_visible, max_width)
+    if #input_lines > input_visible or #output_lines > output_visible then
+        return true
+    end
+    if max_width and max_width > 0 then
+        for _, line in ipairs(input_lines) do
+            if vim.fn.strdisplaywidth(line) > max_width then
+                return true
+            end
+        end
+        for _, line in ipairs(output_lines) do
+            if vim.fn.strdisplaywidth(line) > max_width then
+                return true
+            end
+        end
+    end
+    return false
 end
 
 --- Renderers ---
@@ -408,6 +443,7 @@ end
 ---@field output_visible? integer lines to show when collapsed (default: show all)
 ---@field inline? boolean  render as a single line (no header/footer)
 ---@field inline_text? fun(args: table?): string?  text to show after tool name
+---@field inline_status? fun(result: table?, is_error: boolean?): string?  extra text next to status icon
 
 ---@type table<string, pi.ToolRenderer>
 local renderers = {
@@ -434,6 +470,13 @@ local renderers = {
         inline = true,
         inline_text = function(args)
             return args and (args.path or args.file_path) or nil
+        end,
+        inline_status = function(result)
+            local text = extract_result_text(result)
+            if text then
+                local n = select(2, text:gsub("\n", "\n")) + 1
+                return "(" .. n .. " lines)"
+            end
         end,
     },
     edit = {
@@ -479,6 +522,26 @@ local renderers = {
 local default_renderer = {
     input_visible = 1,
     output_visible = 1,
+    on_start = function(history, args)
+        if not args then
+            return
+        end
+        -- Show the first short string value as a summary line
+        for _, key in ipairs({ "url", "path", "file_path", "query", "command", "cmd" }) do
+            local val = args[key]
+            if type(val) == "string" and val ~= "" then
+                render_body_line(history, val)
+                return
+            end
+        end
+        -- Fallback: first string arg that fits on one line
+        for _, val in pairs(args) do
+            if type(val) == "string" and val ~= "" and not val:find("\n") and #val <= 200 then
+                render_body_line(history, val)
+                return
+            end
+        end
+    end,
     on_end = function(history, _, result)
         local text = extract_result_text(result)
         if text and text ~= "" then
