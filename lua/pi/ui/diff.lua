@@ -209,6 +209,16 @@ function M.open(payload, callback)
         return
     end
 
+    -- Strip the trailing empty-string EOL marker that vim.split / read_file
+    -- produce for files ending with "\n".  Neovim represents this via the
+    -- buffer `eol` option rather than a visible line, so keeping it would
+    -- show a phantom empty-line diff against the left side (which is opened
+    -- with :edit and handles EOL natively).
+    local proposed_eol = #proposed_lines > 0 and proposed_lines[#proposed_lines] == ""
+    if proposed_eol then
+        table.remove(proposed_lines)
+    end
+
     local ft = get_filetype(path)
     local rel_path = vim.fn.fnamemodify(path, ":~:.")
     local after_name = "pi://review" .. path
@@ -230,6 +240,7 @@ function M.open(payload, callback)
     wipe_stale_buf(after_name)
     local after_buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(after_buf, 0, -1, false, proposed_lines)
+    vim.bo[after_buf].eol = proposed_eol
     vim.bo[after_buf].buftype = "acwrite"
     vim.api.nvim_buf_set_name(after_buf, after_name)
     vim.cmd("vsplit")
@@ -327,12 +338,8 @@ function M.open(payload, callback)
         responded = true
 
         local final_lines = vim.api.nvim_buf_get_lines(after_buf, 0, -1, false)
-        write_file(path, final_lines)
-        require("pi.files").invalidate()
-        reload_buf_for_file(vim.fn.fnamemodify(path, ":p"))
-        close_review_tab()
 
-        -- Check if user modified the proposed content
+        -- Check if user modified the proposed content (before EOL fixup).
         local modified = #final_lines ~= #proposed_lines
         if not modified then
             for i, line in ipairs(final_lines) do
@@ -342,6 +349,16 @@ function M.open(payload, callback)
                 end
             end
         end
+
+        -- Restore EOL marker so write_file round-trips the trailing newline.
+        if vim.bo[after_buf].eol then
+            final_lines[#final_lines + 1] = ""
+        end
+
+        write_file(path, final_lines)
+        require("pi.cache.files").invalidate()
+        reload_buf_for_file(vim.fn.fnamemodify(path, ":p"))
+        close_review_tab()
 
         if modified then
             callback(vim.json.encode({
@@ -380,4 +397,3 @@ function M.open(payload, callback)
 end
 
 return M
-
