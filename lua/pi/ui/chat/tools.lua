@@ -6,7 +6,7 @@ M.GLYPHS = { TOP = "╭─ ", MID = "│  ", SEP = "├──── ", BOT = "�
 
 ---@param result? table
 ---@return string?
-local function extract_result_text(result)
+local function extract_result_text_raw(result)
     if not result or not result.content then
         return nil
     end
@@ -32,6 +32,64 @@ local function extract_result_text(result)
         return vim.trim(table.concat(parts, "\n"))
     end
     return nil
+end
+
+--- Status prefixes that extensions can embed in blocked-tool result text.
+--- When a tool_call handler returns { block: true, reason: "[prefix] ..." },
+--- the prefix determines the display status and is stripped from output.
+---
+--- Convention:
+---   [accepted] — tool was blocked but the action was applied (e.g. edit approved by user)
+---   [rejected] — tool was intentionally refused (by user or by policy)
+---   (no prefix) — fall back to isError boolean
+---@type table<string, "completed"|"rejected">
+local STATUS_PREFIXES = {
+    ["[accepted]"] = "completed",
+    ["[rejected]"] = "rejected",
+}
+
+--- Strip a recognized status prefix from text.
+---@param text string?
+---@return string?
+local function strip_status_prefix(text)
+    if not text then
+        return nil
+    end
+    for prefix, _ in pairs(STATUS_PREFIXES) do
+        if text:sub(1, #prefix) == prefix then
+            local rest = vim.trim(text:sub(#prefix + 1))
+            return rest ~= "" and rest or nil
+        end
+    end
+    return text
+end
+
+--- Extract display-ready text from a tool result (status prefix stripped).
+---@param result? table
+---@return string?
+local function extract_result_text(result)
+    return strip_status_prefix(extract_result_text_raw(result))
+end
+
+--- Resolve display status from a tool result.
+--- Extensions can embed [accepted] or [rejected] prefixes in blocked-tool
+--- reason text to communicate richer status than the binary isError flag.
+---@param result? table
+---@param is_error? boolean
+---@return "completed"|"error"|"rejected"
+function M.resolve_status(result, is_error)
+    if not is_error then
+        return "completed"
+    end
+    local text = extract_result_text_raw(result)
+    if text then
+        for prefix, status in pairs(STATUS_PREFIXES) do
+            if text:sub(1, #prefix) == prefix then
+                return status
+            end
+        end
+    end
+    return "error"
 end
 
 ---@param history pi.ChatHistory
@@ -488,6 +546,14 @@ local renderers = {
         end,
         on_end = function(history, args)
             if args and args.oldText and args.newText then
+                -- NOTE: This renders the *proposed* diff (oldText→newText). When a
+                -- permission extension lets the user accept-with-modifications, the
+                -- actual applied content may differ. We can't distinguish accept from
+                -- accept-with-modifications here — both arrive as [accepted] with
+                -- isError flipped to false, and the modified content lives only in
+                -- the extension's free-form reason text. Fixing this would require
+                -- structured result metadata (e.g. a details field), not available today.
+                --
                 -- Find the starting line number of oldText in the file
                 local offset = 0
                 local path = args.path or args.file_path

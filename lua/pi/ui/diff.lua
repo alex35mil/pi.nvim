@@ -349,7 +349,10 @@ function M.open(payload, callback)
                 content = table.concat(final_lines, "\n"),
             }))
         else
-            callback("Accept")
+            -- Send structured JSON so the extension knows the plugin already
+            -- applied the change (and should block the tool). The TUI sends
+            -- plain "Accept" — the extension lets the tool run in that case.
+            callback(vim.json.encode({ result = "Accepted" }))
         end
     end
 

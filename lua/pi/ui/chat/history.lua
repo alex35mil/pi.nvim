@@ -789,9 +789,11 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
         -- Inline tools: append status indicator to the existing line
         if block and block.inline then
             local labels = Config.options.ui.labels
-            local icon_hl = is_error and "PiToolError" or "PiToolHeader"
-            local status_icon = is_error and labels.tool_failure or labels.tool_success
-            local status_hl = is_error and "PiToolError" or "PiToolStatus"
+            local status = Tools.resolve_status(result, is_error)
+            local is_success = status == "completed"
+            local icon_hl = is_success and "PiToolHeader" or "PiToolError"
+            local status_icon = is_success and labels.tool_success or labels.tool_failure
+            local status_hl = is_success and "PiToolStatus" or "PiToolError"
 
             -- Update icon color
             local icon = Config.options.ui.labels.tool
@@ -842,8 +844,10 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
         end
 
         local labels = Config.options.ui.labels
-        local footer = is_error and (labels.tool_failure .. " error") or (labels.tool_success .. " completed")
-        local footer_hl = is_error and "PiToolError" or "PiToolStatus"
+        local status = Tools.resolve_status(result, is_error)
+        local is_success = status == "completed"
+        local footer = is_success and (labels.tool_success .. " completed") or (labels.tool_failure .. " " .. status)
+        local footer_hl = is_success and "PiToolStatus" or "PiToolError"
         local start = self:_append_lines({ footer })
         Tools.set_border(self, start, Tools.GLYPHS.BOT)
         local footer_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, start, 0, {
@@ -852,7 +856,7 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
         })
 
         if block then
-            local icon_hl = is_error and "PiToolError" or "PiToolHeader"
+            local icon_hl = is_success and "PiToolHeader" or "PiToolError"
             local icon = Config.options.ui.labels.tool
             local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
             if pos[1] then
