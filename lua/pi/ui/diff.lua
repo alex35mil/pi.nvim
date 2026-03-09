@@ -134,7 +134,7 @@ local function apply_edit(lines, old_str, new_str)
     local new_lines = vim.split(new_str, "\n", { plain = true })
     local match_start = find_lines_fuzzy(lines, old_lines)
     if not match_start then
-        Notify.error("diff: old content not found in file")
+        Notify.error("diff: The original content not found in file. The agent likely used stale content — add 'Always re-read files before editing' to your AGENTS.md")
         return lines
     end
 
