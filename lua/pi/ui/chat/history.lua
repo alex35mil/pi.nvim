@@ -74,7 +74,6 @@ local function capture_extmarks(buf, ns_id, start_row, end_row)
             "virt_text",
             "virt_text_pos",
             "hl_mode",
-            "conceal",
             "priority",
             "end_col",
             "line_hl_group",

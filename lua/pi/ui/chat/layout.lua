@@ -304,6 +304,9 @@ function Layout:_open_in_side_layout()
     vim.api.nvim_win_set_buf(self._history_win, self._history:buf())
     set_win_opts(self._history_win, function(win)
         vim.wo[win].winfixwidth = true
+        -- conceallevel=0: treesitter markdown can't conceal brackets/bold
+        -- in tool output, so we don't need ``` fence wrappers.
+        vim.wo[win].conceallevel = 0
     end)
     if panels.history.winbar then
         set_winbar(self._history_win, Config.options.ui.panels.history.title, "PiChatHistoryWinbar")
@@ -365,6 +368,7 @@ function Layout:_open_in_float_layout()
     set_win_opts(self._history_win)
     vim.wo[self._history_win].winbar = ""
     vim.wo[self._history_win].winhighlight = Highlights.CHAT_HISTORY_WINHIGHLIGHT
+    vim.wo[self._history_win].conceallevel = 0
     self._history:set_win(self._history_win)
 
     self._prompt_win = vim.api.nvim_open_win(

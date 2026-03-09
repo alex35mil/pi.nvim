@@ -64,34 +64,46 @@ end
 local function render_output(history, text)
     local sep_row = history:_append_lines({ "" })
     M.set_border(history, sep_row, M.GLYPHS.SEP)
-    -- Wrap in fenced code block so treesitter markdown doesn't parse
-    -- tool output as markdown (concealing brackets, bolding, etc.).
-    -- The ``` delimiters are concealed so only content is visible.
     local output_lines = vim.split(text, "\n", { plain = true })
-    table.insert(output_lines, 1, "```text")
-    output_lines[#output_lines + 1] = "```"
+    -- The history buffer uses treesitter markdown for rendering agent prose.
+    -- Tool output may contain ``` at the start of a line (e.g. a command that
+    -- prints code fences). Treesitter treats these as code fence delimiters —
+    -- an unclosed fence causes all content below to be styled as code.
+    --
+    -- We use conceallevel=0 on the history window so treesitter can't conceal
+    -- characters (brackets, bold markers, etc.) inside tool output. But it still
+    -- PARSES ``` as fence delimiters. To prevent leaking, we count fence lines
+    -- and auto-close if odd — same approach used for user messages in history.lua.
+    local auto_closed = false
+    local fences = 0
+    for _, line in ipairs(output_lines) do
+        if line:match("^```") then
+            fences = fences + 1
+        end
+    end
+    if fences % 2 == 1 then
+        output_lines[#output_lines + 1] = "```"
+        auto_closed = true
+    end
     local start = history:_append_lines(output_lines)
     for i = 0, #output_lines - 1 do
         M.set_border(history, start + i, M.GLYPHS.MID)
-        if i > 0 and i < #output_lines - 1 then
-            local line = output_lines[i + 1] or ""
-            if #line > 0 then
-                vim.api.nvim_buf_set_extmark(history:buf(), history:ns(), start + i, 0, {
-                    end_col = #line,
-                    hl_group = "PiToolOutput",
-                    priority = 200,
-                })
-            end
+        local line = output_lines[i + 1] or ""
+        if #line > 0 then
+            vim.api.nvim_buf_set_extmark(history:buf(), history:ns(), start + i, 0, {
+                end_col = #line,
+                hl_group = "PiToolOutput",
+                priority = 200,
+            })
         end
     end
-    vim.api.nvim_buf_set_extmark(history:buf(), history:ns(), start, 0, {
-        end_col = 7,
-        conceal = "",
-    })
-    vim.api.nvim_buf_set_extmark(history:buf(), history:ns(), start + #output_lines - 1, 0, {
-        end_col = 3,
-        conceal = "",
-    })
+    if auto_closed then
+        local close_row = start + #output_lines - 1
+        vim.api.nvim_buf_set_extmark(history:buf(), history:ns(), close_row, 3, {
+            virt_text = { { " ← auto-closed", "PiWarning" } },
+            virt_text_pos = "inline",
+        })
+    end
 end
 
 --- Parse treesitter highlights for a source string.
@@ -136,7 +148,7 @@ local function apply_diff_syntax(buf, ns, rendered, start_row, old_hl, new_hl)
     for i, r in ipairs(rendered) do
         local src_hl = r.src_kind == "new" and new_hl or old_hl
         local line_hls = src_hl[r.src_line] or {}
-        local row = start_row + i
+        local row = start_row + i - 1
         for _, h in ipairs(line_hls) do
             local sc = r.prefix_len + h.sc
             local ec = h.ec and (r.prefix_len + h.ec) or nil
@@ -224,13 +236,10 @@ local function render_diff(history, old_text, new_text, line_offset, path)
     local sep_row = history:_append_lines({ "" })
     M.set_border(history, sep_row, M.GLYPHS.SEP)
 
-    -- Wrap in concealed code fences for consistent output structure
-    -- Language tag prevents treesitter markdown from concealing brackets etc. inside
-    local lines = { "```text" }
+    local lines = {}
     for _, r in ipairs(rendered) do
         lines[#lines + 1] = r.text
     end
-    lines[#lines + 1] = "```"
 
     local start = history:_append_lines(lines)
     for i = 0, #lines - 1 do
@@ -241,7 +250,7 @@ local function render_diff(history, old_text, new_text, line_offset, path)
     -- hl_group + hl_eol extends to window edge; end_row = row+1 makes it "multiline" (required for hl_eol)
     -- Border virt_text uses hl_mode="replace" so it ignores the hl_group background
     for i, r in ipairs(rendered) do
-        local row = start + i
+        local row = start + i - 1
         -- Diff background
         if r.hl then
             vim.api.nvim_buf_set_extmark(history:buf(), history:ns(), row, 0, {
@@ -257,16 +266,6 @@ local function render_diff(history, old_text, new_text, line_offset, path)
             priority = 300,
         })
     end
-
-    -- Conceal code fences
-    vim.api.nvim_buf_set_extmark(history:buf(), history:ns(), start, 0, {
-        end_col = 7, -- "```text"
-        conceal = "",
-    })
-    vim.api.nvim_buf_set_extmark(history:buf(), history:ns(), start + #lines - 1, 0, {
-        end_col = 3, -- closing "```"
-        conceal = "",
-    })
 
     -- Apply treesitter syntax highlights
     if path then
@@ -380,11 +379,10 @@ function M.extract_tool_sections(history, block)
     local output_lines = {}
     if has_output then
         local output_row = vim.api.nvim_buf_get_extmark_by_id(buf, ns_id, block.output_extmark, {})[1]
-        -- Output section: separator, ```, actual lines..., ```
-        local content_start = output_row + 2 -- skip separator + opening ```
-        local content_end = footer_row - 1 -- skip closing ```
-        if content_end > content_start then
-            output_lines = vim.api.nvim_buf_get_lines(buf, content_start, content_end, false)
+        -- Output section: separator, actual lines...
+        local content_start = output_row + 1 -- skip separator
+        if content_start < footer_row then
+            output_lines = vim.api.nvim_buf_get_lines(buf, content_start, footer_row, false)
         end
     end
 
