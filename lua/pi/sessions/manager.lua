@@ -58,9 +58,13 @@ local function handle_event(session, msg)
             elseif event.type == "text_delta" then
                 chat:on_thinking_end() -- no-op if not thinking
                 chat:on_text_delta(event.delta or "")
-            else
-                Rpc.log_unhandled(t)
-                return false
+                -- NOTE: Ignored sub-events (safe, low priority):
+                --   toolcall_start/delta/end — TUI uses these to show tool blocks
+                --     during LLM streaming (before execution). We use
+                --     tool_execution_start instead; negligible difference since
+                --     tool blocks are collapsed anyway.
+                --   start, done — redundant with message_start/end.
+                --   text_start, text_end — text_delta suffices.
             end
         end
     elseif t == "tool_execution_start" then
