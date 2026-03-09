@@ -44,6 +44,7 @@ local function set_defaults()
     vim.api.nvim_set_hl(0, "PiBusy", { default = true, fg = agent.fg, bold = true })
     vim.api.nvim_set_hl(0, "PiBusyTime", { default = true, fg = comment.fg })
     vim.api.nvim_set_hl(0, "PiMention", { default = true, fg = normal.fg, underline = true })
+    vim.api.nvim_set_hl(0, "PiCommand", { default = true, fg = func.fg, bold = true })
     vim.api.nvim_set_hl(0, "PiAttachmentFilename", { default = true, fg = normal.fg })
     vim.api.nvim_set_hl(0, "PiAttachmentIcon", { default = true, fg = comment.fg })
 

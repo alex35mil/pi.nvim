@@ -218,15 +218,16 @@ end
 ---@param callback fun(value: string?)
 function M.input(opts, callback)
     local default = opts.default or ""
-    local lines = { default }
+    local lines = vim.split(default, "\n", { plain = true })
 
     local was_insert = is_insert()
 
     local float = open_float(lines, opts.title or "Input", { modifiable = true, min_width = 40 })
     local buf, win = float.buf, float.win
 
-    -- Place cursor at end and enter insert mode
-    vim.api.nvim_win_set_cursor(win, { 1, #default })
+    -- Place cursor at end of last line and enter insert mode
+    local last_line = lines[#lines] or ""
+    vim.api.nvim_win_set_cursor(win, { #lines, #last_line })
     vim.cmd("startinsert!")
 
     local responded = false
@@ -252,8 +253,8 @@ function M.input(opts, callback)
     end
 
     local function submit()
-        local value = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or ""
-        resolve(value)
+        local buf_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        resolve(table.concat(buf_lines, "\n"))
     end
 
     bind_keys(buf, "confirm", submit)

@@ -143,7 +143,7 @@ function Chat:show_welcome()
             { "     Use ", "PiWelcomeHint" },
             { "@file", "PiMention" },
             { " to mention files or ", "PiWelcomeHint" },
-            { "/command", "PiMention" },
+            { "/command", "PiCommand" },
             { " for shortcuts.", "PiWelcomeHint" },
         },
     })

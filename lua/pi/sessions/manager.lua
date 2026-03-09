@@ -14,6 +14,7 @@ local Chat = require("pi.ui.chat")
 local Config = require("pi.config")
 local Notify = require("pi.notify")
 local Extension = require("pi.ui.extension")
+local CommandsCache = require("pi.cache.commands")
 
 ---@type table<pi.TabId, pi.Session>
 local sessions = {}
@@ -42,6 +43,7 @@ local function handle_event(session, msg)
         chat:on_agent_start()
     elseif t == "agent_end" then
         chat:on_agent_end()
+        CommandsCache.refresh(session.rpc)
     elseif t == "message_update" then
         local event = msg.assistantMessageEvent
         if event then
@@ -161,6 +163,9 @@ function M.get_or_create(opts)
     end)
 
     sessions[tab] = session
+
+    -- Fetch available /commands for completion and highlighting
+    CommandsCache.fetch(rpc)
 
     return session
 end

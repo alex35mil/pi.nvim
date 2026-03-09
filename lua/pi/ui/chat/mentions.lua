@@ -1,78 +1,9 @@
---- @ mention handling: highlighting, expansion, and insertion.
+--- @-mention expansion and insertion.
 
 local M = {}
 
-local Files = require("pi.files")
 local Notify = require("pi.notify")
-
-local ns = vim.api.nvim_create_namespace("pi-mentions")
-
---- Parse mention ref, stripping optional #L range suffix.
----@param ref string
----@return string path
-local function parse_path(ref)
-    local path = ref:match("^(.-)#L%d+%-?%d*$")
-    return path or ref
-end
-
---- Update mention extmarks for a buffer.
----@param buf integer
-function M.update(buf)
-    vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    for row, line in ipairs(lines) do
-        local col = 1
-        while col <= #line do
-            local start, finish, ref = line:find("@(%S+)", col)
-            if not start then
-                break
-            end
-            -- Strip trailing punctuation for path resolution
-            local clean = ref:gsub("[%.,;:!%?]+$", "")
-            finish = start + #clean -- adjust end to exclude punctuation
-            local path = parse_path(clean)
-            if Files.exists(path) then
-                vim.api.nvim_buf_set_extmark(buf, ns, row - 1, start - 1, {
-                    end_col = finish,
-                    hl_group = "PiMention",
-                })
-            end
-            col = finish + 1
-        end
-    end
-end
-
---- Attach mention highlighting to a pi prompt buffer.
----@param buf integer
-function M.attach(buf)
-    local timer = assert(vim.uv.new_timer())
-    local DEBOUNCE_MS = 150
-
-    vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-        buffer = buf,
-        callback = function()
-            timer:stop()
-            timer:start(
-                DEBOUNCE_MS,
-                0,
-                vim.schedule_wrap(function()
-                    if vim.api.nvim_buf_is_valid(buf) then
-                        M.update(buf)
-                    end
-                end)
-            )
-        end,
-    })
-
-    vim.api.nvim_create_autocmd("BufWipeout", {
-        buffer = buf,
-        once = true,
-        callback = function()
-            timer:stop()
-            timer:close()
-        end,
-    })
-end
+local Decorators = require("pi.ui.chat.decorators")
 
 --- Expand @-mentions into context hints the agent understands.
 --- `@path/to/file` → `[file: path/to/file]`
@@ -159,7 +90,7 @@ function M.send(loc, opts)
             vim.api.nvim_win_set_cursor(win, { row, col + #insert })
         end
 
-        M.update(buf)
+        Decorators.update(buf)
     end)
 end
 

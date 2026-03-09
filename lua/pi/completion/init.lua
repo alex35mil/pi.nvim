@@ -1,6 +1,7 @@
---- Shared matching logic for @-mention completion sources.
+--- Shared matching logic for @-mention and /command completion sources.
 
-local Files = require("pi.files")
+local FilesCache = require("pi.cache.files")
+local CommandsCache = require("pi.cache.commands")
 
 local M = {}
 
@@ -25,8 +26,8 @@ end
 ---@param prefix string typed text after @
 ---@param make_item fun(path: string, kind: "file"|"dir", is_fuzzy: boolean): table
 ---@return table[]
-function M.complete(prefix, make_item)
-    local project_files = Files.list()
+function M.complete_files(prefix, make_item)
+    local project_files = FilesCache.list()
     local items = {}
     local seen_dirs = {}
     local prefix_matched = {}
@@ -54,6 +55,65 @@ function M.complete(prefix, make_item)
         for _, path in ipairs(project_files) do
             if not prefix_matched[path] and M.fuzzy_match(prefix, path) then
                 items[#items + 1] = make_item(path, "file", true)
+            end
+        end
+    end
+
+    return items
+end
+
+--- Two-pass command matching: prefix matches then fuzzy matches.
+--- Skills are also matched by their short name (after "skill:").
+--- Calls make_item(cmd, is_fuzzy) for each result.
+---@param prefix string typed text after /
+---@param make_item fun(cmd: pi.SlashCommand, is_fuzzy: boolean): table
+---@return table[]
+function M.complete_commands(prefix, make_item)
+    local commands = CommandsCache.list()
+    if prefix == "" then
+        local items = {}
+        for _, cmd in ipairs(commands) do
+            items[#items + 1] = make_item(cmd, false)
+        end
+        return items
+    end
+
+    local lprefix = prefix:lower()
+    local items = {}
+    local seen = {}
+
+    --- Check if lprefix is a prefix of name.
+    ---@param name string already lowercased
+    local function is_prefix(name)
+        return name:sub(1, #lprefix) == lprefix
+    end
+
+    --- Get the short name for skills (after "skill:"), or nil.
+    ---@param cmd pi.SlashCommand
+    ---@return string? lowercased short name
+    local function skill_short(cmd)
+        if cmd.source == "skill" then
+            return cmd.name:lower():match("^skill:(.+)$")
+        end
+    end
+
+    -- Pass 1: prefix matches on full name or skill short name
+    for _, cmd in ipairs(commands) do
+        local lname = cmd.name:lower()
+        local short = skill_short(cmd)
+        if is_prefix(lname) or (short and is_prefix(short)) then
+            seen[cmd.name] = true
+            items[#items + 1] = make_item(cmd, false)
+        end
+    end
+
+    -- Pass 2: fuzzy matches on full name or skill short name
+    for _, cmd in ipairs(commands) do
+        if not seen[cmd.name] then
+            local lname = cmd.name:lower()
+            local short = skill_short(cmd)
+            if M.fuzzy_match(lprefix, lname) or (short and M.fuzzy_match(lprefix, short)) then
+                items[#items + 1] = make_item(cmd, true)
             end
         end
     end

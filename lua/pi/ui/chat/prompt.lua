@@ -12,7 +12,7 @@ Prompt.__index = Prompt
 
 local Ft = require("pi.filetypes")
 local Config = require("pi.config")
-local Mentions = require("pi.ui.chat.mentions")
+local Decorators = require("pi.ui.chat.decorators")
 
 Prompt.HEIGHT = 5
 Prompt.MAX_HEIGHT = 15
@@ -47,7 +47,7 @@ function Prompt.new(tab, attachments)
     vim.api.nvim_buf_set_name(self._buf, name)
 
     vim.bo[self._buf].completefunc = "v:lua.require'pi.completion.omnifunc'.completefunc"
-    Mentions.attach(self._buf)
+    Decorators.attach(self._buf)
 
     -- Arrow keys move by display line so wrapped text is navigable
     vim.api.nvim_buf_set_keymap(self._buf, "i", "<Up>", "<C-o>g<Up>", { noremap = true, silent = true })

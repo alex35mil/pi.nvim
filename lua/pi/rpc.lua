@@ -42,6 +42,7 @@
 ---| "new_session"
 ---| "switch_session"
 ---| "get_messages"
+---| "get_commands"
 ---| "extension_ui_response"
 
 ---@class pi.RpcImageContent
