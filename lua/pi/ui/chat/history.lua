@@ -239,12 +239,8 @@ function History:_scroll_to_bottom()
         return
     end
     vim.api.nvim_win_call(self._win, function()
-        -- G=last line, zb=cursor at bottom of window
-        -- Then scroll down to reveal any virt_lines (spinner) below the last real line
+        -- G=last line, 0=col 1, zb=redraw with cursor at bottom
         vim.cmd("normal! G0zb")
-        if self._status_extmark_id then
-            vim.cmd("normal! 3\5") -- 3 * Ctrl-E (scroll view down)
-        end
     end)
 end
 
@@ -462,7 +458,13 @@ function History:set_status(status)
         self._status_start_time = text and math.floor(vim.uv.hrtime() / 1e9) or nil
         self._spinner_index = 1
         self:_update_status_extmark()
-        self:_maybe_scroll()
+        -- Force scroll (bypass _scroll_scheduled guard) so the spinner
+        -- virt_lines are visible even if a prior scroll is still pending.
+        if text and self:_should_auto_scroll() then
+            self:_scroll_to_bottom()
+        else
+            self:_maybe_scroll()
+        end
 
         -- Stop existing timer — rate may have changed between spinner types.
         if self._spinner_timer then
