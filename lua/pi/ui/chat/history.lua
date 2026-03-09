@@ -796,6 +796,9 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
             -- Update icon color
             local icon = Config.options.ui.labels.tool
             local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
+            if not pos[1] then
+                return
+            end
             vim.api.nvim_buf_set_extmark(self._buf, ns, pos[1], 0, {
                 id = block.icon_extmark,
                 end_col = #icon,
@@ -852,11 +855,13 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
             local icon_hl = is_error and "PiToolError" or "PiToolHeader"
             local icon = Config.options.ui.labels.tool
             local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
-            vim.api.nvim_buf_set_extmark(self._buf, ns, pos[1], 0, {
-                id = block.icon_extmark,
-                end_col = #icon,
-                hl_group = icon_hl,
-            })
+            if pos[1] then
+                vim.api.nvim_buf_set_extmark(self._buf, ns, pos[1], 0, {
+                    id = block.icon_extmark,
+                    end_col = #icon,
+                    hl_group = icon_hl,
+                })
+            end
             block.end_extmark = footer_extmark
             block.expanded = true
             self:_maybe_collapse_tool(tool_call_id)
@@ -878,8 +883,13 @@ function History:_maybe_collapse_tool(tool_call_id)
         return
     end
 
-    local header_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})[1]
-    local footer_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.end_extmark, {})[1]
+    local header_pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
+    local footer_pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.end_extmark, {})
+    local header_row = header_pos[1]
+    local footer_row = footer_pos[1]
+    if not header_row or not footer_row then
+        return
+    end
     local inner_start = header_row + 1
 
     local renderer = Tools.get_renderer(block.tool_name)
