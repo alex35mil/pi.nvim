@@ -21,6 +21,7 @@
 ---@field _thinking_accum pi.ThinkingAccum?
 ---@field _thinking_blocks pi.ThinkingBlock[]
 ---@field _tool_blocks table<string, pi.ToolBlock>
+---@field _placeholder_extmark integer?
 local History = {}
 History.__index = History
 
@@ -185,6 +186,7 @@ function History.new(tab)
     self._thinking_accum = nil
     self._thinking_blocks = {}
     self._tool_blocks = {}
+    self._placeholder_extmark = nil
 
     local panel = Config.options.ui.panels.history
     local name = panel.name and panel.name(tab) or ("π-chat | " .. tab)
@@ -499,6 +501,7 @@ function History:add_user_message(msg, timestamp, image_count)
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
         end
+        self:_clear_placeholder()
         local label = " " .. Config.options.ui.labels.user_message .. " "
         local msg_lines = vim.split(msg, "\n", { plain = true })
         -- Treesitter highlights fenced code blocks — an unclosed fence bleeds
@@ -552,6 +555,7 @@ function History:on_agent_start(timestamp)
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
         end
+        self:_clear_placeholder()
         self._agent_start_time = vim.uv.hrtime() / 1e9
         self._first_delta = true
         self._needs_separator = false
@@ -1124,6 +1128,33 @@ function History:toggle_thinking()
     end)
 end
 
+--- Show a placeholder message (virtual text) on the empty history buffer.
+--- Replaces any existing placeholder.
+---@param virt_lines table[] virt_lines spec for nvim_buf_set_extmark
+function History:set_placeholder(virt_lines)
+    self:_clear_placeholder()
+    local line_count = vim.api.nvim_buf_line_count(self._buf)
+    if line_count ~= 1 then
+        return
+    end
+    local first = vim.api.nvim_buf_get_lines(self._buf, 0, 1, false)[1]
+    if first ~= "" then
+        return
+    end
+    self._placeholder_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, 0, 0, {
+        virt_lines = virt_lines,
+    })
+end
+
+--- Remove the placeholder message if present.
+function History:_clear_placeholder()
+    if not self._placeholder_extmark then
+        return
+    end
+    pcall(vim.api.nvim_buf_del_extmark, self._buf, ns, self._placeholder_extmark)
+    self._placeholder_extmark = nil
+end
+
 function History:clear()
     if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
         return
@@ -1138,6 +1169,7 @@ function History:clear()
     self._thinking_accum = nil
     self._thinking_blocks = {}
     self._tool_blocks = {}
+    self._placeholder_extmark = nil
     self:_with_modifiable(function()
         vim.api.nvim_buf_set_lines(self._buf, 0, -1, false, { "" })
     end)

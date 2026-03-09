@@ -300,12 +300,13 @@ function M.continue_session(opts)
     if not session then
         return
     end
-    session.chat:show()
+    session.chat:show({ loading = true })
 
     local History = require("pi.sessions.history")
     local sessions_list = History.list()
     if #sessions_list == 0 then
         Notify.info("No previous sessions found")
+        session.chat:show_welcome()
         session.chat:ensure_shown_and_focus_prompt()
         return
     end
@@ -358,7 +359,7 @@ function M.resume_session(opts)
         if not session then
             return
         end
-        session.chat:show()
+        session.chat:show({ loading = true })
         load_session(session, chosen.path)
     end)
 end

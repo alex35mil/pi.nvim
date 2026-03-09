@@ -111,13 +111,54 @@ function Chat:_set_keymaps()
     end, { buffer = hbuf, desc = "Toggle tool block" })
 end
 
-function Chat:show()
+---@class pi.ChatShowOpts
+---@field loading? boolean Show "Loading session…" instead of welcome
+
+---@param opts? pi.ChatShowOpts
+function Chat:show(opts)
     if not self._layout:show() then
         -- already shown
         return
     end
     self:_set_keymaps()
+    if opts and opts.loading then
+        self:show_loading()
+    else
+        self:show_welcome()
+    end
     self._prompt:focus()
+end
+
+--- Show a welcome placeholder on the empty history buffer.
+function Chat:show_welcome()
+    local icon = " " .. Config.options.ui.labels.agent_response .. " "
+    self._history:set_placeholder({
+        { { "" } },
+        {
+            { icon, "PiAgentResponseLabel" },
+            { "  Hi! Ask me anything or describe what you'd like to build.", "PiWelcome" },
+        },
+        { { "" } },
+        {
+            { "     Use ", "PiWelcomeHint" },
+            { "@file", "PiMention" },
+            { " to mention files or ", "PiWelcomeHint" },
+            { "/command", "PiMention" },
+            { " for shortcuts.", "PiWelcomeHint" },
+        },
+    })
+end
+
+--- Show a loading placeholder on the empty history buffer.
+function Chat:show_loading()
+    local icon = " " .. Config.options.ui.labels.agent_response .. " "
+    self._history:set_placeholder({
+        { { "" } },
+        {
+            { icon, "PiAgentResponseLabel" },
+            { "  Loading session…", "PiWelcomeHint" },
+        },
+    })
 end
 
 function Chat:hide()
