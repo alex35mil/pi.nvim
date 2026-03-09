@@ -106,6 +106,7 @@ local Config = require("pi.config")
 local Notify = require("pi.notify")
 
 local DEBUG_OVERRIDE = nil ---@type boolean?
+local log_reset_done = false
 
 local function debug_enabled()
     if DEBUG_OVERRIDE ~= nil then
@@ -117,11 +118,23 @@ end
 ---@type string
 local log_path = vim.fn.stdpath("log") .. "/pi-rpc.log"
 
+--- Reset the log file.
+local function reset_log()
+    local file = io.open(log_path, "w")
+    if file then
+        file:close()
+    end
+    log_reset_done = true
+end
+
 ---@param tag string
 ---@param msg table|string
 local function log(tag, msg)
     if not debug_enabled() then
         return
+    end
+    if not log_reset_done then
+        reset_log()
     end
     local file = io.open(log_path, "a")
     if not file then
@@ -282,10 +295,7 @@ end
 function Rpc.toggle_debug()
     DEBUG_OVERRIDE = not debug_enabled()
     if debug_enabled() then
-        local file = io.open(log_path, "w")
-        if file then
-            file:close()
-        end
+        reset_log()
         Notify.info("Debug ON -> " .. log_path)
     else
         Notify.info("Debug OFF")
