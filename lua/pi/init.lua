@@ -94,6 +94,7 @@ function M.new_session()
     if session and session.rpc:is_running() then
         session.rpc:send({ type = "new_session" })
         session.chat:clear()
+        session.chat:show_welcome()
     end
 end
 
