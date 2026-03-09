@@ -3,7 +3,7 @@
 
 local M = {}
 
-local Files = require("pi.files")
+local Matcher = require("pi.completion")
 
 ---@param findstart integer
 ---@param base string
@@ -25,19 +25,10 @@ function M.completefunc(findstart, base)
         return -3
     end
 
-    local project_files = Files.list()
-    local items = {}
     local prefix = base:sub(2) -- strip @
-    for _, path in ipairs(project_files) do
-        if prefix == "" or path:find(prefix, 1, true) == 1 then
-            items[#items + 1] = {
-                word = "@" .. path,
-                kind = "f",
-                menu = "[Pi]",
-            }
-        end
-    end
-    return items
+    return Matcher.complete(prefix, function(path)
+        return { word = "@" .. path, kind = "f", menu = "[Pi]" }
+    end)
 end
 
 return M
