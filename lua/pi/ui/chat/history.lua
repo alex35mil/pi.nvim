@@ -22,6 +22,8 @@
 ---@field _thinking_blocks pi.ThinkingBlock[]
 ---@field _tool_blocks table<string, pi.ToolBlock>
 ---@field _placeholder_extmark integer?
+---@field _pending_queue pi.PendingQueueEntry[]
+---@field _pending_queue_extmark_id integer?
 local History = {}
 History.__index = History
 
@@ -50,6 +52,11 @@ History.__index = History
 ---@field anchor integer
 ---@field line_count integer
 ---@field visible boolean
+
+---@class pi.PendingQueueEntry
+---@field queue_type "steer"|"follow_up"
+---@field text string
+---@field expanded_text string
 
 local Ft = require("pi.filetypes")
 local Config = require("pi.config")
@@ -187,6 +194,8 @@ function History.new(tab)
     self._thinking_blocks = {}
     self._tool_blocks = {}
     self._placeholder_extmark = nil
+    self._pending_queue = {}
+    self._pending_queue_extmark_id = nil
 
     local panel = Config.options.ui.panels.history
     local name = panel.name and panel.name(tab) or ("π-chat | " .. tab)
@@ -282,10 +291,40 @@ function History:_pick_spinner()
 end
 
 function History:_update_status_extmark()
+    -- Clear both extmarks
+    if self._pending_queue_extmark_id then
+        vim.api.nvim_buf_del_extmark(self._buf, ns, self._pending_queue_extmark_id)
+        self._pending_queue_extmark_id = nil
+    end
     if self._status_extmark_id then
         vim.api.nvim_buf_del_extmark(self._buf, ns, self._status_extmark_id)
         self._status_extmark_id = nil
     end
+
+    local last_line = vim.api.nvim_buf_line_count(self._buf) - 1
+
+    -- Pending queue extmark (rendered above status)
+    if #self._pending_queue > 0 then
+        ---@type table[]
+        local virt = { { { "" } } }
+        for _, entry in ipairs(self._pending_queue) do
+            local label = entry.queue_type == "steer" and (Config.options.ui.labels.steer_message .. " ")
+                or (Config.options.ui.labels.follow_up_message .. " ")
+            local preview = entry.text:gsub("\n", " ")
+            if #preview > 80 then
+                preview = preview:sub(1, 77) .. "…"
+            end
+            virt[#virt + 1] = {
+                { "  " .. label, "PiPendingQueueLabel" },
+                { preview, "PiPendingQueueText" },
+            }
+        end
+        self._pending_queue_extmark_id = vim.api.nvim_buf_set_extmark(self._buf, ns, last_line, 0, {
+            virt_lines = virt,
+        })
+    end
+
+    -- Status spinner extmark
     if not self._status_text then
         return
     end
@@ -311,7 +350,6 @@ function History:_update_status_extmark()
         pad = math.max(0, math.floor((win_width - full_width) / 2))
     end
     local padding = string.rep(" ", pad)
-    local last_line = vim.api.nvim_buf_line_count(self._buf) - 1
     self._status_extmark_id = vim.api.nvim_buf_set_extmark(self._buf, ns, last_line, 0, {
         virt_lines = {
             { { "" } },
@@ -496,7 +534,8 @@ end
 ---@param msg string
 ---@param timestamp? number
 ---@param image_count? integer
-function History:add_user_message(msg, timestamp, image_count)
+---@param queue_type? "steer"|"follow_up"
+function History:add_user_message(msg, timestamp, image_count, queue_type)
     vim.schedule(function()
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
@@ -517,7 +556,13 @@ function History:add_user_message(msg, timestamp, image_count)
         end
         local time = timestamp or (os.time() * 1000)
         local time_str = format_time(time)
-        local label_line = label .. time_str
+        local queue_tag = ""
+        if queue_type == "steer" then
+            queue_tag = "  " .. Config.options.ui.labels.steer_message
+        elseif queue_type == "follow_up" then
+            queue_tag = "  " .. Config.options.ui.labels.follow_up_message
+        end
+        local label_line = label .. time_str .. queue_tag
         local lines = { "", label_line }
         vim.list_extend(lines, msg_lines)
         if image_count and image_count > 0 then
@@ -533,10 +578,17 @@ function History:add_user_message(msg, timestamp, image_count)
             end_col = #label,
             hl_group = "PiUserMessageLabel",
         })
+        local time_end = #label + #time_str
         vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, #label, {
-            end_col = #label_line,
+            end_col = time_end,
             hl_group = "PiMessageDateTime",
         })
+        if queue_tag ~= "" then
+            vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, time_end, {
+                end_col = time_end + #queue_tag,
+                hl_group = "PiMessageQueueTag",
+            })
+        end
         if image_count and image_count > 0 then
             local info_row = start + #lines - 1
             local info_text = lines[#lines]
@@ -1155,6 +1207,52 @@ function History:_clear_placeholder()
     self._placeholder_extmark = nil
 end
 
+--- Add a message to the pending queue (displayed as virtual text at the bottom).
+---@param queue_type "steer"|"follow_up"
+---@param display_text string raw user text (for display)
+---@param expanded_text string expanded text (for matching on delivery)
+function History:add_pending_queue_entry(queue_type, display_text, expanded_text)
+    self._pending_queue[#self._pending_queue + 1] = {
+        queue_type = queue_type,
+        text = display_text,
+        expanded_text = expanded_text,
+    }
+    self:_update_status_extmark()
+    if self:_should_auto_scroll() then
+        self:_scroll_to_bottom()
+    end
+end
+
+--- Remove the first pending queue entry whose expanded_text matches.
+--- Called when `message_start` arrives for a delivered steering/follow-up message.
+---@param text string the user message text from the event
+---@return pi.PendingQueueEntry? entry the removed entry, or nil if not found
+function History:remove_pending_queue_entry(text)
+    for i, entry in ipairs(self._pending_queue) do
+        if entry.expanded_text == text then
+            table.remove(self._pending_queue, i)
+            self:_update_status_extmark()
+            return entry
+        end
+    end
+    return nil
+end
+
+--- Get a shallow copy of pending queue entries.
+---@return pi.PendingQueueEntry[]
+function History:get_pending_queue()
+    return { unpack(self._pending_queue) }
+end
+
+--- Clear all pending queue entries.
+function History:clear_pending_queue()
+    if #self._pending_queue == 0 then
+        return
+    end
+    self._pending_queue = {}
+    self:_update_status_extmark()
+end
+
 function History:clear()
     if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
         return
@@ -1166,6 +1264,8 @@ function History:clear()
     end
     self._status_text = nil
     self._status_extmark_id = nil
+    self._pending_queue = {}
+    self._pending_queue_extmark_id = nil
     self._thinking_accum = nil
     self._thinking_blocks = {}
     self._tool_blocks = {}

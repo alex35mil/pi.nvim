@@ -9,6 +9,8 @@
 ---@field _history pi.ChatHistory
 ---@field _prompt pi.ChatPrompt
 ---@field _keymaps_set boolean
+---@field _streaming boolean
+---@field _steer_delivered boolean
 ---@field _active_verb string?
 ---@field _done_verb string?
 ---@field _attachments pi.ChatAttachments
@@ -34,6 +36,8 @@ function Chat.new(tab, mode, agent)
     self._history = History.new(tab)
     self._layout = Layout.new(mode, self._history, self._prompt, self._attachments)
     self._keymaps_set = false
+    self._streaming = false
+    self._steer_delivered = false
     self._active_verb = nil
     self._done_verb = nil
     return self
@@ -98,6 +102,15 @@ function Chat:_set_keymaps()
     vim.keymap.set("i", "<CR>", function()
         self:submit()
     end, { buffer = pbuf, desc = "Submit π prompt" })
+
+    -- Follow-up: queued until agent finishes
+    vim.keymap.set("n", "<A-CR>", function()
+        self:submit_follow_up()
+    end, { buffer = pbuf, desc = "Submit π follow-up" })
+
+    vim.keymap.set("i", "<A-CR>", function()
+        self:submit_follow_up()
+    end, { buffer = pbuf, desc = "Submit π follow-up" })
 
     -- New line
     -- TODO?: Should be configurable?
@@ -225,7 +238,27 @@ function Chat:toggle()
     end
 end
 
+--- Submit the prompt. When streaming, sends as a steer (interrupt); otherwise regular prompt.
 function Chat:submit()
+    self:_send_message(self._streaming and "steer" or nil)
+end
+
+--- Submit the prompt as a follow-up. When streaming, queued until agent finishes;
+--- otherwise sends as a regular prompt.
+function Chat:submit_follow_up()
+    self:_send_message(self._streaming and "follow_up" or nil)
+end
+
+---@return boolean
+function Chat:is_streaming()
+    return self._streaming
+end
+
+--- Send the current prompt contents as a message.
+--- When queue_type is set, the message is added to the pending queue (virtual text)
+--- instead of the chat history. It moves to the history when `message_start` arrives.
+---@param queue_type "steer"|"follow_up"|nil
+function Chat:_send_message(queue_type)
     local text = self._prompt:text()
 
     if text == "" and self._attachments:count() == 0 then
@@ -237,15 +270,25 @@ function Chat:submit()
     local attachments = self._attachments:count() > 0 and self._attachments:get() or nil
     self._attachments:clear()
 
-    local message = Mentions.expand(text)
+    local expanded = Mentions.expand(text)
 
-    self._history:add_user_message(text, nil, attachments and #attachments or nil)
+    if queue_type then
+        -- Queued message: show in pending area, render in history on delivery
+        self._history:add_pending_queue_entry(queue_type, text, expanded)
+    else
+        -- Immediate: render in history now
+        self._history:add_user_message(text, nil, attachments and #attachments or nil)
+    end
 
     ---@type pi.RpcCommand
-    local cmd = {
-        type = "prompt",
-        message = message,
-    }
+    local cmd
+    if queue_type == "steer" then
+        cmd = { type = "steer", message = expanded }
+    elseif queue_type == "follow_up" then
+        cmd = { type = "follow_up", message = expanded }
+    else
+        cmd = { type = "prompt", message = expanded }
+    end
     if attachments and #attachments > 0 then
         cmd.images = attachments
     end
@@ -272,6 +315,7 @@ end
 
 ---@param timestamp? number
 function Chat:on_agent_start(timestamp)
+    self._streaming = true
     local verbs = Config.random_verbs()
     self._active_verb = verbs[1]
     self._done_verb = verbs[2]
@@ -285,8 +329,55 @@ function Chat:on_text_delta(delta)
 end
 
 function Chat:on_agent_end()
+    self._streaming = false
+    self._steer_delivered = false
+    -- Flush any remaining pending queue entries into the history.
+    -- Normally they are moved on message_start, but if the agent ends
+    -- without delivering them (e.g. abort), render them now so they
+    -- don't silently vanish.
+    for _, entry in ipairs(self._history:get_pending_queue()) do
+        self._history:add_user_message(entry.text, nil, nil, entry.queue_type)
+    end
+    self._history:clear_pending_queue()
     self._history:on_agent_end(self._done_verb)
     self:set_status(nil)
+end
+
+--- Handle message_start events. When a user message arrives and matches
+--- a pending queue entry, move it from the queue into the chat history.
+---@param msg pi.RpcEvent
+function Chat:on_message_start(msg)
+    local message = msg.message
+    if not message then
+        return
+    end
+
+    if message.role == "user" then
+        -- Extract text from the user message content
+        local text = ""
+        if type(message.content) == "string" then
+            text = message.content
+        elseif type(message.content) == "table" then
+            for _, part in ipairs(message.content) do
+                if type(part) == "string" then
+                    text = text .. part
+                elseif type(part) == "table" and part.type == "text" then
+                    text = text .. (part.text or "")
+                end
+            end
+        end
+        local entry = self._history:remove_pending_queue_entry(text)
+        if entry then
+            self._steer_delivered = true
+            self._history:add_user_message(entry.text, nil, nil, entry.queue_type)
+        end
+    elseif message.role == "assistant" and self._steer_delivered then
+        -- After a steered user message is delivered, the agent starts a new
+        -- assistant turn.  Add a fresh assistant header so tool calls and
+        -- text don't look like they belong to the user.
+        self._steer_delivered = false
+        self._history:on_agent_start(message.timestamp)
+    end
 end
 
 ---@param error_message string
@@ -339,6 +430,8 @@ function Chat:toggle_thinking()
 end
 
 function Chat:clear()
+    self._streaming = false
+    self._steer_delivered = false
     self._history:clear()
 end
 

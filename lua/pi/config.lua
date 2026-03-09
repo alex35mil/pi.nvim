@@ -49,6 +49,8 @@
 ---@field tool string
 ---@field tool_success string
 ---@field tool_failure string
+---@field steer_message string
+---@field follow_up_message string
 ---@field thinking string
 ---@field attachment string
 ---@field attachments string
@@ -112,6 +114,8 @@ local defaults = {
             tool = "󰻂",
             tool_success = "",
             tool_failure = "",
+            steer_message = "󰾘",
+            follow_up_message = "󱇼",
             thinking = "󰟶",
             attachment = "",
             attachments = "",

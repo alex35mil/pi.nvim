@@ -38,6 +38,8 @@
 --- https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/modes/rpc/rpc-types.ts
 ---@alias pi.RpcCommandType
 ---| "prompt"
+---| "steer"
+---| "follow_up"
 ---| "abort"
 ---| "new_session"
 ---| "switch_session"

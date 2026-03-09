@@ -27,7 +27,6 @@ end
 --- Events we've reviewed and deliberately choose not to handle.
 ---@type table<string, true>
 local ignored_events = {
-    message_start = true,
     message_end = true,
 }
 
@@ -96,6 +95,8 @@ local function handle_event(session, msg)
         end)
     elseif t == "response" then
         return false -- handled by rpc:send() one-shot callbacks
+    elseif t == "message_start" then
+        chat:on_message_start(msg)
     elseif t == "tool_execution_update" then
         chat:on_tool_update(msg.toolName or "tool", msg.toolCallId, msg)
     elseif t == "turn_end" then
