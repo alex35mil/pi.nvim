@@ -184,8 +184,14 @@ end
 ---@param session pi.Session
 ---@param messages table[]
 local function replay_messages(session, messages)
+    local pending_agent_end = false
     for _, msg in ipairs(messages) do
         local role = msg.role
+        -- Flush pending agent_end before a new user or assistant message
+        if pending_agent_end and (role == "user" or role == "assistant") then
+            session.chat:on_agent_end()
+            pending_agent_end = false
+        end
         if role == "user" then
             local text = ""
             local image_count = 0
@@ -207,6 +213,7 @@ local function replay_messages(session, messages)
             end
         elseif role == "assistant" then
             local text = ""
+            local tool_calls = {} ---@type { id: string, name: string, args: table? }[]
             if type(msg.content) == "string" then
                 text = msg.content
             elseif type(msg.content) == "table" then
@@ -215,15 +222,42 @@ local function replay_messages(session, messages)
                         text = text .. part
                     elseif type(part) == "table" and part.type == "text" then
                         text = text .. (part.text or "")
+                    elseif type(part) == "table" and part.type == "toolCall" then
+                        tool_calls[#tool_calls + 1] = {
+                            id = part.toolCallId or part.id or "",
+                            name = part.toolName or part.name or "tool",
+                            args = part.arguments or part.args or part.input,
+                        }
                     end
                 end
             end
-            if text ~= "" then
+            if text ~= "" or #tool_calls > 0 then
                 session.chat:on_agent_start(msg.timestamp)
-                session.chat:on_text_delta(text)
-                session.chat:on_agent_end()
+                if text ~= "" then
+                    session.chat:on_text_delta(text)
+                end
+                -- Don't call on_agent_end yet — tool results follow as separate messages.
+                -- Store pending tool calls so on_tool_end can fire before on_agent_end.
+                for _, tc in ipairs(tool_calls) do
+                    session.chat:on_tool_start(tc.name, tc.id, tc.args)
+                end
+                if #tool_calls == 0 then
+                    session.chat:on_agent_end()
+                else
+                    pending_agent_end = true
+                end
             end
+        elseif role == "toolResult" then
+            local tool_call_id = msg.toolCallId or msg.toolUseId or ""
+            local tool_name = msg.toolName or "tool"
+            local is_error = msg.isError == true
+            -- msg itself has .content, matching what on_tool_end expects as result
+            session.chat:on_tool_end(tool_name, tool_call_id, msg, is_error)
         end
+    end
+    -- Flush any remaining pending agent_end
+    if pending_agent_end then
+        session.chat:on_agent_end()
     end
 end
 
