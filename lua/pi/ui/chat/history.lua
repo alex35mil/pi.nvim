@@ -898,8 +898,7 @@ function History:_maybe_collapse_tool(tool_call_id)
 
     local input_lines, output_lines, has_output = Tools.extract_tool_sections(self, block)
     -- Subtract border glyph width so truncation accounts for inline virt_text
-    local win_width = self._win and vim.api.nvim_win_is_valid(self._win)
-        and vim.api.nvim_win_get_width(self._win) or 0
+    local win_width = self._win and vim.api.nvim_win_is_valid(self._win) and vim.api.nvim_win_get_width(self._win) or 0
     local border_w = vim.fn.strdisplaywidth(Tools.GLYPHS.MID)
     local gutters = (self._win and vim.wo[self._win].foldcolumn or "0")
     local gutter_w = tonumber(gutters) or 0
@@ -907,9 +906,8 @@ function History:_maybe_collapse_tool(tool_call_id)
     if not Tools.should_collapse(input_lines, output_lines, input_vis, output_vis, max_width) then
         return
     end
-    local collapsed, specs = Tools.build_collapsed_view(
-        input_lines, output_lines, has_output, input_vis, output_vis, max_width
-    )
+    local collapsed, specs =
+        Tools.build_collapsed_view(input_lines, output_lines, has_output, input_vis, output_vis, max_width)
 
     -- Save expanded state
     block.expanded_inner_lines = vim.api.nvim_buf_get_lines(self._buf, inner_start, footer_row, false)

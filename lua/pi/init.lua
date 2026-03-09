@@ -198,4 +198,3 @@ function M.focus_chat_attachments()
 end
 
 return M
-

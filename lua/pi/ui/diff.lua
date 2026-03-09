@@ -185,6 +185,12 @@ function M.open(payload, callback)
     end
     if bufnr then
         before_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        -- nvim_buf_get_lines strips trailing-newline info that read_file
+        -- preserves as a trailing "".  Re-add it so apply_edit and
+        -- write_file round-trip the file's eol state correctly.
+        if vim.bo[bufnr].eol then
+            table.insert(before_lines, "")
+        end
     else
         before_lines = read_file(path)
     end
@@ -371,3 +377,4 @@ function M.open(payload, callback)
 end
 
 return M
+
