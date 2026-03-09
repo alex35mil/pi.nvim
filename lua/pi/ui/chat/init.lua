@@ -380,6 +380,28 @@ function Chat:on_message_start(msg)
     end
 end
 
+--- Handle message_end events.  When an assistant message ends with
+--- stopReason "aborted" or "error", mark all pending tool blocks as
+--- errored so they don't hang open forever.
+---@param msg pi.RpcEvent
+function Chat:on_message_end(msg)
+    local message = msg.message
+    if not message or message.role ~= "assistant" then
+        return
+    end
+
+    local stop = message.stopReason
+    if stop == "aborted" or stop == "error" then
+        local error_message
+        if stop == "aborted" then
+            error_message = "Operation aborted"
+        else
+            error_message = message.errorMessage or "Error"
+        end
+        self._history:mark_pending_tools_errored(error_message)
+    end
+end
+
 ---@param error_message string
 function Chat:on_error(error_message)
     self._history:on_error(error_message)

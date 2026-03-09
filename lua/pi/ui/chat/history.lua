@@ -1038,6 +1038,27 @@ end
 ---@param msg table
 function History:on_tool_update(tool_name, tool_call_id, msg) end
 
+--- Mark all pending (unfinished) tool blocks as errored.
+--- Called on message_end when the assistant message was aborted or errored,
+--- mirroring TUI behaviour that closes out hanging tool blocks.
+---@param error_message string
+function History:mark_pending_tools_errored(error_message)
+    ---@type { id: string, name: string }[]
+    local pending = {}
+    for id, block in pairs(self._tool_blocks) do
+        if not block.end_extmark then
+            pending[#pending + 1] = { id = id, name = block.tool_name }
+        end
+    end
+    if #pending == 0 then
+        return
+    end
+    local error_result = { content = { { type = "text", text = error_message } } }
+    for _, p in ipairs(pending) do
+        self:on_tool_end(p.name, p.id, error_result, true)
+    end
+end
+
 function History:on_thinking_start()
     vim.schedule(function()
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then

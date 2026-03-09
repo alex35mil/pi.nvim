@@ -25,9 +25,12 @@ local function current_tab()
 end
 
 --- Events we've reviewed and deliberately choose not to handle.
+--- turn_start/turn_end: TUI doesn't handle them; lifecycle is fully
+--- covered by message_start / message_end / agent_end.
 ---@type table<string, true>
 local ignored_events = {
-    message_end = true,
+    turn_start = true,
+    turn_end = true,
 }
 
 --- Central event handler for a session.
@@ -97,14 +100,10 @@ local function handle_event(session, msg)
         return false -- handled by rpc:send() one-shot callbacks
     elseif t == "message_start" then
         chat:on_message_start(msg)
+    elseif t == "message_end" then
+        chat:on_message_end(msg)
     elseif t == "tool_execution_update" then
         chat:on_tool_update(msg.toolName or "tool", msg.toolCallId, msg)
-    elseif t == "turn_end" then
-        local tmsg = msg.message
-        if tmsg and tmsg.stopReason == "error" and tmsg.errorMessage then
-            chat:on_error(tmsg.errorMessage)
-        end
-    -- TODO: Handle missing events
     elseif ignored_events[t] then
         return true
     else
