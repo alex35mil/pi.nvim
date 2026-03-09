@@ -10,10 +10,22 @@ local function extract_result_text(result)
     if not result or not result.content then
         return nil
     end
+    -- Live events: result.content = [{type: "text", text: "..."}]
+    -- Replay toolResult: msg.content may be a string or array of strings
+    local content = result.content
+    if type(content) == "string" then
+        local trimmed = vim.trim(content)
+        return trimmed ~= "" and trimmed or nil
+    end
+    if type(content) ~= "table" then
+        return nil
+    end
     local parts = {}
-    for _, block in ipairs(result.content) do
+    for _, block in ipairs(content) do
         if type(block) == "table" and block.type == "text" and block.text then
             parts[#parts + 1] = block.text
+        elseif type(block) == "string" then
+            parts[#parts + 1] = block
         end
     end
     if #parts > 0 then
@@ -52,10 +64,11 @@ end
 local function render_output(history, text)
     local sep_row = history:_append_lines({ "" })
     M.set_border(history, sep_row, M.GLYPHS.SEP)
-    -- Wrap in fenced code block for treesitter highlighting, then conceal
-    -- the ``` delimiters so only the syntax highlighting is visible.
+    -- Wrap in fenced code block so treesitter markdown doesn't parse
+    -- tool output as markdown (concealing brackets, bolding, etc.).
+    -- The ``` delimiters are concealed so only content is visible.
     local output_lines = vim.split(text, "\n", { plain = true })
-    table.insert(output_lines, 1, "```")
+    table.insert(output_lines, 1, "```text")
     output_lines[#output_lines + 1] = "```"
     local start = history:_append_lines(output_lines)
     for i = 0, #output_lines - 1 do
@@ -72,7 +85,7 @@ local function render_output(history, text)
         end
     end
     vim.api.nvim_buf_set_extmark(history:buf(), history:ns(), start, 0, {
-        end_col = 3,
+        end_col = 7,
         conceal = "",
     })
     vim.api.nvim_buf_set_extmark(history:buf(), history:ns(), start + #output_lines - 1, 0, {
