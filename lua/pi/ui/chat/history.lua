@@ -30,6 +30,7 @@ History.__index = History
 ---@field output_extmark? integer
 ---@field end_extmark? integer
 ---@field tool_input? table
+---@field inline? boolean
 ---@field expanded boolean
 ---@field expanded_inner_lines? string[]
 ---@field expanded_inner_extmarks? table[]
@@ -554,6 +555,7 @@ function History:on_agent_start(timestamp)
         self._agent_start_time = vim.uv.hrtime() / 1e9
         self._first_delta = true
         self._needs_separator = false
+        self._last_was_inline = false
         self:_pick_spinner()
         local label = " " .. Config.options.ui.labels.agent_response .. " "
         local time = timestamp or (os.time() * 1000)
@@ -685,8 +687,59 @@ function History:on_tool_start(tool_name, tool_call_id, tool_input)
         end
         self._needs_separator = false
         local icon = Config.options.ui.labels.tool
-        local header = icon .. " " .. tool_name
         local renderer = Tools.get_renderer(tool_name)
+
+        -- Inline tools render as a single line: icon + tool_name + detail
+        if renderer.inline then
+            local detail = renderer.inline_text and renderer.inline_text(tool_input) or nil
+            local line = icon .. " " .. tool_name .. (detail and ("  " .. detail) or "")
+
+            -- Skip blank line between consecutive inline tools
+            local need_gap = not self._last_was_inline
+            local last_line = vim.api.nvim_buf_line_count(self._buf) - 1
+            local cur = vim.api.nvim_buf_get_lines(self._buf, last_line, last_line + 1, false)[1] or ""
+            local lines = (cur == "" or not need_gap) and { line } or { "", line }
+            local start = self:_append_lines(lines)
+            local row = lines[1] == "" and start + 1 or start
+
+            Tools.set_border(self, row, Tools.GLYPHS.MID)
+            local icon_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, row, 0, {
+                end_col = #icon,
+                hl_group = "PiToolHeader",
+            })
+            -- Tool name
+            vim.api.nvim_buf_set_extmark(self._buf, ns, row, #icon, {
+                end_col = #icon + 1 + #tool_name,
+                hl_group = "PiToolHeader",
+            })
+            -- Detail (path etc.) in subdued color
+            if detail then
+                local detail_start = #icon + 1 + #tool_name + 2
+                vim.api.nvim_buf_set_extmark(self._buf, ns, row, detail_start, {
+                    end_col = #line,
+                    hl_group = "PiToolCall",
+                })
+            end
+
+            if tool_call_id then
+                self._tool_blocks[tool_call_id] = {
+                    tool_name = tool_name,
+                    icon_extmark = icon_extmark,
+                    tool_input = tool_input,
+                    inline = true,
+                }
+            end
+
+            self._last_was_inline = true
+            self:_update_status_extmark()
+            self:_maybe_scroll()
+            return
+        end
+
+        self._last_was_inline = false
+
+        -- Standard multi-line tool block
+        local header = icon .. " " .. tool_name
 
         local last_line = vim.api.nvim_buf_line_count(self._buf) - 1
         local cur = vim.api.nvim_buf_get_lines(self._buf, last_line, last_line + 1, false)[1] or ""
@@ -732,6 +785,39 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
         local should_scroll = self:_should_auto_scroll()
 
         local block = tool_call_id and self._tool_blocks[tool_call_id]
+
+        -- Inline tools: append status indicator to the existing line
+        if block and block.inline then
+            local labels = Config.options.ui.labels
+            local icon_hl = is_error and "PiToolError" or "PiToolHeader"
+            local status_icon = is_error and labels.tool_failure or labels.tool_success
+            local status_hl = is_error and "PiToolError" or "PiToolStatus"
+
+            -- Update icon color
+            local icon = Config.options.ui.labels.tool
+            local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
+            vim.api.nvim_buf_set_extmark(self._buf, ns, pos[1], 0, {
+                id = block.icon_extmark,
+                end_col = #icon,
+                hl_group = icon_hl,
+            })
+
+            -- Append status as virtual text at end of line
+            local row = pos[1]
+            local line = vim.api.nvim_buf_get_lines(self._buf, row, row + 1, false)[1] or ""
+            vim.api.nvim_buf_set_extmark(self._buf, ns, row, #line, {
+                virt_text = { { " " .. status_icon, status_hl } },
+                virt_text_pos = "inline",
+            })
+
+            self._needs_separator = true
+            self:_update_status_extmark()
+            if should_scroll then
+                self:_scroll_to_bottom()
+            end
+            return
+        end
+
         local pre_output_line = vim.api.nvim_buf_line_count(self._buf) - 1
 
         local renderer = Tools.get_renderer(tool_name)

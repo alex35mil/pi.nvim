@@ -187,8 +187,8 @@ local function replay_messages(session, messages)
     local pending_agent_end = false
     for _, msg in ipairs(messages) do
         local role = msg.role
-        -- Flush pending agent_end before a new user or assistant message
-        if pending_agent_end and (role == "user" or role == "assistant") then
+        -- Flush pending agent_end before a user message
+        if pending_agent_end and role == "user" then
             session.chat:on_agent_end()
             pending_agent_end = false
         end
@@ -232,7 +232,17 @@ local function replay_messages(session, messages)
                 end
             end
             if text ~= "" or #tool_calls > 0 then
-                session.chat:on_agent_start(msg.timestamp)
+                -- Suppress agent header for tool-only continuation turns:
+                -- if previous turn was tool-only and this turn is also tool-only,
+                -- skip the header to keep consecutive tool calls visually grouped.
+                local tool_only = text == "" and #tool_calls > 0
+                if not (tool_only and pending_agent_end) then
+                    if pending_agent_end then
+                        session.chat:on_agent_end()
+                        pending_agent_end = false
+                    end
+                    session.chat:on_agent_start(msg.timestamp)
+                end
                 if text ~= "" then
                     session.chat:on_text_delta(text)
                 end

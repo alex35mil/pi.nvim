@@ -406,6 +406,8 @@ end
 ---@field on_end? fun(history: pi.ChatHistory, args: table?, result: table?, is_error: boolean?)
 ---@field input_visible? integer  lines to show when collapsed (default: show all)
 ---@field output_visible? integer lines to show when collapsed (default: show all)
+---@field inline? boolean  render as a single line (no header/footer)
+---@field inline_text? fun(args: table?): string?  text to show after tool name
 
 ---@type table<string, pi.ToolRenderer>
 local renderers = {
@@ -429,10 +431,9 @@ local renderers = {
         end,
     },
     read = {
-        on_start = function(history, args)
-            if args and (args.path or args.file_path) then
-                render_body_line(history, args.path or args.file_path)
-            end
+        inline = true,
+        inline_text = function(args)
+            return args and (args.path or args.file_path) or nil
         end,
     },
     edit = {
