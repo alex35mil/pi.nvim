@@ -394,7 +394,7 @@ function Chat:on_message_end(msg)
     if stop == "aborted" or stop == "error" then
         local error_message
         if stop == "aborted" then
-            error_message = "Operation aborted"
+            error_message = "[aborted] Operation aborted"
         else
             error_message = message.errorMessage or "Error"
         end

@@ -34,7 +34,8 @@ History.__index = History
 ---@field end_extmark? integer
 ---@field tool_input? table
 ---@field inline? boolean
----@field expanded boolean
+---@field finished? boolean
+---@field expanded? boolean
 ---@field expanded_inner_lines? string[]
 ---@field expanded_inner_extmarks? table[]
 ---@field collapsed_inner_lines? string[]
@@ -842,6 +843,15 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
 
         local block = tool_call_id and self._tool_blocks[tool_call_id]
 
+        -- Guard: skip if this tool already finished (race between
+        -- tool_execution_end and mark_pending_tools_errored, both scheduled).
+        if block and block.finished then
+            return
+        end
+        if block then
+            block.finished = true
+        end
+
         -- Inline tools: append status indicator to the existing line
         if block and block.inline then
             local labels = Config.options.ui.labels
@@ -1046,7 +1056,7 @@ function History:mark_pending_tools_errored(error_message)
     ---@type { id: string, name: string }[]
     local pending = {}
     for id, block in pairs(self._tool_blocks) do
-        if not block.end_extmark then
+        if not block.finished then
             pending[#pending + 1] = { id = id, name = block.tool_name }
         end
     end

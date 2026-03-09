@@ -41,11 +41,13 @@ end
 --- Convention:
 ---   [accepted] — tool was blocked but the action was applied (e.g. edit approved by user)
 ---   [rejected] — tool was intentionally refused (by user or by policy)
+---   [aborted]  — tool was in-flight when the turn was aborted
 ---   (no prefix) — fall back to isError boolean
----@type table<string, "completed"|"rejected">
+---@type table<string, "completed"|"rejected"|"aborted">
 local STATUS_PREFIXES = {
     ["[accepted]"] = "completed",
     ["[rejected]"] = "rejected",
+    ["[aborted]"] = "aborted",
 }
 
 --- Strip a recognized status prefix from text.
@@ -76,7 +78,7 @@ end
 --- reason text to communicate richer status than the binary isError flag.
 ---@param result? table
 ---@param is_error? boolean
----@return "completed"|"error"|"rejected"
+---@return "completed"|"error"|"rejected"|"aborted"
 function M.resolve_status(result, is_error)
     if not is_error then
         return "completed"
