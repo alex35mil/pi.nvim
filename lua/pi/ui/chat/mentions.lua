@@ -151,7 +151,7 @@ function M.send(loc, opts)
         local after = col < #line and line:sub(col + 1, col + 1) or ""
 
         local prefix = (before ~= "" and before ~= " ") and " " or ""
-        local suffix = " "
+        local suffix = (after ~= " ") and " " or ""
         local insert = prefix .. mention .. suffix
 
         vim.api.nvim_buf_set_text(buf, row - 1, col, row - 1, col, { insert })
