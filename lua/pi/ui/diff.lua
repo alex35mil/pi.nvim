@@ -5,6 +5,7 @@ local M = {}
 
 local Config = require("pi.config")
 local Notify = require("pi.notify")
+local Highlights = require("pi.ui.highlights")
 
 ---@param path string
 ---@return string[]
@@ -265,6 +266,7 @@ function M.open(payload, callback)
         vim.wo[w].cursorline = vim.go.cursorline
         vim.wo[w].winfixbuf = false
         vim.wo[w].foldenable = true
+        vim.wo[w].winhighlight = Highlights.DIFF_WINHIGHLIGHT
     end
     vim.cmd("wincmd =")
 
@@ -292,14 +294,14 @@ function M.open(payload, callback)
     local reject_key = keymaps.diff_reject
     local accept_lhs = type(accept_key) == "table" and accept_key[1] or accept_key --[[@as string]]
     local reject_lhs = type(reject_key) == "table" and reject_key[1] or reject_key --[[@as string]]
-    vim.wo[left_win].winbar = " %#PiDiffStatusCurrent#CURRENT: " .. rel_path .. "%*"
-    vim.wo[right_win].winbar = " %#PiDiffStatusProposed#PROPOSED: "
+    vim.wo[left_win].winbar = "%#PiDiffWinbar# %#PiDiffWinbarCurrent#CURRENT: " .. rel_path .. "%#PiDiffWinbar#"
+    vim.wo[right_win].winbar = "%#PiDiffWinbar# %#PiDiffWinbarProposed# PROPOSED: "
         .. rel_path
-        .. "%*  ["
+        .. " %#PiDiffWinbar# %#PiDiffWinbarHint#["
         .. accept_lhs
         .. "=accept  "
         .. reject_lhs
-        .. "=reject]"
+        .. "=reject]%#PiDiffWinbar#"
 
     local responded = false
 

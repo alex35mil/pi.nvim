@@ -4,6 +4,7 @@ M.DIALOG_WINHIGHLIGHT = "NormalFloat:PiFloat,FloatBorder:PiFloatBorder,FloatTitl
 M.CHAT_HISTORY_WINHIGHLIGHT = "NormalFloat:PiFloat,FloatBorder:PiFloatBorder,FloatTitle:PiChatHistoryFloatTitle"
 M.CHAT_PROMPT_WINHIGHLIGHT = "NormalFloat:PiFloat,FloatBorder:PiFloatBorder,FloatTitle:PiChatPromptFloatTitle"
 M.CHAT_ATTACHMENTS_WINHIGHLIGHT = "NormalFloat:PiFloat,FloatBorder:PiFloatBorder,FloatTitle:PiChatAttachmentsFloatTitle"
+M.DIFF_WINHIGHLIGHT = "WinBar:PiDiffWinbar,WinBarNC:PiDiffWinbar"
 
 local function set_defaults()
     local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
@@ -71,8 +72,10 @@ local function set_defaults()
 
     vim.api.nvim_set_hl(0, "PiDialogSelected", { default = true, link = "Visual" })
 
-    vim.api.nvim_set_hl(0, "PiDiffStatusCurrent", { default = true, bold = true })
-    vim.api.nvim_set_hl(0, "PiDiffStatusProposed", { default = true, bold = true })
+    vim.api.nvim_set_hl(0, "PiDiffWinbar", { default = true, bg = agent.fg })
+    vim.api.nvim_set_hl(0, "PiDiffWinbarCurrent", { default = true, fg = normal.bg, bold = true })
+    vim.api.nvim_set_hl(0, "PiDiffWinbarProposed", { default = true, fg = normal.bg, bold = true })
+    vim.api.nvim_set_hl(0, "PiDiffWinbarHint", { default = true, fg = normal.bg })
 end
 
 function M.setup()
