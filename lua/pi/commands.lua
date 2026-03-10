@@ -84,6 +84,11 @@ function M.setup()
         Pi.paste_image()
     end, { desc = "Paste an image from the clipboard as π attachment" })
 
+    vim.api.nvim_create_user_command("PiCompact", function(cmd)
+        local instructions = cmd.args ~= "" and cmd.args or nil
+        Pi.compact(instructions)
+    end, { nargs = "?", desc = "Compact π conversation context" })
+
     vim.api.nvim_create_user_command("PiToggleDebug", function()
         Pi.toggle_debug()
     end, { desc = "Toggle π RPC debug logging" })

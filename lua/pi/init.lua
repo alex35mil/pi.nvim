@@ -150,6 +150,40 @@ function M.paste_image()
     return false
 end
 
+--- Manually compact conversation context.
+---@param custom_instructions? string optional instructions to guide compaction
+function M.compact(custom_instructions)
+    local Notify = require("pi.notify")
+    local session = require("pi.sessions.manager").get()
+    if not session or not session.rpc:is_running() then
+        Notify.warn("No active session")
+        return
+    end
+    if session.chat:is_streaming() then
+        Notify.warn("Cannot compact while streaming")
+        return
+    end
+
+    session.chat:set_status({ type = "compaction" })
+
+    ---@type table
+    local cmd = { type = "compact" }
+    if custom_instructions and custom_instructions ~= "" then
+        cmd.customInstructions = custom_instructions
+    end
+
+    session.rpc:send(cmd, function(res)
+        vim.schedule(function()
+            session.chat:set_status(nil)
+            if res.success then
+                session.chat:reset_usage()
+            else
+                Notify.error("Compaction failed: " .. (res.error or "unknown error"))
+            end
+        end)
+    end)
+end
+
 --- Toggle RPC debug logging.
 function M.toggle_debug()
     require("pi.rpc").toggle_debug()
