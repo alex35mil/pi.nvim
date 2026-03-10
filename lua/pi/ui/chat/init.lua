@@ -188,6 +188,11 @@ function Chat:set_layout(mode)
     self._layout:set_mode(mode)
 end
 
+---@return pi.LayoutMode
+function Chat:layout()
+    return self._layout:mode()
+end
+
 ---@return boolean
 function Chat:is_visible()
     return self._layout:is_visible()

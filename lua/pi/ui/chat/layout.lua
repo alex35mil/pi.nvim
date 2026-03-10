@@ -431,6 +431,11 @@ function Layout:hide()
     self:_close_history_win()
 end
 
+---@return pi.LayoutMode
+function Layout:mode()
+    return self._mode
+end
+
 ---@param mode pi.LayoutMode
 function Layout:set_mode(mode)
     self:hide()

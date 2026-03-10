@@ -37,8 +37,8 @@ function M.setup()
     local Pi = require("pi")
 
     vim.api.nvim_create_user_command("Pi", function(cmd)
-        Pi.open(parse_flags(cmd.args))
-    end, { nargs = "*", complete = complete_flags, desc = "Open π chat" })
+        Pi.toggle(parse_flags(cmd.args))
+    end, { nargs = "*", complete = complete_flags, desc = "Show or toggle π chat" })
 
     vim.api.nvim_create_user_command("PiContinue", function(cmd)
         Pi.continue_session(parse_flags(cmd.args))

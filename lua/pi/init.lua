@@ -7,6 +7,17 @@ local Config = require("pi.config")
 
 local is_initialized = false
 
+---@param chat pi.Chat
+---@param mode? pi.LayoutMode
+local function show_chat(chat, mode)
+    if mode and chat:layout() ~= mode then
+        chat:set_layout(mode)
+        chat:focus_prompt()
+    else
+        chat:ensure_shown_and_focus_prompt()
+    end
+end
+
 ---@param opts? pi.Options
 function M.setup(opts)
     Config.setup(opts)
@@ -23,26 +34,48 @@ function M.setup(opts)
     require("pi.commands").setup()
 end
 
---- Open or toggle the chat. Creates a session if none exists.
+--- Show the chat and focus the prompt. Creates a session if none exists.
 ---@param opts? pi.SessionCreateOpts
-function M.open(opts)
+function M.show(opts)
     local Sessions = require("pi.sessions.manager")
     local existing = Sessions.get()
     if existing then
-        if existing.chat:is_visible() then
-            existing.chat:hide()
-        else
-            if opts and opts.layout then
-                existing.chat:set_layout(opts.layout)
-            end
-            existing.chat:ensure_shown_and_focus_prompt()
-        end
-    else
+        show_chat(existing.chat, opts and opts.layout or nil)
+        return
+    end
+
+    local session = Sessions.get_or_create(opts)
+    if session then
+        session.chat:ensure_shown_and_focus_prompt()
+    end
+end
+
+--- Toggle the chat. If a layout is given and the chat is visible in another
+--- layout, switch to that layout instead of hiding. Creates a session if none exists.
+---@param opts? pi.SessionCreateOpts
+function M.toggle(opts)
+    local Sessions = require("pi.sessions.manager")
+    local existing = Sessions.get()
+    if not existing then
         local session = Sessions.get_or_create(opts)
         if session then
             session.chat:ensure_shown_and_focus_prompt()
         end
+        return
     end
+
+    local requested_layout = opts and opts.layout or nil
+    if existing.chat:is_visible() then
+        if requested_layout and existing.chat:layout() ~= requested_layout then
+            existing.chat:set_layout(requested_layout)
+            existing.chat:focus_prompt()
+        else
+            existing.chat:hide()
+        end
+        return
+    end
+
+    show_chat(existing.chat, requested_layout)
 end
 
 --- Continue the most recent session for the current cwd.
