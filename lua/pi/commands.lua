@@ -72,6 +72,14 @@ function M.setup()
         Pi.toggle_thinking()
     end, { desc = "Toggle π thinking visibility" })
 
+    vim.api.nvim_create_user_command("PiCycleThinking", function()
+        Pi.cycle_thinking_level()
+    end, { desc = "Cycle π thinking level" })
+
+    vim.api.nvim_create_user_command("PiSelectThinking", function()
+        Pi.select_thinking_level()
+    end, { desc = "Select π thinking level" })
+
     vim.api.nvim_create_user_command("PiSendMention", function(args)
         Pi.send_mention(args)
     end, { range = true, desc = "Send file or selection as @mention to Pi prompt" })

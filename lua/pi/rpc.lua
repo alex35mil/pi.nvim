@@ -46,6 +46,8 @@
 ---| "get_messages"
 ---| "get_commands"
 ---| "get_state"
+---| "set_thinking_level"
+---| "cycle_thinking_level"
 ---| "extension_ui_response"
 
 ---@class pi.RpcImageContent

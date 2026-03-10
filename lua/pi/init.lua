@@ -106,6 +106,56 @@ function M.toggle_thinking()
     end
 end
 
+--- Cycle to the next thinking level.
+function M.cycle_thinking_level()
+    local Notify = require("pi.notify")
+    local Sessions = require("pi.sessions.manager")
+    local session = Sessions.get()
+    if not session or not session.rpc:is_running() then
+        Notify.warn("No active session")
+        return
+    end
+    session.rpc:send({ type = "cycle_thinking_level" }, function(res)
+        vim.schedule(function()
+            if res.success and res.data then
+                Sessions.refresh_state(session)
+            else
+                Notify.warn("Current model does not support thinking")
+            end
+        end)
+    end)
+end
+
+--- Select a thinking level from a picker.
+function M.select_thinking_level()
+    local Notify = require("pi.notify")
+    local Dialog = require("pi.ui.dialog")
+    local Sessions = require("pi.sessions.manager")
+    local session = Sessions.get()
+    if not session or not session.rpc:is_running() then
+        Notify.warn("No active session")
+        return
+    end
+
+    ---@type string[]
+    local levels = { "off", "minimal", "low", "medium", "high", "xhigh" }
+
+    Dialog.select({ title = "Thinking level", options = levels }, function(choice)
+        if not choice then
+            return
+        end
+        session.rpc:send({ type = "set_thinking_level", level = choice }, function(res)
+            vim.schedule(function()
+                if res.success then
+                    Sessions.refresh_state(session)
+                else
+                    Notify.warn("Current model does not support thinking")
+                end
+            end)
+        end)
+    end)
+end
+
 --- Send an @-mention to the prompt.
 --- With no args or command args: mentions current buffer (with visual selection if any).
 --- With a loc table: mentions the given path and optional line range.

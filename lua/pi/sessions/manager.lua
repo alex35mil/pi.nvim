@@ -35,7 +35,7 @@ local ignored_events = {
 
 --- Fetch current state and update the status line.
 ---@param session pi.Session
-local function refresh_state(session)
+function M.refresh_state(session)
     session.rpc:send({ type = "get_state" }, function(res)
         if res.success and res.data then
             vim.schedule(function()
@@ -58,7 +58,7 @@ local function handle_event(session, msg)
     elseif t == "agent_end" then
         chat:on_agent_end()
         CommandsCache.refresh(session.rpc)
-        refresh_state(session)
+        M.refresh_state(session)
     elseif t == "message_update" then
         local event = msg.assistantMessageEvent
         if event then
@@ -186,7 +186,7 @@ function M.get_or_create(opts)
     CommandsCache.fetch(rpc)
 
     -- Fetch initial state for status line (model, thinking level)
-    refresh_state(session)
+    M.refresh_state(session)
 
     return session
 end
