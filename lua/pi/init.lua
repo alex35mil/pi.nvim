@@ -140,17 +140,32 @@ function M.select_thinking_level()
     ---@type string[]
     local levels = { "off", "minimal", "low", "medium", "high", "xhigh" }
 
-    Dialog.select({ title = "Thinking level", options = levels }, function(choice)
-        if not choice then
-            return
-        end
-        session.rpc:send({ type = "set_thinking_level", level = choice }, function(res)
-            vim.schedule(function()
-                if res.success then
-                    Sessions.refresh_state(session)
-                else
-                    Notify.warn("Current model does not support thinking")
+    session.rpc:send({ type = "get_state" }, function(res)
+        local initial_index = 1
+        local current_level = res.success and res.data and res.data.thinkingLevel or nil
+        if type(current_level) == "string" then
+            for i, level in ipairs(levels) do
+                if level == current_level then
+                    initial_index = i
+                    break
                 end
+            end
+        end
+
+        vim.schedule(function()
+            Dialog.select({ title = "Thinking level", options = levels, initial_index = initial_index }, function(choice)
+                if not choice then
+                    return
+                end
+                session.rpc:send({ type = "set_thinking_level", level = choice }, function(set_res)
+                    vim.schedule(function()
+                        if set_res.success then
+                            Sessions.refresh_state(session)
+                        else
+                            Notify.warn("Current model does not support thinking")
+                        end
+                    end)
+                end)
             end)
         end)
     end)

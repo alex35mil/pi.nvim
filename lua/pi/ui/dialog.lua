@@ -107,7 +107,7 @@ local function highlight_selection(buf, row, total)
 end
 
 --- Picker-style select dialog.
----@param opts { title: string, message?: string, options: string[], shortcuts?: table<string, string> }
+---@param opts { title: string, message?: string, options: string[], shortcuts?: table<string, string>, initial_index?: integer }
 ---@param callback fun(choice: string?)
 function M.select(opts, callback)
     local options = opts.options or {}
@@ -135,9 +135,9 @@ function M.select(opts, callback)
     vim.cmd("stopinsert")
     local float = open_float(lines, opts.title or "Select")
     local buf, win = float.buf, float.win
-    local selected = 0 -- 0-indexed (relative to option_offset)
+    local selected = math.max(0, math.min(#options - 1, (opts.initial_index or 1) - 1)) -- 0-indexed
 
-    vim.api.nvim_win_set_cursor(win, { option_offset + 1, 0 })
+    vim.api.nvim_win_set_cursor(win, { option_offset + selected + 1, 0 })
     highlight_selection(buf, option_offset + selected, #lines)
 
     local responded = false
