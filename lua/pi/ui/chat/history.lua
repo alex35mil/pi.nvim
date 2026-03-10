@@ -648,6 +648,7 @@ function History:on_text_delta(delta)
             self._needs_separator = false
             self:_append_lines({ "", "" })
         end
+        self._last_was_inline = false
         for _ in delta:gmatch("```") do
             self._fence_open = not self._fence_open
         end
