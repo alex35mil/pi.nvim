@@ -48,6 +48,9 @@
 ---| "get_state"
 ---| "set_thinking_level"
 ---| "cycle_thinking_level"
+---| "set_model"
+---| "cycle_model"
+---| "get_available_models"
 ---| "extension_ui_response"
 
 ---@class pi.RpcImageContent

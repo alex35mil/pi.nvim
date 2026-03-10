@@ -156,6 +156,38 @@ function M.select_thinking_level()
     end)
 end
 
+--- Cycle to the next model.
+--- If `models` is configured, cycles within the resolved subset.
+function M.cycle_model()
+    local session = require("pi.sessions.manager").get()
+    if not session or not session.rpc:is_running() then
+        require("pi.notify").warn("No active session")
+        return
+    end
+    require("pi.models").cycle(session)
+end
+
+--- Select a model from configured models (or all if none configured).
+--- Uses Dialog.select for the curated list.
+function M.select_model()
+    local session = require("pi.sessions.manager").get()
+    if not session or not session.rpc:is_running() then
+        require("pi.notify").warn("No active session")
+        return
+    end
+    require("pi.models").select(session)
+end
+
+--- Select a model from all available models using vim.ui.select (searchable).
+function M.select_model_all()
+    local session = require("pi.sessions.manager").get()
+    if not session or not session.rpc:is_running() then
+        require("pi.notify").warn("No active session")
+        return
+    end
+    require("pi.models").select_all(session)
+end
+
 --- Send an @-mention to the prompt.
 --- With no args or command args: mentions current buffer (with visual selection if any).
 --- With a loc table: mentions the given path and optional line range.

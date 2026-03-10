@@ -97,6 +97,15 @@
 ---@field next? pi.DialogKey[]
 ---@field prev? pi.DialogKey[]
 
+--- A preferred model entry for cycling/selection.
+--- String: exact model ID.
+--- Table: substring match with optional latest resolution.
+---@alias pi.ModelEntry string|pi.ModelSpec
+
+---@class pi.ModelSpec
+---@field match string Substring to match against model IDs (case-insensitive)
+---@field latest? boolean If true, pick the model whose ID sorts last among matches
+
 ---@class pi.DialogConfig
 ---@field border string|string[]
 ---@field max_width number max width as fraction of screen (<1) or columns (>=1)
@@ -108,6 +117,7 @@
 ---@field bin string
 ---@field agent_dir? string Override the π agent directory (default: $PI_CODING_AGENT_DIR or ~/.pi/agent)
 ---@field debug boolean Enable RPC debug logging to stdpath("log")/pi-rpc.log
+---@field models? pi.ModelEntry[] Preferred models for cycling and :PiSelectModel
 ---@field ui pi.UiConfig
 ---@field keymaps pi.Keymaps
 

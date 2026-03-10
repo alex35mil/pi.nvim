@@ -80,6 +80,18 @@ function M.setup()
         Pi.select_thinking_level()
     end, { desc = "Select π thinking level" })
 
+    vim.api.nvim_create_user_command("PiCycleModel", function()
+        Pi.cycle_model()
+    end, { desc = "Cycle π model" })
+
+    vim.api.nvim_create_user_command("PiSelectModel", function()
+        Pi.select_model()
+    end, { desc = "Select π model" })
+
+    vim.api.nvim_create_user_command("PiSelectModelAll", function()
+        Pi.select_model_all()
+    end, { desc = "Select π model from all available (searchable)" })
+
     vim.api.nvim_create_user_command("PiSendMention", function(args)
         Pi.send_mention(args)
     end, { range = true, desc = "Send file or selection as @mention to Pi prompt" })
