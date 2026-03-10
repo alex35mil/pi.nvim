@@ -25,8 +25,17 @@
 ---@field _pending_queue pi.PendingQueueEntry[]
 ---@field _pending_queue_extmark_id integer?
 ---@field _replaying boolean
+---@field _agent_text_start_row integer?
 local History = {}
 History.__index = History
+
+---@class pi.MdTable
+---@field start_row integer 0-indexed first row in the buffer
+---@field end_row integer 0-indexed last row in the buffer (inclusive)
+---@field header string[] header cell texts (trimmed)
+---@field aligns ("left"|"center"|"right")[] per-column alignment
+---@field rows string[][] data rows, each a list of cell texts
+---@field widths integer[] display width per column
 
 ---@class pi.ToolBlock
 ---@field tool_name string
@@ -173,6 +182,160 @@ local function wipe_stale_buf(name)
     end
 end
 
+--- Markdown tables
+
+--- Parse cells from a pipe-delimited markdown table row.
+---@param line string
+---@return string[]
+local function parse_table_cells(line)
+    local inner = vim.trim(line):match("^|(.+)|$")
+    if not inner then
+        return {}
+    end
+    local cells = vim.split(inner, "|", { plain = true })
+    for i, cell in ipairs(cells) do
+        cells[i] = vim.trim(cell)
+    end
+    return cells
+end
+
+--- Try to parse a contiguous block of lines as a markdown table.
+---@param lines string[]
+---@param buf_start_row integer 0-indexed buffer row of the first line
+---@return pi.MdTable?
+local function parse_table(lines, buf_start_row)
+    if #lines < 3 then
+        return nil
+    end
+    local header = parse_table_cells(lines[1])
+    local ncols = #header
+    if ncols == 0 then
+        return nil
+    end
+    local sep_cells = parse_table_cells(lines[2])
+    if #sep_cells ~= ncols then
+        return nil
+    end
+    local aligns = {}
+    for _, cell in ipairs(sep_cells) do
+        if not cell:match("^:?%-+:?$") then
+            return nil
+        end
+        local l = cell:sub(1, 1) == ":"
+        local r = cell:sub(-1) == ":"
+        if l and r then
+            aligns[#aligns + 1] = "center"
+        elseif r then
+            aligns[#aligns + 1] = "right"
+        else
+            aligns[#aligns + 1] = "left"
+        end
+    end
+    local data_rows = {}
+    for i = 3, #lines do
+        local cells = parse_table_cells(lines[i])
+        local row = {}
+        for j = 1, ncols do
+            row[j] = cells[j] or ""
+        end
+        data_rows[#data_rows + 1] = row
+    end
+    -- Column widths: max display width across header + all data rows
+    local widths = {}
+    for j = 1, ncols do
+        widths[j] = vim.fn.strdisplaywidth(header[j])
+    end
+    for _, row in ipairs(data_rows) do
+        for j = 1, ncols do
+            widths[j] = math.max(widths[j], vim.fn.strdisplaywidth(row[j]))
+        end
+    end
+    for j = 1, ncols do
+        widths[j] = math.max(widths[j], 1)
+    end
+    return {
+        start_row = buf_start_row,
+        end_row = buf_start_row + #lines - 1,
+        header = header,
+        aligns = aligns,
+        rows = data_rows,
+        widths = widths,
+    }
+end
+
+--- Pad or align a cell string to a given display width.
+---@param text string
+---@param width integer target display width
+---@param align "left"|"center"|"right"
+---@return string
+local function align_table_cell(text, width, align)
+    local pad = width - vim.fn.strdisplaywidth(text)
+    if pad <= 0 then
+        return text
+    end
+    if align == "right" then
+        return string.rep(" ", pad) .. text
+    elseif align == "center" then
+        local l = math.floor(pad / 2)
+        return string.rep(" ", l) .. text .. string.rep(" ", pad - l)
+    end
+    return text .. string.rep(" ", pad)
+end
+
+--- Build a horizontal border line with box-drawing characters.
+---@param widths integer[]
+---@param left string corner/tee glyph
+---@param mid string intersection glyph
+---@param right string corner/tee glyph
+---@param fill string horizontal fill glyph
+---@return string
+local function table_border(widths, left, mid, right, fill)
+    local parts = { left }
+    for i, w in ipairs(widths) do
+        parts[#parts + 1] = string.rep(fill, w + 2) -- +2 for cell padding
+        if i < #widths then
+            parts[#parts + 1] = mid
+        end
+    end
+    parts[#parts + 1] = right
+    return table.concat(parts)
+end
+
+--- Build a data/header row line with box-drawing pipe characters.
+---@param cells string[]
+---@param widths integer[]
+---@param aligns ("left"|"center"|"right")[]
+---@return string
+local function table_row(cells, widths, aligns)
+    local parts = { "│" }
+    for i, cell in ipairs(cells) do
+        parts[#parts + 1] = " " .. align_table_cell(cell, widths[i], aligns[i] or "left") .. " │"
+    end
+    return table.concat(parts)
+end
+
+--- Apply PiTableBorder highlight to every │ character in a buffer line.
+---@param buf integer
+---@param ns_id integer
+---@param row integer 0-indexed
+---@param line string
+local function highlight_table_pipes(buf, ns_id, row, line)
+    local pipe = "│"
+    local pos = 1
+    while true do
+        local s, e = line:find(pipe, pos, true)
+        if not s then
+            break
+        end
+        vim.api.nvim_buf_set_extmark(buf, ns_id, row, s - 1, {
+            end_col = e,
+            hl_group = "PiTableBorder",
+            priority = 200,
+        })
+        pos = e + 1
+    end
+end
+
 ---@param tab pi.TabId
 ---@return pi.ChatHistory
 function History.new(tab)
@@ -199,6 +362,7 @@ function History.new(tab)
     self._pending_queue = {}
     self._pending_queue_extmark_id = nil
     self._replaying = false
+    self._agent_text_start_row = nil
 
     local panel = Config.options.ui.panels.history
     local name = panel.name and panel.name(tab) or ("π-chat | " .. tab)
@@ -534,6 +698,116 @@ function History:set_status(status)
     end)
 end
 
+--- Find and render all markdown tables in the given buffer range.
+--- Skips tables inside fenced code blocks.
+---@param from_row integer 0-indexed
+---@param to_row integer 0-indexed (inclusive)
+function History:_render_tables(from_row, to_row)
+    if from_row > to_row then
+        return
+    end
+    local all_lines = vim.api.nvim_buf_get_lines(self._buf, from_row, to_row + 1, false)
+    ---@type pi.MdTable[]
+    local tables = {}
+    local in_fence = false
+    local i = 1
+    while i <= #all_lines do
+        local line = all_lines[i]
+        if line:match("^```") then
+            in_fence = not in_fence
+            i = i + 1
+        elseif in_fence then
+            i = i + 1
+        else
+            local trimmed = vim.trim(line)
+            if trimmed:match("^|.+|$") then
+                local block = { line }
+                local j = i + 1
+                while j <= #all_lines do
+                    local nt = vim.trim(all_lines[j])
+                    if nt:match("^|.+|$") then
+                        block[#block + 1] = all_lines[j]
+                        j = j + 1
+                    else
+                        break
+                    end
+                end
+                if #block >= 3 then
+                    local tbl = parse_table(block, from_row + i - 1)
+                    if tbl then
+                        tables[#tables + 1] = tbl
+                    end
+                end
+                i = j
+            else
+                i = i + 1
+            end
+        end
+    end
+    -- Render in reverse order so earlier row indices remain valid.
+    for t = #tables, 1, -1 do
+        self:_render_md_table(tables[t])
+    end
+end
+
+--- Replace a parsed markdown table with box-drawing rendered lines and extmarks.
+---@param tbl pi.MdTable
+function History:_render_md_table(tbl)
+    local widths = tbl.widths
+    local aligns = tbl.aligns
+
+    -- Build replacement lines (same count as original).
+    local new_lines = {}
+    new_lines[1] = table_row(tbl.header, widths, aligns)
+    new_lines[2] = table_border(widths, "├", "┼", "┤", "─")
+    for _, row in ipairs(tbl.rows) do
+        new_lines[#new_lines + 1] = table_row(row, widths, aligns)
+    end
+
+    local top = table_border(widths, "┌", "┬", "┐", "─")
+    local bot = table_border(widths, "└", "┴", "┘", "─")
+
+    -- Replace buffer lines.
+    self:_with_modifiable(function()
+        vim.api.nvim_buf_set_lines(self._buf, tbl.start_row, tbl.end_row + 1, false, new_lines)
+    end)
+
+    -- Top border (virtual line above first row).
+    vim.api.nvim_buf_set_extmark(self._buf, ns, tbl.start_row, 0, {
+        virt_lines = { { { top, "PiTableBorder" } } },
+        virt_lines_above = true,
+    })
+
+    -- Bottom border (virtual line below last row).
+    local last_row = tbl.start_row + #new_lines - 1
+    vim.api.nvim_buf_set_extmark(self._buf, ns, last_row, 0, {
+        virt_lines = { { { bot, "PiTableBorder" } } },
+    })
+
+    -- Highlights.
+    for i, line in ipairs(new_lines) do
+        local row = tbl.start_row + i - 1
+        if i == 1 then
+            -- Header: bold on the whole line, border color on │ at higher priority.
+            vim.api.nvim_buf_set_extmark(self._buf, ns, row, 0, {
+                end_col = #line,
+                hl_group = "PiTableHeader",
+                priority = 100,
+            })
+            highlight_table_pipes(self._buf, ns, row, line)
+        elseif i == 2 then
+            -- Separator: full border color.
+            vim.api.nvim_buf_set_extmark(self._buf, ns, row, 0, {
+                end_col = #line,
+                hl_group = "PiTableBorder",
+            })
+        else
+            -- Data rows: border color on │ only.
+            highlight_table_pipes(self._buf, ns, row, line)
+        end
+    end
+end
+
 ---@param msg string
 ---@param timestamp? number
 ---@param image_count? integer
@@ -630,6 +904,7 @@ function History:on_agent_start(timestamp)
             end_col = #label_line,
             hl_group = "PiMessageDateTime",
         })
+        self._agent_text_start_row = start + 2
     end)
 end
 
@@ -669,6 +944,12 @@ function History:on_agent_end(done_verb)
         if self._fence_open then
             self:_append_text("\n```")
             self._fence_open = false
+        end
+        -- Render markdown tables in the agent response text.
+        if self._agent_text_start_row then
+            local scan_end = vim.api.nvim_buf_line_count(self._buf) - 1
+            self:_render_tables(self._agent_text_start_row, scan_end)
+            self._agent_text_start_row = nil
         end
         if not self._agent_start_time then
             return
@@ -1304,6 +1585,7 @@ function History:clear()
     self._thinking_blocks = {}
     self._tool_blocks = {}
     self._placeholder_extmark = nil
+    self._agent_text_start_row = nil
     self:_with_modifiable(function()
         vim.api.nvim_buf_set_lines(self._buf, 0, -1, false, { "" })
     end)
