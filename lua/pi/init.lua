@@ -102,73 +102,28 @@ end
 function M.toggle_thinking()
     local session = require("pi.sessions.manager").get()
     if session then
-        session.chat:toggle_thinking()
+        require("pi.thinking").toggle(session)
     end
 end
 
 --- Cycle to the next thinking level.
 function M.cycle_thinking_level()
-    local Notify = require("pi.notify")
-    local Sessions = require("pi.sessions.manager")
-    local session = Sessions.get()
+    local session = require("pi.sessions.manager").get()
     if not session or not session.rpc:is_running() then
-        Notify.warn("No active session")
+        require("pi.notify").warn("No active session")
         return
     end
-    session.rpc:send({ type = "cycle_thinking_level" }, function(res)
-        vim.schedule(function()
-            if res.success and res.data then
-                Sessions.refresh_state(session)
-            else
-                Notify.warn("Current model does not support thinking")
-            end
-        end)
-    end)
+    require("pi.thinking").cycle(session)
 end
 
 --- Select a thinking level from a picker.
 function M.select_thinking_level()
-    local Notify = require("pi.notify")
-    local Dialog = require("pi.ui.dialog")
-    local Sessions = require("pi.sessions.manager")
-    local session = Sessions.get()
+    local session = require("pi.sessions.manager").get()
     if not session or not session.rpc:is_running() then
-        Notify.warn("No active session")
+        require("pi.notify").warn("No active session")
         return
     end
-
-    ---@type string[]
-    local levels = { "off", "minimal", "low", "medium", "high", "xhigh" }
-
-    session.rpc:send({ type = "get_state" }, function(res)
-        local initial_index = 1
-        local current_level = res.success and res.data and res.data.thinkingLevel or nil
-        if type(current_level) == "string" then
-            for i, level in ipairs(levels) do
-                if level == current_level then
-                    initial_index = i
-                    break
-                end
-            end
-        end
-
-        vim.schedule(function()
-            Dialog.select({ title = "Thinking level", options = levels, initial_index = initial_index }, function(choice)
-                if not choice then
-                    return
-                end
-                session.rpc:send({ type = "set_thinking_level", level = choice }, function(set_res)
-                    vim.schedule(function()
-                        if set_res.success then
-                            Sessions.refresh_state(session)
-                        else
-                            Notify.warn("Current model does not support thinking")
-                        end
-                    end)
-                end)
-            end)
-        end)
-    end)
+    require("pi.thinking").select(session)
 end
 
 --- Cycle to the next model.
