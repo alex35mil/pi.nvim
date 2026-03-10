@@ -45,6 +45,7 @@
 ---| "switch_session"
 ---| "get_messages"
 ---| "get_commands"
+---| "get_state"
 ---| "extension_ui_response"
 
 ---@class pi.RpcImageContent

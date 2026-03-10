@@ -4,7 +4,7 @@
 ---@field _buf integer
 ---@field _win integer?
 ---@field _layout pi.LayoutMode
----@field _bottom_padding_extmark integer?
+---@field _statusline pi.StatusLine
 ---@field _attachments pi.ChatAttachments
 ---@field _tab pi.TabId
 local Prompt = {}
@@ -13,11 +13,10 @@ Prompt.__index = Prompt
 local Ft = require("pi.filetypes")
 local Config = require("pi.config")
 local Decorators = require("pi.ui.chat.decorators")
+local StatusLine = require("pi.ui.chat.statusline")
 
 Prompt.HEIGHT = 5
 Prompt.MAX_HEIGHT = 15
-
-local ns = vim.api.nvim_create_namespace("pi-prompt")
 
 ---@param name string
 local function wipe_stale_buf(name)
@@ -62,12 +61,34 @@ function Prompt.new(tab, attachments)
         end,
     })
 
-    -- Auto-resize prompt window to fit content
+    self._statusline = StatusLine.new(self._buf, function()
+        return self:win()
+    end)
+
+    -- Auto-resize prompt window to fit content.
+    -- Order matters: resize first (uses content height minus status padding),
+    -- then render status line (uses resulting window height for padding).
     vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
         buffer = self._buf,
         callback = function()
-            self:_update_padding()
             self:resize()
+            self._statusline:render()
+        end,
+    })
+
+    -- Re-render status line padding when the window is resized externally
+    -- (e.g. <C-w>+, split drag). Without this, padding stays stale until
+    -- the next text change.
+    vim.api.nvim_create_autocmd("WinResized", {
+        callback = function()
+            if self._win and vim.api.nvim_win_is_valid(self._win) then
+                for _, win in ipairs(vim.v.event.windows) do
+                    if win == self._win then
+                        self._statusline:render()
+                        return
+                    end
+                end
+            end
         end,
     })
 
@@ -101,34 +122,21 @@ function Prompt:buf()
     return self._buf
 end
 
+---@return pi.StatusLine
+function Prompt:statusline()
+    return self._statusline
+end
+
 ---@param win integer?
 function Prompt:set_win(win)
     self._win = win
+    self._statusline:render()
 end
 
 ---@param mode pi.LayoutMode
 function Prompt:set_layout(mode)
     self._layout = mode
-    if mode == "side" and not self._bottom_padding_extmark then
-        local last_line = vim.api.nvim_buf_line_count(self._buf) - 1
-        self._bottom_padding_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, last_line, 0, {
-            virt_lines = { { { " ", "" } } },
-        })
-    elseif mode == "float" and self._bottom_padding_extmark then
-        vim.api.nvim_buf_del_extmark(self._buf, ns, self._bottom_padding_extmark)
-        self._bottom_padding_extmark = nil
-    end
-end
-
-function Prompt:_update_padding()
-    if not self._bottom_padding_extmark then
-        return
-    end
-    local last_line = vim.api.nvim_buf_line_count(self._buf) - 1
-    vim.api.nvim_buf_set_extmark(self._buf, ns, last_line, 0, {
-        id = self._bottom_padding_extmark,
-        virt_lines = { { { " ", "" } } },
-    })
+    self._statusline:render()
 end
 
 function Prompt:resize()
@@ -136,7 +144,10 @@ function Prompt:resize()
         return
     end
     local visual_lines = vim.api.nvim_win_text_height(self._win, {}).all
-    local target_height = math.max(Prompt.HEIGHT, math.min(visual_lines, Prompt.MAX_HEIGHT))
+    -- Subtract status line virt_lines (padding + status) so padding doesn't
+    -- prevent the window from shrinking. Add 1 back for the status line itself.
+    local content_lines = visual_lines - self._statusline:virt_line_count() + 1
+    local target_height = math.max(Prompt.HEIGHT, math.min(content_lines, Prompt.MAX_HEIGHT))
     if vim.wo[self._win].winbar ~= "" then
         target_height = target_height + 1
     end
@@ -188,6 +199,8 @@ end
 function Prompt:clear_text()
     if self._buf and vim.api.nvim_buf_is_valid(self._buf) then
         vim.api.nvim_buf_set_lines(self._buf, 0, -1, false, { "" })
+        self:resize()
+        self._statusline:render()
     end
 end
 
@@ -196,7 +209,7 @@ function Prompt:content_height()
     if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
         return Prompt.HEIGHT
     end
-    local line_count = vim.api.nvim_buf_line_count(self._buf)
+    local line_count = vim.api.nvim_buf_line_count(self._buf) + 1 -- +1 for status line
     local target_height = math.max(Prompt.HEIGHT, math.min(line_count, Prompt.MAX_HEIGHT))
     if self._win and vim.api.nvim_win_is_valid(self._win) and vim.wo[self._win].winbar ~= "" then
         target_height = target_height + 1

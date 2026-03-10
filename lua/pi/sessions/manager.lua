@@ -33,6 +33,18 @@ local ignored_events = {
     turn_end = true,
 }
 
+--- Fetch current state and update the status line.
+---@param session pi.Session
+local function refresh_state(session)
+    session.rpc:send({ type = "get_state" }, function(res)
+        if res.success and res.data then
+            vim.schedule(function()
+                session.chat:update_state(res.data)
+            end)
+        end
+    end)
+end
+
 --- Central event handler for a session.
 ---@param session pi.Session
 ---@param msg pi.RpcEvent
@@ -46,6 +58,7 @@ local function handle_event(session, msg)
     elseif t == "agent_end" then
         chat:on_agent_end()
         CommandsCache.refresh(session.rpc)
+        refresh_state(session)
     elseif t == "message_update" then
         local event = msg.assistantMessageEvent
         if event then
@@ -74,6 +87,7 @@ local function handle_event(session, msg)
     elseif t == "auto_compaction_start" then
         chat:set_status({ type = "compaction" })
     elseif t == "auto_compaction_end" then
+        chat:reset_usage()
         -- Compaction can fire after agent_end (between turns).
         -- Only restore the spinner if an agent loop is still active.
         if chat:active_verb() then
@@ -171,6 +185,9 @@ function M.get_or_create(opts)
     -- Fetch available /commands for completion and highlighting
     CommandsCache.fetch(rpc)
 
+    -- Fetch initial state for status line (model, thinking level)
+    refresh_state(session)
+
     return session
 end
 
@@ -265,6 +282,10 @@ local function replay_messages(session, messages)
                 else
                     pending_agent_end = true
                 end
+            end
+            local stop = msg.stopReason
+            if stop ~= "aborted" and stop ~= "error" and type(msg.usage) == "table" then
+                session.chat:add_usage(msg.usage)
             end
         elseif role == "toolResult" then
             local tool_call_id = msg.toolCallId or msg.toolUseId or ""

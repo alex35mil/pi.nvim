@@ -56,6 +56,28 @@
 ---@field attachments string
 ---@field error string
 
+---@alias pi.StatusLineItem string|pi.StatusLineComponentFn
+
+---@class pi.StatusLineLayout
+---@field left pi.StatusLineItem[] Built-in names, literal separators, or custom components
+---@field right pi.StatusLineItem[] Built-in names, literal separators, or custom components
+
+---@class pi.StatusLineContextConfig
+---@field warn? number Percentage threshold for warning highlight (default 70)
+---@field error? number Percentage threshold for error highlight (default 90)
+
+---@class pi.StatusLineCostConfig
+---@field warn? number Cost threshold for warning highlight
+---@field error? number Cost threshold for error highlight
+
+---@class pi.StatusLineComponents
+---@field context? pi.StatusLineContextConfig
+---@field cost? pi.StatusLineCostConfig
+
+---@class pi.StatusLineConfig
+---@field layout pi.StatusLineLayout
+---@field components? pi.StatusLineComponents
+
 ---@class pi.UiConfig
 ---@field spinner pi.SpinnerPreset|string[]|{ refresh_rate?: integer, frames: string[] } preset name or custom
 ---@field show_thinking boolean
@@ -63,6 +85,7 @@
 ---@field panels pi.Panels
 ---@field labels pi.Labels
 ---@field layout pi.LayoutConfig
+---@field statusline pi.StatusLineConfig
 ---@field dialog pi.DialogConfig
 ---@field verbs? pi.VerbPair[] Custom verb pairs for status messages, picked randomly per run
 
@@ -136,6 +159,12 @@ local defaults = {
                 width = 0.6,
                 height = 0.8,
                 border = "rounded",
+            },
+        },
+        statusline = {
+            layout = {
+                left = { "context" },
+                right = { "model", " · ", "thinking" },
             },
         },
         dialog = {

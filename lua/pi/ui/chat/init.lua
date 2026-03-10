@@ -383,6 +383,7 @@ end
 --- Handle message_end events.  When an assistant message ends with
 --- stopReason "aborted" or "error", mark all pending tool blocks as
 --- errored so they don't hang open forever.
+--- Also updates status line context usage from assistant message usage.
 ---@param msg pi.RpcEvent
 function Chat:on_message_end(msg)
     local message = msg.message
@@ -391,6 +392,13 @@ function Chat:on_message_end(msg)
     end
 
     local stop = message.stopReason
+
+    -- Accumulate usage stats (skip aborted/errored messages —
+    -- they may have zero or stale usage, matching TUI's estimateContextTokens).
+    if stop ~= "aborted" and stop ~= "error" and type(message.usage) == "table" then
+        self._prompt:statusline():add_usage(message.usage)
+    end
+
     if stop == "aborted" or stop == "error" then
         local error_message
         if stop == "aborted" then
@@ -400,6 +408,23 @@ function Chat:on_message_end(msg)
         end
         self._history:mark_pending_tools_errored(error_message)
     end
+end
+
+--- Update status line state (model, thinking level) from get_state response.
+---@param data table
+function Chat:update_state(data)
+    self._prompt:statusline():update_state(data)
+end
+
+--- Accumulate usage stats on the status line (e.g. after session replay).
+---@param usage table
+function Chat:add_usage(usage)
+    self._prompt:statusline():add_usage(usage)
+end
+
+--- Reset status line usage stats (new session / clear).
+function Chat:reset_usage()
+    self._prompt:statusline():reset_usage()
 end
 
 ---@param error_message string
@@ -455,6 +480,7 @@ function Chat:clear()
     self._streaming = false
     self._steer_delivered = false
     self._history:clear()
+    self._prompt:statusline():reset_usage()
 end
 
 --- Scroll the history window by a number of lines.
