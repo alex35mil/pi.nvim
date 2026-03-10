@@ -232,4 +232,19 @@ function M.focus_chat_attachments()
     end
 end
 
+--- Invoke an extension command on the current session.
+--- Accepts with or without leading "/" (e.g. "toggle-auto-accept" or "/toggle-auto-accept").
+---@param command string
+function M.invoke(command)
+    local session = require("pi.sessions.manager").get()
+    if not session or not session.rpc:is_running() then
+        require("pi.notify").warn("No active session")
+        return
+    end
+    if command:sub(1, 1) ~= "/" then
+        command = "/" .. command
+    end
+    session.rpc:send({ type = "prompt", message = command })
+end
+
 return M

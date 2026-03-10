@@ -27,8 +27,16 @@ function M.handle(session, msg)
         end
         return
     end
-    if method == "setTitle" or method == "setStatus" or method == "setWidget" or method == "set_editor_text" then
-        -- TODO: These should be handled
+    if method == "setStatus" then
+        local key = msg.statusKey
+        local value = msg.statusText -- nil clears
+        if type(key) == "string" then
+            session.chat:set_extension_status(key, value)
+        end
+        return
+    end
+    if method == "setTitle" or method == "setWidget" or method == "set_editor_text" then
+        Notify.warn("Unhandled extension UI method: " .. method)
         return
     end
 

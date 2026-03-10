@@ -422,6 +422,13 @@ function Chat:add_usage(usage)
     self._prompt:statusline():add_usage(usage)
 end
 
+--- Set or clear an extension status value on the status line.
+---@param key string
+---@param value string? nil to clear
+function Chat:set_extension_status(key, value)
+    self._prompt:statusline():set_extension_status(key, value)
+end
+
 --- Reset status line usage stats (new session / clear).
 function Chat:reset_usage()
     self._prompt:statusline():reset_usage()

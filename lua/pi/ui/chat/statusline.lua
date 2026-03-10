@@ -20,6 +20,7 @@
 ---@field total_cache_write integer
 ---@field total_cost number
 ---@field auto_compaction boolean
+---@field extensions table<string, string> Extension status values set via setStatus
 
 ---@class pi.StatusLine
 ---@field _buf integer
@@ -179,6 +180,7 @@ local function new_state()
         total_cache_write = 0,
         total_cost = 0,
         auto_compaction = false,
+        extensions = {},
     }
 end
 
@@ -256,6 +258,15 @@ function StatusLine:reset_usage()
     s.total_cache_read = 0
     s.total_cache_write = 0
     s.total_cost = 0
+    self:render()
+end
+
+--- Set or clear an extension status value.
+--- Called when an extension sends setStatus via extension_ui_request.
+---@param key string
+---@param value string? nil to clear
+function StatusLine:set_extension_status(key, value)
+    self._state.extensions[key] = value
     self:render()
 end
 
