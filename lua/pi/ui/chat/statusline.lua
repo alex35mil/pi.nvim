@@ -65,6 +65,42 @@ local function text_area_width(win)
     return vim.api.nvim_win_get_width(win)
 end
 
+--- Get status line config for a built-in component.
+---@param name pi.StatusLineBuiltinName
+---@return table
+local function component_config(name)
+    local components = ((Config.options.ui.statusline or {}).components or {})
+    local cfg = components[name]
+    return type(cfg) == "table" and cfg or {}
+end
+
+--- Normalize a component return value into chunks.
+---@param result string|string[][]|nil
+---@param hl string?
+---@return string[][]?
+local function normalize_chunks(result, hl)
+    if result == nil then
+        return nil
+    end
+    if type(result) == "table" then
+        return result
+    end
+    return { { result, hl } }
+end
+
+--- Prefix a built-in component's first chunk with its configured icon.
+---@param name pi.StatusLineBuiltinName
+---@param chunks string[][]
+---@return string[][]
+local function prepend_icon(name, chunks)
+    local icon = component_config(name).icon
+    if type(icon) ~= "string" or icon == "" or #chunks == 0 then
+        return chunks
+    end
+    chunks[1] = { icon .. " " .. chunks[1][1], chunks[1][2] }
+    return chunks
+end
+
 -- Built-in Components
 
 ---@type table<string, pi.StatusLineComponentFn>
@@ -105,7 +141,7 @@ function builtin.cost(state)
     if state.total_cost <= 0 then
         return nil
     end
-    local cfg = ((Config.options.ui.statusline or {}).components or {}).cost or {}
+    local cfg = component_config("cost")
     local text = string.format("$%.3f", state.total_cost)
     if cfg.error and state.total_cost >= cfg.error then
         return text, "PiStatusLineError"
@@ -120,18 +156,16 @@ function builtin.context(state)
     if not state.model_context_window or state.model_context_window <= 0 then
         return nil
     end
-    local cfg = ((Config.options.ui.statusline or {}).components or {}).context or {}
-    local warn_pct = cfg.warn or 70
-    local error_pct = cfg.error or 90
+    local cfg = component_config("context")
     local total = format_tokens(state.model_context_window)
     if not state.context_tokens then
         return "-/" .. total
     end
     local pct = (state.context_tokens / state.model_context_window) * 100
     local text = string.format("%.1f%%/%s", pct, total)
-    if pct > error_pct then
+    if cfg.error and pct > cfg.error then
         return text, "PiStatusLineError"
-    elseif pct > warn_pct then
+    elseif cfg.warn and pct > cfg.warn then
         return text, "PiStatusLineWarning"
     end
     return text
@@ -275,15 +309,15 @@ end
 --- Strings: look up in built-in table.
 --- Returns nil if the item is a literal separator string.
 ---@param item any
----@return pi.StatusLineComponentFn?
+---@return pi.StatusLineComponentFn?, pi.StatusLineBuiltinName?
 local function resolve_component(item)
     local t = type(item)
     if t == "function" then
-        return item
-    elseif t == "string" then
-        return builtin[item]
+        return item, nil
+    elseif t == "string" and builtin[item] then
+        return builtin[item], item
     end
-    return nil
+    return nil, nil
 end
 
 --- Evaluate a layout array and return chunks (text + hl pairs).
@@ -306,18 +340,14 @@ local function eval_side(items, state)
     ---@type { kind: "component"|"separator", chunks: string[][]? }[]
     local entries = {}
     for _, item in ipairs(items) do
-        local fn = resolve_component(item)
+        local fn, builtin_name = resolve_component(item)
         if fn then
             local result, hl = fn(state)
-            if result == nil then
-                entries[#entries + 1] = { kind = "component", chunks = nil }
-            elseif type(result) == "table" then
-                -- Multi-chunk: table of {text, hl} pairs
-                entries[#entries + 1] = { kind = "component", chunks = result }
-            else
-                -- Single chunk: string + optional hl
-                entries[#entries + 1] = { kind = "component", chunks = { { result, hl } } }
+            local chunks = normalize_chunks(result, hl)
+            if chunks and builtin_name then
+                chunks = prepend_icon(builtin_name, chunks)
             end
+            entries[#entries + 1] = { kind = "component", chunks = chunks }
         elseif type(item) == "string" then
             entries[#entries + 1] = { kind = "separator", chunks = { { item } } }
         end

@@ -58,21 +58,40 @@
 
 ---@alias pi.StatusLineItem string|pi.StatusLineComponentFn
 
+---@alias pi.StatusLineBuiltinName
+---| "tokens"
+---| "cache"
+---| "cost"
+---| "compaction"
+---| "context"
+---| "model"
+---| "thinking"
+
 ---@class pi.StatusLineLayout
 ---@field left pi.StatusLineItem[] Built-in names, literal separators, or custom components
 ---@field right pi.StatusLineItem[] Built-in names, literal separators, or custom components
 
+---@class pi.StatusLineComponentConfig
+---@field icon? string|false Prefix icon rendered before the component text. Use false to disable.
+
 ---@class pi.StatusLineContextConfig
+---@field icon? string|false Prefix icon rendered before the component text. Use false to disable.
 ---@field warn? number Percentage threshold for warning highlight (default 70)
 ---@field error? number Percentage threshold for error highlight (default 90)
 
 ---@class pi.StatusLineCostConfig
----@field warn? number Cost threshold for warning highlight
----@field error? number Cost threshold for error highlight
+---@field icon? string|false Prefix icon rendered before the component text. Use false to disable.
+---@field warn? number Optional cost threshold for warning highlight
+---@field error? number Optional cost threshold for error highlight
 
 ---@class pi.StatusLineComponents
----@field context? pi.StatusLineContextConfig
+---@field tokens? pi.StatusLineComponentConfig
+---@field cache? pi.StatusLineComponentConfig
 ---@field cost? pi.StatusLineCostConfig
+---@field compaction? pi.StatusLineComponentConfig
+---@field context? pi.StatusLineContextConfig
+---@field model? pi.StatusLineComponentConfig
+---@field thinking? pi.StatusLineComponentConfig
 
 ---@class pi.StatusLineConfig
 ---@field layout pi.StatusLineLayout
@@ -175,6 +194,15 @@ local defaults = {
             layout = {
                 left = { "context" },
                 right = { "model", " · ", "thinking" },
+            },
+            components = {
+                tokens = { icon = "" },
+                cache = { icon = "󰆼" },
+                cost = { icon = "" },
+                compaction = { icon = false },
+                context = { icon = "", warn = 70, error = 90 },
+                model = { icon = "󰚩" },
+                thinking = { icon = "󰟶" },
             },
         },
         dialog = {
