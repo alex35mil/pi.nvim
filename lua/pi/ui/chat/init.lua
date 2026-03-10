@@ -313,6 +313,11 @@ function Chat:add_user_message(msg, timestamp, image_count)
     self._history:add_user_message(msg, timestamp, image_count)
 end
 
+---@param replaying boolean
+function Chat:set_replaying(replaying)
+    self._history._replaying = replaying
+end
+
 ---@param timestamp? number
 function Chat:on_agent_start(timestamp)
     self._streaming = true

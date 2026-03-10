@@ -210,6 +210,7 @@ end
 ---@param session pi.Session
 ---@param messages table[]
 local function replay_messages(session, messages)
+    session.chat:set_replaying(true)
     local pending_agent_end = false
     for _, msg in ipairs(messages) do
         local role = msg.role
@@ -299,6 +300,7 @@ local function replay_messages(session, messages)
     if pending_agent_end then
         session.chat:on_agent_end()
     end
+    session.chat:set_replaying(false)
 end
 
 --- Load a session by path: switch_session -> get_messages -> replay into chat.

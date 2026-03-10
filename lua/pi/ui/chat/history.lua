@@ -24,6 +24,7 @@
 ---@field _placeholder_extmark integer?
 ---@field _pending_queue pi.PendingQueueEntry[]
 ---@field _pending_queue_extmark_id integer?
+---@field _replaying boolean
 local History = {}
 History.__index = History
 
@@ -197,6 +198,7 @@ function History.new(tab)
     self._placeholder_extmark = nil
     self._pending_queue = {}
     self._pending_queue_extmark_id = nil
+    self._replaying = false
 
     local panel = Config.options.ui.panels.history
     local name = panel.name and panel.name(tab) or ("π-chat | " .. tab)

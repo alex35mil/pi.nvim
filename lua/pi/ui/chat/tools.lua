@@ -578,10 +578,48 @@ local renderers = {
         end,
     },
     write = {
+        output_visible = 0,
         on_start = function(history, args)
-            if args and (args.path or args.file_path) then
-                render_body_line(history, args.path or args.file_path)
+            if not args then
+                return
             end
+            local path = args.path or args.file_path
+            if path then
+                render_body_line(history, path)
+                -- Snapshot original content before the tool writes the file.
+                -- Stash on args so on_end can diff against it.
+                -- Skip during replay — file state no longer matches the original session.
+                if history._replaying then
+                    return
+                end
+                local abs_path = vim.fn.fnamemodify(path, ":p")
+                local original
+                for _, b in ipairs(vim.api.nvim_list_bufs()) do
+                    if vim.api.nvim_buf_is_loaded(b) and vim.api.nvim_buf_get_name(b) == abs_path then
+                        original = table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), "\n")
+                        break
+                    end
+                end
+                if not original then
+                    local f = io.open(abs_path, "r")
+                    if f then
+                        original = f:read("*a")
+                        f:close()
+                    end
+                end
+                args._original_content = original or ""
+            end
+        end,
+        on_end = function(history, args)
+            if not args or not args.content then
+                return
+            end
+            local original = args._original_content
+            if not original then
+                return
+            end
+            local path = args.path or args.file_path
+            render_diff(history, original, args.content, 0, path)
         end,
     },
 }
