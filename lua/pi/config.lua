@@ -195,7 +195,8 @@ local defaults = {
             { "Tail-recursing", "Stack overflowed" },
             { "Making no mistakes", "Made no mistakes" },
             { "Making your codebase great again", "Made your codebase great again" },
-            { "Dangerously skipping permissions", "Oh, that's bad" },
+            { "Dangerously skipping permissions", "Dangerously skipped permissions" },
+            { "Agently replacing you", "Agently replaced you" },
         },
     },
     keymaps = {
