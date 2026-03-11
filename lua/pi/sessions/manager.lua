@@ -452,16 +452,32 @@ function M.resume_session(opts)
         return
     end
 
-    ---@type string[]
-    local labels = {}
+    ---@class pi.SessionSelectItem
+    ---@field session pi.SessionInfo
+    ---@field file string
+
+    ---@type pi.SessionSelectItem[]
+    local items = {}
     for i, session in ipairs(sessions_list) do
-        local date = session.timestamp:match("^(%d%d%d%d%-%d%d%-%d%d)") or session.timestamp
-        local msg = session.first_message ~= "" and session.first_message or "(empty)"
-        labels[i] = date .. "  " .. msg
+        items[i] = {
+            session = session,
+            file = session.path,
+        }
     end
 
-    vim.ui.select(labels, {
+    vim.ui.select(items, {
         prompt = "Resume session",
+        kind = "pi-resume-session",
+        -- Pass picker items with a `file` field so backends like snacks.nvim
+        -- can preview the raw session file when preview is enabled. Other
+        -- vim.ui.select implementations ignore extra fields and render via
+        -- `format_item`.
+        format_item = function(item)
+            local session = item.session
+            local date = session.timestamp:match("^(%d%d%d%d%-%d%d%-%d%d)") or session.timestamp
+            local msg = session.first_message ~= "" and session.first_message or "(empty)"
+            return date .. "  " .. msg
+        end,
         -- snacks.nvim (if installed) overrides vim.ui.select with its picker.
         -- It has a bug where the list height can be non-integer, crashing
         -- nvim_win_set_config. This `snacks` key is merged into the picker
@@ -472,23 +488,22 @@ function M.resume_session(opts)
                 config = function(layout)
                     for _, box in ipairs(layout.layout) do
                         if box.win == "list" then
-                            box.height = math.floor(math.max(math.min(#labels, vim.o.lines * 0.8 - 10), 2))
+                            box.height = math.floor(math.max(math.min(#items, vim.o.lines * 0.8 - 10), 2))
                         end
                     end
                 end,
             },
         },
-    }, function(_, idx)
-        if not idx then
+    }, function(item)
+        if not item then
             return
         end
-        local chosen = sessions_list[idx]
         local session = M.get_or_create(opts)
         if not session then
             return
         end
         session.chat:show({ loading = true })
-        load_session(session, chosen.path)
+        load_session(session, item.session.path)
     end)
 end
 
