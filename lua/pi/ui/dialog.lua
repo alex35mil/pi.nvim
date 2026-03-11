@@ -49,6 +49,29 @@ local function bind_keys(buf, action, handler)
     end
 end
 
+---@param win integer
+local function fit_height_to_wrapped_content(win)
+    if not vim.api.nvim_win_is_valid(win) then
+        return
+    end
+
+    local cfg = get_config()
+    local editor_w = vim.o.columns
+    local editor_h = vim.o.lines - vim.o.cmdheight
+    local cap_h = cfg.max_height < 1 and math.floor(editor_h * cfg.max_height) or cfg.max_height
+    local width = vim.api.nvim_win_get_width(win)
+    local height = math.max(1, math.min(vim.api.nvim_win_text_height(win, {}).all, cap_h))
+    local win_cfg = vim.api.nvim_win_get_config(win)
+    win_cfg.row = math.floor((editor_h - height) / 2)
+    win_cfg.col = math.floor((editor_w - width) / 2)
+    win_cfg.height = height
+
+    local ok = pcall(vim.api.nvim_win_set_config, win, win_cfg)
+    if not ok then
+        return
+    end
+end
+
 ---@param lines string[]
 ---@param title string
 ---@param opts? { modifiable?: boolean, min_width?: integer }
@@ -70,9 +93,8 @@ local function open_float(lines, title, opts)
     local editor_h = vim.o.lines - vim.o.cmdheight
     local cap_w = cfg.max_width < 1 and math.floor(editor_w * cfg.max_width) or cfg.max_width
     local cap_h = cfg.max_height < 1 and math.floor(editor_h * cfg.max_height) or cfg.max_height
-    local width = math.min(max_width + pad, cap_w)
-    local height = math.min(#lines, cap_h)
-    width = math.max(width, vim.fn.strdisplaywidth(title) + 4)
+    local width = math.max(1, math.min(max_width + pad, cap_w), vim.fn.strdisplaywidth(title) + 4)
+    local height = math.max(1, math.min(#lines, cap_h))
 
     local win = vim.api.nvim_open_win(buf, true, {
         relative = "editor",
@@ -89,6 +111,7 @@ local function open_float(lines, title, opts)
     vim.wo[win].signcolumn = "yes"
     vim.wo[win].cursorline = false
     vim.wo[win].wrap = true
+    fit_height_to_wrapped_content(win)
 
     return { buf = buf, win = win }
 end
@@ -270,6 +293,13 @@ function M.input(opts, callback)
 
     local float = open_float(lines, opts.title or "Input", { modifiable = true, min_width = 40 })
     local buf, win = float.buf, float.win
+
+    vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+        buffer = buf,
+        callback = function()
+            fit_height_to_wrapped_content(win)
+        end,
+    })
 
     -- Place cursor at end of last line and enter insert mode
     local last_line = lines[#lines] or ""
