@@ -26,6 +26,27 @@ local function wipe_stale_buf(name)
     end
 end
 
+---@param win integer
+---@return integer
+local function window_text_rows(win)
+    local info = vim.fn.getwininfo(win)
+    if info and info[1] then
+        return info[1].height
+    end
+    local height = vim.api.nvim_win_get_height(win)
+    if vim.wo[win].winbar ~= "" then
+        height = height - 1
+    end
+    return math.max(height, 1)
+end
+
+---@param mode string?
+---@return boolean
+local function is_visual_mode(mode)
+    local first = mode and mode:sub(1, 1) or ""
+    return first == "v" or first == "V" or first == "\22"
+end
+
 ---@param tab pi.TabId
 ---@param attachments pi.ChatAttachments
 ---@return pi.ChatPrompt
@@ -65,14 +86,31 @@ function Prompt.new(tab, attachments)
         return self:win()
     end)
 
-    -- Auto-resize prompt window to fit content.
+    -- Auto-resize prompt window to fit content while editing.
     -- Order matters: resize first (uses content height minus status padding),
     -- then render status line (uses resulting window height for padding).
     vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
         buffer = self._buf,
         callback = function()
             self:resize()
-            self._statusline:render()
+            self:_render_statusline()
+        end,
+    })
+
+    -- Visual-mode delete-all (e.g. ggVGx) can leave the statusline extmark
+    -- visually stale until after the mode switch completes. Re-render once
+    -- when leaving Visual mode instead of syncing on every line change.
+    vim.api.nvim_create_autocmd("ModeChanged", {
+        buffer = self._buf,
+        callback = function()
+            local ev = vim.v.event or {}
+            if not is_visual_mode(ev.old_mode) or is_visual_mode(ev.new_mode) then
+                return
+            end
+            vim.schedule(function()
+                self:resize()
+                self:_render_statusline()
+            end)
         end,
     })
 
@@ -84,7 +122,7 @@ function Prompt.new(tab, attachments)
             if self._win and vim.api.nvim_win_is_valid(self._win) then
                 for _, win in ipairs(vim.v.event.windows) do
                     if win == self._win then
-                        self._statusline:render()
+                        self:_render_statusline()
                         return
                     end
                 end
@@ -127,16 +165,36 @@ function Prompt:statusline()
     return self._statusline
 end
 
+--- Re-render the prompt statusline and reset wrapped scrolling when the
+--- whole prompt fits again. Neovim can leave stale skipcol/topline state
+--- after a wrapped line splits before the statusline extmark is moved.
+function Prompt:_render_statusline()
+    self._statusline:render()
+    self:_reset_view_if_content_fits()
+end
+
+function Prompt:_reset_view_if_content_fits()
+    if not self._win or not vim.api.nvim_win_is_valid(self._win) then
+        return
+    end
+    if vim.api.nvim_win_text_height(self._win, {}).all > window_text_rows(self._win) then
+        return
+    end
+    vim.api.nvim_win_call(self._win, function()
+        vim.fn.winrestview({ topline = 1, skipcol = 0 })
+    end)
+end
+
 ---@param win integer?
 function Prompt:set_win(win)
     self._win = win
-    self._statusline:render()
+    self:_render_statusline()
 end
 
 ---@param mode pi.LayoutMode
 function Prompt:set_layout(mode)
     self._layout = mode
-    self._statusline:render()
+    self:_render_statusline()
 end
 
 function Prompt:resize()
@@ -158,14 +216,6 @@ function Prompt:resize()
         else
             vim.api.nvim_win_set_height(self._win, target_height)
         end
-    end
-    -- Float: neovim scrolls the view to keep cursor visible before TextChanged
-    -- fires, leaving a stale topline after we grow the window. Reset when all
-    -- content fits.
-    if self._layout == "float" and visual_lines <= target_height then
-        vim.api.nvim_win_call(self._win, function()
-            vim.fn.winrestview({ topline = 1 })
-        end)
     end
 end
 
@@ -200,7 +250,7 @@ function Prompt:clear_text()
     if self._buf and vim.api.nvim_buf_is_valid(self._buf) then
         vim.api.nvim_buf_set_lines(self._buf, 0, -1, false, { "" })
         self:resize()
-        self._statusline:render()
+        self:_render_statusline()
     end
 end
 
