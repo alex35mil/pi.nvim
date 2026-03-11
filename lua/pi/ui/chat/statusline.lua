@@ -24,6 +24,7 @@
 
 ---@class pi.StatusLine
 ---@field _buf integer
+---@field _tab pi.TabId
 ---@field _win_fn fun(): integer?
 ---@field _extmark_id integer?
 ---@field _virt_line_count integer
@@ -32,6 +33,7 @@ local StatusLine = {}
 StatusLine.__index = StatusLine
 
 local Config = require("pi.config")
+local Attention = require("pi.attention")
 
 local ns = vim.api.nvim_create_namespace("pi-statusline")
 
@@ -97,7 +99,8 @@ local function prepend_icon(name, chunks)
     if type(icon) ~= "string" or icon == "" or #chunks == 0 then
         return chunks
     end
-    chunks[1] = { icon .. " " .. chunks[1][1], chunks[1][2] }
+    local first = chunks[1][1]
+    chunks[1] = { first == "" and icon or (icon .. " " .. first), chunks[1][2] }
     return chunks
 end
 
@@ -179,6 +182,29 @@ function builtin.compaction(state)
     return nil
 end
 
+--- 󰵚 / 󰵚 2
+---@param tab pi.TabId
+---@return pi.StatusLineComponentFn
+local function attention_component(tab)
+    return function(_)
+        local count = Attention.count(tab)
+        if count <= 0 then
+            return nil
+        end
+
+        local cfg = component_config("attention")
+        if cfg.counter == true then
+            return tostring(count), "PiStatusLineAttention"
+        end
+
+        if cfg.icon == false then
+            return tostring(count), "PiStatusLineAttention"
+        end
+
+        return "", "PiStatusLineAttention"
+    end
+end
+
 --- claude-opus-4-6
 function builtin.model(state)
     if state.model_id then
@@ -219,11 +245,13 @@ local function new_state()
 end
 
 ---@param buf integer
+---@param tab pi.TabId
 ---@param win_fn fun(): integer?
 ---@return pi.StatusLine
-function StatusLine.new(buf, win_fn)
+function StatusLine.new(buf, tab, win_fn)
     local self = setmetatable({}, StatusLine)
     self._buf = buf
+    self._tab = tab
     self._win_fn = win_fn
     self._extmark_id = nil
     self._virt_line_count = 0
@@ -309,11 +337,14 @@ end
 --- Strings: look up in built-in table.
 --- Returns nil if the item is a literal separator string.
 ---@param item any
+---@param tab pi.TabId
 ---@return pi.StatusLineComponentFn?, pi.StatusLineBuiltinName?
-local function resolve_component(item)
+local function resolve_component(item, tab)
     local t = type(item)
     if t == "function" then
         return item, nil
+    elseif item == "attention" then
+        return attention_component(tab), "attention"
     elseif t == "string" and builtin[item] then
         return builtin[item], item
     end
@@ -332,15 +363,16 @@ end
 ---   nil                   — hidden
 ---@param items any[]
 ---@param state pi.StatusLineState
+---@param tab pi.TabId
 ---@return string[][] chunks  list of {text, hl}
 ---@return integer width  total display width
-local function eval_side(items, state)
+local function eval_side(items, state, tab)
     -- First pass: evaluate all items into a flat list of tagged entries.
     -- Components produce one or more chunks; separators produce a literal.
     ---@type { kind: "component"|"separator", chunks: string[][]? }[]
     local entries = {}
     for _, item in ipairs(items) do
-        local fn, builtin_name = resolve_component(item)
+        local fn, builtin_name = resolve_component(item, tab)
         if fn then
             local result, hl = fn(state)
             local chunks = normalize_chunks(result, hl)
@@ -412,8 +444,8 @@ function StatusLine:render()
     local left_names = sl_cfg and sl_cfg.layout and sl_cfg.layout.left or { "context" }
     local right_names = sl_cfg and sl_cfg.layout and sl_cfg.layout.right or { "model", " · ", "thinking" }
 
-    local left_chunks, left_width = eval_side(left_names, self._state)
-    local right_chunks, right_width = eval_side(right_names, self._state)
+    local left_chunks, left_width = eval_side(left_names, self._state, self._tab)
+    local right_chunks, right_width = eval_side(right_names, self._state, self._tab)
 
     -- Truncate right side if it doesn't fit (left has priority).
     -- right_margin keeps 1 column of breathing room before the window edge.

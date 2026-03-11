@@ -64,6 +64,7 @@
 ---| "cost"
 ---| "compaction"
 ---| "context"
+---| "attention"
 ---| "model"
 ---| "thinking"
 
@@ -84,12 +85,17 @@
 ---@field warn? number Optional cost threshold for warning highlight
 ---@field error? number Optional cost threshold for error highlight
 
+---@class pi.StatusLineAttentionConfig
+---@field icon? string|false Prefix icon rendered before the component text. Use false to disable.
+---@field counter? boolean Show the pending attention count next to the icon.
+
 ---@class pi.StatusLineComponents
 ---@field tokens? pi.StatusLineComponentConfig
 ---@field cache? pi.StatusLineComponentConfig
 ---@field cost? pi.StatusLineCostConfig
 ---@field compaction? pi.StatusLineComponentConfig
 ---@field context? pi.StatusLineContextConfig
+---@field attention? pi.StatusLineAttentionConfig
 ---@field model? pi.StatusLineComponentConfig
 ---@field thinking? pi.StatusLineComponentConfig
 
@@ -192,8 +198,8 @@ local defaults = {
         },
         statusline = {
             layout = {
-                left = { "context" },
-                right = { "model", " · ", "thinking" },
+                left = { "context", "  ", "attention" },
+                right = { "model", "   ", "thinking" },
             },
             components = {
                 tokens = { icon = "" },
@@ -201,6 +207,7 @@ local defaults = {
                 cost = { icon = "" },
                 compaction = { icon = false },
                 context = { icon = "", warn = 70, error = 90 },
+                attention = { icon = "󰵚", counter = false },
                 model = { icon = "󰚩" },
                 thinking = { icon = "󰟶" },
             },

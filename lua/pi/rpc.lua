@@ -82,12 +82,14 @@
 ---@field success? boolean
 ---@field data? table
 ---@field code? integer
+---@field error? string
 ---@field id? string
 ---@field method? string
 ---@field message? string|{ stopReason?: string, errorMessage?: string, [string]: any }
 ---@field messages? table[]
 ---@field notifyType? "info"|"warning"|"error"
 ---@field options? string[]
+---@field timeout? integer
 ---@field title? string
 ---@field prefill? string
 ---@field placeholder? string

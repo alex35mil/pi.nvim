@@ -106,8 +106,27 @@ local function highlight_selection(buf, row, total)
     end
 end
 
+---@param timeout integer?
+---@param callback fun()
+---@return integer?
+local function start_timeout(timeout, callback)
+    if type(timeout) ~= "number" or timeout <= 0 then
+        return nil
+    end
+    return vim.fn.timer_start(timeout, function()
+        vim.schedule(callback)
+    end)
+end
+
+---@param timer integer?
+local function stop_timeout(timer)
+    if timer then
+        pcall(vim.fn.timer_stop, timer)
+    end
+end
+
 --- Picker-style select dialog.
----@param opts { title: string, message?: string, options: string[], shortcuts?: table<string, string>, initial_index?: integer }
+---@param opts { title: string, message?: string, options: string[], shortcuts?: table<string, string>, initial_index?: integer, timeout?: integer, on_timeout?: fun() }
 ---@param callback fun(choice: string?)
 function M.select(opts, callback)
     local options = opts.options or {}
@@ -141,25 +160,50 @@ function M.select(opts, callback)
     highlight_selection(buf, option_offset + selected, #lines)
 
     local responded = false
+    local timeout = nil ---@type integer?
 
-    local function resolve(choice)
-        if responded then
-            return
-        end
-        responded = true
+    local function close()
+        stop_timeout(timeout)
         if vim.api.nvim_win_is_valid(win) then
             vim.api.nvim_win_close(win, true)
         end
         if vim.api.nvim_buf_is_valid(buf) then
             vim.api.nvim_buf_delete(buf, { force = true })
         end
+    end
+
+    local function restore_insert(fn)
         vim.schedule(function()
             if was_insert then
                 vim.cmd("startinsert")
             end
+            if fn then
+                fn()
+            end
+        end)
+    end
+
+    local function resolve(choice)
+        if responded then
+            return
+        end
+        responded = true
+        close()
+        restore_insert(function()
             callback(choice)
         end)
     end
+
+    local function expire()
+        if responded then
+            return
+        end
+        responded = true
+        close()
+        restore_insert(opts.on_timeout)
+    end
+
+    timeout = start_timeout(opts.timeout, expire)
 
     local function move(delta)
         selected = math.max(0, math.min(#options - 1, selected + delta))
@@ -197,7 +241,7 @@ function M.select(opts, callback)
 end
 
 --- Confirm dialog with picker UI.
----@param opts { title: string, message?: string }
+---@param opts { title: string, message?: string, timeout?: integer, on_timeout?: fun() }
 ---@param callback fun(confirmed: boolean)
 function M.confirm(opts, callback)
     M.select({
@@ -208,13 +252,15 @@ function M.confirm(opts, callback)
             ["y"] = "Yes",
             ["n"] = "No",
         },
+        timeout = opts.timeout,
+        on_timeout = opts.on_timeout,
     }, function(choice)
         callback(choice == "Yes")
     end)
 end
 
 --- Input dialog with editable line.
----@param opts { title: string, default?: string }
+---@param opts { title: string, default?: string, timeout?: integer, on_timeout?: fun() }
 ---@param callback fun(value: string?)
 function M.input(opts, callback)
     local default = opts.default or ""
@@ -231,12 +277,10 @@ function M.input(opts, callback)
     vim.cmd("startinsert!")
 
     local responded = false
+    local timeout = nil ---@type integer?
 
-    local function resolve(value)
-        if responded then
-            return
-        end
-        responded = true
+    local function close()
+        stop_timeout(timeout)
         vim.cmd("stopinsert")
         if vim.api.nvim_win_is_valid(win) then
             vim.api.nvim_win_close(win, true)
@@ -244,13 +288,40 @@ function M.input(opts, callback)
         if vim.api.nvim_buf_is_valid(buf) then
             vim.api.nvim_buf_delete(buf, { force = true })
         end
+    end
+
+    local function restore_insert(fn)
         vim.schedule(function()
             if was_insert then
                 vim.cmd("startinsert")
             end
+            if fn then
+                fn()
+            end
+        end)
+    end
+
+    local function resolve(value)
+        if responded then
+            return
+        end
+        responded = true
+        close()
+        restore_insert(function()
             callback(value)
         end)
     end
+
+    local function expire()
+        if responded then
+            return
+        end
+        responded = true
+        close()
+        restore_insert(opts.on_timeout)
+    end
+
+    timeout = start_timeout(opts.timeout, expire)
 
     local function submit()
         local buf_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)

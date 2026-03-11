@@ -168,7 +168,9 @@ end
 --- Open a diff review for a tool call.
 ---@param payload { prompt: string, toolName: string, toolInput: table }
 ---@param callback fun(result: string) Called with "Accept", json-encoded AcceptModified, or "Reject"
-function M.open(payload, callback)
+---@param opts? { timeout?: integer, on_timeout?: fun() }
+function M.open(payload, callback, opts)
+    opts = opts or {}
     local input = payload.toolInput
     local path = abs(input.path)
     if not path then
@@ -304,8 +306,12 @@ function M.open(payload, callback)
         .. "=reject]%#PiDiffWinbar#"
 
     local responded = false
+    local timeout = nil ---@type integer?
 
     local function close_review_tab()
+        if timeout then
+            pcall(vim.fn.timer_stop, timeout)
+        end
         -- Clear winbar and diffoff on both windows to restore original state
         for _, w in ipairs({ left_win, right_win }) do
             if vim.api.nvim_win_is_valid(w) then
@@ -386,6 +392,21 @@ function M.open(payload, callback)
         responded = true
         close_review_tab()
         callback("Reject")
+    end
+
+    if type(opts.timeout) == "number" and opts.timeout > 0 then
+        timeout = vim.fn.timer_start(opts.timeout, function()
+            vim.schedule(function()
+                if responded then
+                    return
+                end
+                responded = true
+                close_review_tab()
+                if opts.on_timeout then
+                    opts.on_timeout()
+                end
+            end)
+        end)
     end
 
     for _, b in ipairs({ before_buf, after_buf }) do

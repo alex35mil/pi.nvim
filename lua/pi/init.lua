@@ -30,6 +30,7 @@ function M.setup(opts)
 
     vim.treesitter.language.register("markdown", require("pi.filetypes").history)
     require("pi.ui.highlights").setup()
+    require("pi.attention").setup_autocmds()
     require("pi.sessions.manager").setup_autocmds()
     require("pi.commands").setup()
 end
@@ -112,6 +113,7 @@ end
 function M.abort()
     local session = require("pi.sessions.manager").get()
     if session and session.rpc:is_running() then
+        require("pi.attention").clear_session(session)
         session.rpc:send({ type = "abort" })
     end
 end
@@ -121,14 +123,42 @@ function M.stop()
     require("pi.sessions.manager").stop()
 end
 
+--- Open the next queued π attention request.
+---@return boolean opened
+function M.attention()
+    return require("pi.attention").open_next()
+end
+
+--- Count active attention requests for a tab.
+--- Pass nil or 0 for the current tab.
+---@param tab? pi.TabId|0
+---@return integer
+function M.attention_count(tab)
+    return require("pi.attention").count(tab)
+end
+
+--- Count active attention requests across all tabs.
+---@return integer
+function M.attention_total()
+    return require("pi.attention").total_count()
+end
+
+--- Return a snapshot of the current attention state.
+---@param current_tab? pi.TabId|0
+---@return pi.AttentionState
+function M.attention_state(current_tab)
+    return require("pi.attention").state(current_tab)
+end
+
+---@param tab? pi.TabId|0
+---@return boolean
+function M.has_attention(tab)
+    return require("pi.attention").has_attention(tab)
+end
+
 --- Start a new conversation in the current session.
 function M.new_session()
-    local session = require("pi.sessions.manager").get()
-    if session and session.rpc:is_running() then
-        session.rpc:send({ type = "new_session" })
-        session.chat:clear()
-        session.chat:show_welcome()
-    end
+    require("pi.sessions.manager").new_session()
 end
 
 --- Toggle thinking block visibility.

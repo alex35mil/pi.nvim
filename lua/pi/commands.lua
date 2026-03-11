@@ -64,6 +64,10 @@ function M.setup()
         Pi.stop()
     end, { desc = "Stop π process and close chat" })
 
+    vim.api.nvim_create_user_command("PiAttention", function()
+        Pi.attention()
+    end, { desc = "Open the next pending π attention request" })
+
     vim.api.nvim_create_user_command("PiNewSession", function()
         Pi.new_session()
     end, { desc = "Start new π session" })

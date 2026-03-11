@@ -4,6 +4,7 @@
 ---@field send fun(msg: pi.RpcCommand)
 
 ---@class pi.Chat
+---@field _tab pi.TabId
 ---@field _agent pi.ChatAgent
 ---@field _layout pi.ChatLayout
 ---@field _history pi.ChatHistory
@@ -30,6 +31,7 @@ local Mentions = require("pi.ui.chat.mentions")
 ---@return pi.Chat
 function Chat.new(tab, mode, agent)
     local self = setmetatable({}, Chat)
+    self._tab = tab
     self._agent = agent
     self._attachments = Attachments.new()
     self._prompt = Prompt.new(tab, self._attachments)
@@ -206,6 +208,37 @@ end
 ---@return integer?
 function Chat:prompt_win()
     return self._layout:prompt_win()
+end
+
+---@return boolean
+function Chat:has_focus()
+    local current_tab = vim.api.nvim_get_current_tabpage()
+    local current_win = vim.api.nvim_get_current_win()
+    if self._tab and self._tab ~= current_tab then
+        return false
+    end
+
+    local history_win = self._layout:history_win()
+    if history_win and history_win == current_win then
+        return true
+    end
+
+    local prompt_win = self._layout:prompt_win()
+    if prompt_win and prompt_win == current_win then
+        return true
+    end
+
+    local attachments_win = self._layout:attachments_win()
+    if attachments_win and attachments_win == current_win then
+        return true
+    end
+
+    return false
+end
+
+---@return boolean
+function Chat:has_draft()
+    return self._prompt:text() ~= "" or self._attachments:count() > 0
 end
 
 function Chat:focus_prompt()
@@ -437,6 +470,11 @@ end
 ---@param value string? nil to clear
 function Chat:set_extension_status(key, value)
     self._prompt:statusline():set_extension_status(key, value)
+end
+
+--- Re-render the prompt status line.
+function Chat:render_statusline()
+    self._prompt:statusline():render()
 end
 
 --- Reset status line usage stats (new session / clear).

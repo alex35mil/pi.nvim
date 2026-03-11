@@ -1,8 +1,14 @@
 ---@alias pi.TabId integer Neovim tabpage handle
 
+---@class pi.SessionAttention
+---@field pending pi.AttentionEntry[]
+---@field transition_seq? integer Hide queued entries with seq <= this while a session transition is in flight.
+
 ---@class pi.Session
+---@field tab pi.TabId
 ---@field rpc pi.Rpc
 ---@field chat pi.Chat
+---@field attention pi.SessionAttention
 
 ---@class pi.SessionCreateOpts
 ---@field layout? pi.LayoutMode
@@ -13,6 +19,7 @@ local Rpc = require("pi.rpc")
 local Chat = require("pi.ui.chat")
 local Config = require("pi.config")
 local Notify = require("pi.notify")
+local Attention = require("pi.attention")
 local Extension = require("pi.ui.extension")
 local CommandsCache = require("pi.cache.commands")
 
@@ -139,6 +146,20 @@ function M.get()
     return sessions[tab]
 end
 
+--- List all active sessions.
+---@return pi.Session[]
+function M.list()
+    ---@type pi.Session[]
+    local result = {}
+    for _, session in pairs(sessions) do
+        result[#result + 1] = session
+    end
+    table.sort(result, function(a, b)
+        return a.tab < b.tab
+    end)
+    return result
+end
+
 --- Get or create a session for the current tab.
 ---@param opts? pi.SessionCreateOpts
 ---@return pi.Session?
@@ -172,8 +193,10 @@ function M.get_or_create(opts)
 
     ---@type pi.Session
     session = {
+        tab = tab,
         rpc = rpc,
         chat = chat,
+        attention = { pending = {} },
     }
 
     rpc:set_handler(function(msg)
@@ -199,11 +222,57 @@ function M.stop()
         return
     end
 
+    Attention.clear_session(session)
     session.rpc:stop()
     session.chat:hide()
     session.chat:clear()
 
     sessions[tab] = nil
+end
+
+--- Start a new conversation in the current tab's session.
+function M.new_session()
+    local session = M.get()
+    if not session or not session.rpc:is_running() then
+        return
+    end
+
+    Attention.begin_session_transition(session)
+    local sent = session.rpc:send({ type = "abort" }, function(abort_res)
+        if not abort_res.success then
+            vim.schedule(function()
+                Attention.end_session_transition(session, false)
+                Notify.error(abort_res.error or "Failed to abort current session")
+            end)
+            return
+        end
+        local sent_new = session.rpc:send({ type = "new_session" }, function(res)
+            local data = res.data or {}
+            vim.schedule(function()
+                if not res.success then
+                    Attention.end_session_transition(session, false)
+                    Notify.error(res.error or "Failed to start new session")
+                    return
+                end
+                if data.cancelled then
+                    Attention.end_session_transition(session, false)
+                    Notify.warn("New session was cancelled")
+                    return
+                end
+                Attention.end_session_transition(session, true)
+                session.chat:clear()
+                session.chat:show_welcome()
+            end)
+        end)
+        if not sent_new then
+            vim.schedule(function()
+                Attention.end_session_transition(session, false)
+            end)
+        end
+    end)
+    if not sent then
+        Attention.end_session_transition(session, false)
+    end
 end
 
 --- Replay messages from get_messages response into chat.
@@ -307,22 +376,49 @@ end
 ---@param session pi.Session
 ---@param session_path string
 local function load_session(session, session_path)
-    session.rpc:send({ type = "switch_session", sessionPath = session_path }, function(msg)
-        local data = msg.data or {}
-        if data.cancelled then
+    Attention.begin_session_transition(session)
+    local sent = session.rpc:send({ type = "abort" }, function(abort_res)
+        if not abort_res.success then
             vim.schedule(function()
-                Notify.warn("Session switch was cancelled")
+                Attention.end_session_transition(session, false)
+                Notify.error(abort_res.error or "Failed to abort current session")
             end)
             return
         end
-        session.rpc:send({ type = "get_messages" }, function(res)
-            vim.schedule(function()
-                local messages = (res.data or {}).messages or {}
-                replay_messages(session, messages)
-                session.chat:ensure_shown_and_focus_prompt()
+        local sent_switch = session.rpc:send({ type = "switch_session", sessionPath = session_path }, function(msg)
+            local data = msg.data or {}
+            if not msg.success then
+                vim.schedule(function()
+                    Attention.end_session_transition(session, false)
+                    Notify.error(msg.error or "Failed to switch session")
+                end)
+                return
+            end
+            if data.cancelled then
+                vim.schedule(function()
+                    Attention.end_session_transition(session, false)
+                    Notify.warn("Session switch was cancelled")
+                end)
+                return
+            end
+            Attention.end_session_transition(session, true)
+            session.rpc:send({ type = "get_messages" }, function(res)
+                vim.schedule(function()
+                    local messages = (res.data or {}).messages or {}
+                    replay_messages(session, messages)
+                    session.chat:ensure_shown_and_focus_prompt()
+                end)
             end)
         end)
+        if not sent_switch then
+            vim.schedule(function()
+                Attention.end_session_transition(session, false)
+            end)
+        end
     end)
+    if not sent then
+        Attention.end_session_transition(session, false)
+    end
 end
 
 --- Continue the most recent session for the current cwd.
@@ -405,6 +501,7 @@ function M.cleanup()
     end
     for tab, session in pairs(sessions) do
         if not valid_tabs[tab] then
+            Attention.clear_session(session)
             session.rpc:stop()
             sessions[tab] = nil
         end
@@ -424,6 +521,7 @@ function M.setup_autocmds()
     vim.api.nvim_create_autocmd("VimLeavePre", {
         callback = function()
             for _, session in pairs(sessions) do
+                Attention.clear_session(session)
                 session.rpc:stop()
             end
         end,

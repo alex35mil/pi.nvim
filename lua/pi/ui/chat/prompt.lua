@@ -61,7 +61,7 @@ function Prompt.new(tab, attachments)
         end,
     })
 
-    self._statusline = StatusLine.new(self._buf, function()
+    self._statusline = StatusLine.new(self._buf, tab, function()
         return self:win()
     end)
 
