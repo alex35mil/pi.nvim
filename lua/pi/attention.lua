@@ -491,19 +491,34 @@ function M.present(session, msg)
     return true
 end
 
---- Open the oldest queued attention request, switching to its tab if needed.
----@return boolean opened
-function M.open_next()
-    prune_stale_queue()
+---@return pi.Session?, integer?, pi.AttentionEntry?
+local function find_oldest_visible_entry()
+    local best_session = nil ---@type pi.Session?
+    local best_index = nil ---@type integer?
+    local best_entry = nil ---@type pi.AttentionEntry?
 
-    local expired = false
+    for _, session in ipairs(sessions()) do
+        for i, entry in ipairs(pending_entries(session)) do
+            if is_visible(session, entry) and (not best_entry or entry.seq < best_entry.seq) then
+                best_session = session
+                best_index = i
+                best_entry = entry
+            end
+        end
+    end
 
-    while true do
-        local best_session = nil ---@type pi.Session?
-        local best_index = nil ---@type integer?
-        local best_entry = nil ---@type pi.AttentionEntry?
+    return best_session, best_index, best_entry
+end
 
-        for _, session in ipairs(sessions()) do
+---@param tab pi.TabId
+---@return pi.Session?, integer?, pi.AttentionEntry?
+local function find_oldest_visible_entry_for_tab(tab)
+    local best_session = nil ---@type pi.Session?
+    local best_index = nil ---@type integer?
+    local best_entry = nil ---@type pi.AttentionEntry?
+
+    for _, session in ipairs(sessions()) do
+        if session.tab == tab then
             for i, entry in ipairs(pending_entries(session)) do
                 if is_visible(session, entry) and (not best_entry or entry.seq < best_entry.seq) then
                     best_session = session
@@ -512,32 +527,82 @@ function M.open_next()
                 end
             end
         end
+    end
 
-        if not best_session or not best_index or not best_entry then
+    return best_session, best_index, best_entry
+end
+
+---@param session pi.Session
+---@param index integer
+---@param entry pi.AttentionEntry
+---@param opts? { switch_tab?: boolean }
+---@return boolean opened
+---@return boolean expired
+local function open_pending_entry(session, index, entry, opts)
+    table.remove(pending_entries(session), index)
+    reschedule_timer(true)
+    request_redraw()
+
+    local timeout = remaining_timeout_ms(entry.expires_at)
+    if timeout ~= nil and timeout <= 0 then
+        notify_expired(entry.kind)
+        return false, true
+    end
+
+    if opts and opts.switch_tab and session.tab ~= vim.api.nvim_get_current_tabpage() then
+        vim.api.nvim_set_current_tabpage(session.tab)
+    end
+
+    if entry.open() then
+        return true, false
+    end
+
+    notify_expired(entry.kind)
+    return false, true
+end
+
+--- Open the oldest queued attention request for a tab.
+--- Returns false silently when the tab has no pending visible requests.
+---@param tab? pi.TabId|0
+---@return boolean opened
+function M.open_next_for_tab(tab)
+    local target_tab = resolve_tab(tab)
+    prune_stale_queue()
+
+    while true do
+        local session, index, entry = find_oldest_visible_entry_for_tab(target_tab)
+        if not session or not index or not entry then
+            return false
+        end
+
+        local opened = open_pending_entry(session, index, entry)
+        if opened then
+            return true
+        end
+    end
+end
+
+--- Open the oldest queued attention request, switching to its tab if needed.
+---@return boolean opened
+function M.open_next()
+    prune_stale_queue()
+
+    local expired = false
+
+    while true do
+        local session, index, entry = find_oldest_visible_entry()
+        if not session or not index or not entry then
             if not expired then
                 Notify.info("No pending π requests")
             end
             return false
         end
 
-        table.remove(pending_entries(best_session), best_index)
-        reschedule_timer(true)
-        request_redraw()
-
-        local timeout = remaining_timeout_ms(best_entry.expires_at)
-        if timeout ~= nil and timeout <= 0 then
-            notify_expired(best_entry.kind)
-            expired = true
-        else
-            if best_session.tab ~= vim.api.nvim_get_current_tabpage() then
-                vim.api.nvim_set_current_tabpage(best_session.tab)
-            end
-            if best_entry.open() then
-                return true
-            end
-            notify_expired(best_entry.kind)
-            expired = true
+        local opened, entry_expired = open_pending_entry(session, index, entry, { switch_tab = true })
+        if opened then
+            return true
         end
+        expired = expired or entry_expired
     end
 end
 

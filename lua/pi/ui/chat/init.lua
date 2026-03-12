@@ -63,16 +63,28 @@ function Chat:_set_keymaps()
         end, { buffer = hbuf, desc = "Redirect to π prompt" })
     end
 
-    -- Auto-redirect when entering history from outside
+    -- Auto-redirect when entering history from outside in side layout only.
     vim.api.nvim_create_autocmd("WinEnter", {
         buffer = hbuf,
         callback = function()
+            if self._layout:mode() == "float" then
+                return
+            end
+
             local pwin = self._layout:prompt_win()
             local prev = vim.fn.win_getid(vim.fn.winnr("#"))
             if prev == pwin then
                 return
             end
+
+            local entered_win = vim.api.nvim_get_current_win()
             vim.schedule(function()
+                if self._layout:mode() == "float" then
+                    return
+                end
+                if vim.api.nvim_get_current_win() ~= entered_win then
+                    return
+                end
                 if pwin and vim.api.nvim_win_is_valid(pwin) then
                     vim.api.nvim_set_current_win(pwin)
                     vim.cmd("startinsert")
@@ -89,6 +101,10 @@ function Chat:_set_keymaps()
                 -- Guard: by the time this runs, focus may have moved elsewhere
                 local buf = vim.api.nvim_get_current_buf()
                 if buf ~= pbuf then
+                    return
+                end
+                self:_auto_dispatch_attention_on_prompt_focus()
+                if vim.api.nvim_get_current_buf() ~= pbuf then
                     return
                 end
                 if vim.api.nvim_get_mode().mode ~= "i" then
@@ -255,6 +271,18 @@ end
 ---@return boolean
 function Chat:has_draft()
     return self._prompt:text() ~= "" or self._attachments:count() > 0
+end
+
+---@return boolean opened
+function Chat:_auto_dispatch_attention_on_prompt_focus()
+    local attention_config = Config.options.ui.attention
+    if not attention_config or not attention_config.auto_open_on_prompt_focus then
+        return false
+    end
+    if not self:has_prompt_focus() or self:has_draft() then
+        return false
+    end
+    return require("pi.attention").open_next_for_tab(self._tab)
 end
 
 function Chat:focus_prompt()

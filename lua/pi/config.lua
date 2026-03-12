@@ -103,6 +103,9 @@
 ---@field layout pi.StatusLineLayout
 ---@field components? pi.StatusLineComponents
 
+---@class pi.UiAttentionConfig
+---@field auto_open_on_prompt_focus boolean Automatically open the next pending attention request for the current tab when the prompt gains focus and has no draft.
+
 ---@class pi.UiConfig
 ---@field spinner pi.SpinnerPreset|string[]|{ refresh_rate?: integer, frames: string[] } preset name or custom
 ---@field show_thinking boolean
@@ -111,6 +114,7 @@
 ---@field labels pi.Labels
 ---@field layout pi.LayoutConfig
 ---@field statusline pi.StatusLineConfig
+---@field attention pi.UiAttentionConfig
 ---@field dialog pi.DialogConfig
 ---@field verbs? pi.VerbPair[] Custom verb pairs for status messages, picked randomly per run
 
@@ -211,6 +215,9 @@ local defaults = {
                 model = { icon = "󰚩" },
                 thinking = { icon = "󰟶" },
             },
+        },
+        attention = {
+            auto_open_on_prompt_focus = true,
         },
         dialog = {
             border = "rounded",
