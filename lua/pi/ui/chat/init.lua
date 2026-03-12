@@ -642,6 +642,11 @@ function Chat:scroll_history_to_bottom()
     self._history:scroll_to_bottom()
 end
 
+--- Scroll the history window to the start of the most recent agent response.
+function Chat:scroll_history_to_last_agent_response()
+    self._history:scroll_to_last_agent_response()
+end
+
 ---@param path string
 ---@return boolean
 function Chat:attach_image(path)

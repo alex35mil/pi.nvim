@@ -26,6 +26,7 @@
 ---@field _pending_queue_extmark_id integer?
 ---@field _replaying boolean
 ---@field _agent_text_start_row integer?
+---@field _last_agent_response_extmark_id integer?
 local History = {}
 History.__index = History
 
@@ -371,6 +372,7 @@ function History.new(tab)
     self._pending_queue_extmark_id = nil
     self._replaying = false
     self._agent_text_start_row = nil
+    self._last_agent_response_extmark_id = nil
 
     local panel = Config.options.ui.panels.history
     local name = panel.name and panel.name(tab) or ("π-chat | " .. tab)
@@ -450,6 +452,26 @@ end
 --- Scroll the history window to the bottom (most recent message).
 function History:scroll_to_bottom()
     self:_scroll_to_bottom()
+end
+
+--- Scroll the history window to the start of the most recent agent response.
+function History:scroll_to_last_agent_response()
+    if not self._win or not vim.api.nvim_win_is_valid(self._win) then
+        return
+    end
+    if not self._last_agent_response_extmark_id then
+        return
+    end
+
+    local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, self._last_agent_response_extmark_id, {})
+    if not pos or #pos == 0 then
+        return
+    end
+
+    vim.api.nvim_win_call(self._win, function()
+        vim.api.nvim_win_set_cursor(self._win, { pos[1] + 1, 0 })
+        vim.cmd("normal! zt")
+    end)
 end
 
 function History:_pick_spinner()
@@ -906,6 +928,7 @@ function History:on_agent_start(timestamp)
         local label_line = label .. time_str
         local start = self:_append_lines({ "", label_line, "" })
         local label_row = start + 1
+        self._last_agent_response_extmark_id = vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, 0, {})
         vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, 0, {
             end_col = #label,
             hl_group = "PiAgentResponseLabel",
@@ -1631,6 +1654,7 @@ function History:clear()
     self._tool_blocks = {}
     self._placeholder_extmark = nil
     self._agent_text_start_row = nil
+    self._last_agent_response_extmark_id = nil
     self:_with_modifiable(function()
         vim.api.nvim_buf_set_lines(self._buf, 0, -1, false, { "" })
     end)
