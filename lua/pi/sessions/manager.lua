@@ -108,7 +108,10 @@ local function handle_event(session, msg)
         chat:set_status(nil)
         if msg.success == false then
             chat:on_error(
-                "Retry failed after " .. tostring(msg.attempt or 0) .. " attempts: " .. (msg.finalError or "Unknown error"),
+                "Retry failed after "
+                    .. tostring(msg.attempt or 0)
+                    .. " attempts: "
+                    .. (msg.finalError or "Unknown error"),
                 { pad_top = true, pad_bottom = true }
             )
         end
@@ -310,7 +313,7 @@ local function replay_messages(session, messages)
                     end
                 end
             end
-            if text ~= "" then
+            if text ~= "" or image_count > 0 then
                 session.chat:add_user_message(text, msg.timestamp, image_count > 0 and image_count or nil)
             end
         elseif role == "assistant" then

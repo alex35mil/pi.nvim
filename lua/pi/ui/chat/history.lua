@@ -68,6 +68,7 @@ History.__index = History
 ---@field queue_type "steer"|"follow_up"
 ---@field text string
 ---@field expanded_text string
+---@field image_count? integer
 
 local Ft = require("pi.filetypes")
 local Config = require("pi.config")
@@ -76,6 +77,13 @@ local Tools = require("pi.ui.chat.tools")
 local ns = vim.api.nvim_create_namespace("pi-chat")
 
 local SCROLL_THRESHOLD = 10
+
+---@param image_count integer
+---@return string
+local function format_attachment_info(image_count)
+    local icon = Config.options.ui.labels.attachments
+    return image_count == 1 and (icon .. " 1 image attached") or (icon .. " %d images attached"):format(image_count)
+end
 
 --- Capture extmarks in a row range (positions saved relative to start_row).
 ---@param buf integer
@@ -478,6 +486,9 @@ function History:_update_status_extmark()
             local label = entry.queue_type == "steer" and (Config.options.ui.labels.steer_message .. " ")
                 or (Config.options.ui.labels.follow_up_message .. " ")
             local preview = entry.text:gsub("\n", " ")
+            if preview == "" and entry.image_count and entry.image_count > 0 then
+                preview = format_attachment_info(entry.image_count)
+            end
             if #preview > 80 then
                 preview = preview:sub(1, 77) .. "…"
             end
@@ -819,7 +830,8 @@ function History:add_user_message(msg, timestamp, image_count, queue_type)
         end
         self:_clear_placeholder()
         local label = " " .. Config.options.ui.labels.user_message .. " "
-        local msg_lines = vim.split(msg, "\n", { plain = true })
+        local has_message_text = msg ~= ""
+        local msg_lines = has_message_text and vim.split(msg, "\n", { plain = true }) or {}
         -- Treesitter highlights fenced code blocks — an unclosed fence bleeds
         -- into everything below. We track fence parity and auto-close if odd.
         local fences = 0
@@ -843,9 +855,7 @@ function History:add_user_message(msg, timestamp, image_count, queue_type)
         local lines = { "", label_line }
         vim.list_extend(lines, msg_lines)
         if image_count and image_count > 0 then
-            local icon = Config.options.ui.labels.attachments
-            local info = image_count == 1 and (icon .. " 1 image attached")
-                or (icon .. " %d images attached"):format(image_count)
+            local info = format_attachment_info(image_count)
             lines[#lines + 1] = ""
             lines[#lines + 1] = info
         end
@@ -1559,11 +1569,13 @@ end
 ---@param queue_type "steer"|"follow_up"
 ---@param display_text string raw user text (for display)
 ---@param expanded_text string expanded text (for matching on delivery)
-function History:add_pending_queue_entry(queue_type, display_text, expanded_text)
+---@param image_count? integer
+function History:add_pending_queue_entry(queue_type, display_text, expanded_text, image_count)
     self._pending_queue[#self._pending_queue + 1] = {
         queue_type = queue_type,
         text = display_text,
         expanded_text = expanded_text,
+        image_count = image_count,
     }
     self:_update_status_extmark()
     if self:_should_auto_scroll() then

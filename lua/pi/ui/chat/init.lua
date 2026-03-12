@@ -328,7 +328,7 @@ function Chat:_send_message(queue_type)
 
     if queue_type then
         -- Queued message: show in pending area, render in history on delivery
-        self._history:add_pending_queue_entry(queue_type, text, expanded)
+        self._history:add_pending_queue_entry(queue_type, text, expanded, attachments and #attachments or nil)
     else
         -- Immediate: render in history now
         self._history:add_user_message(text, nil, attachments and #attachments or nil)
@@ -396,7 +396,7 @@ function Chat:on_agent_end()
     -- without delivering them (e.g. abort), render them now so they
     -- don't silently vanish.
     for _, entry in ipairs(self._history:get_pending_queue()) do
-        self._history:add_user_message(entry.text, nil, nil, entry.queue_type)
+        self._history:add_user_message(entry.text, nil, entry.image_count, entry.queue_type)
     end
     self._history:clear_pending_queue()
 
@@ -428,8 +428,9 @@ function Chat:on_message_start(msg)
     end
 
     if message.role == "user" then
-        -- Extract text from the user message content
+        -- Extract text and attachments from the user message content
         local text = ""
+        local image_count = 0
         if type(message.content) == "string" then
             text = message.content
         elseif type(message.content) == "table" then
@@ -438,13 +439,20 @@ function Chat:on_message_start(msg)
                     text = text .. part
                 elseif type(part) == "table" and part.type == "text" then
                     text = text .. (part.text or "")
+                elseif type(part) == "table" and part.type == "image" then
+                    image_count = image_count + 1
                 end
             end
         end
         local entry = self._history:remove_pending_queue_entry(text)
         if entry then
             self._steer_delivered = true
-            self._history:add_user_message(entry.text, nil, nil, entry.queue_type)
+            self._history:add_user_message(
+                entry.text,
+                nil,
+                image_count > 0 and image_count or entry.image_count,
+                entry.queue_type
+            )
         end
     elseif message.role == "assistant" and self._steer_delivered then
         -- After a steered user message is delivered, the agent starts a new
