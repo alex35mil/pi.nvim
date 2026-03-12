@@ -127,7 +127,7 @@ local function handle_event(session, msg)
     elseif t == "_process_exit" then
         vim.schedule(function()
             chat:set_status(nil)
-            if msg.code ~= 0 then
+            if Config.options.debug and msg.code ~= 0 and msg.code ~= 143 then
                 print("Process exited with code " .. (msg.code or "-"))
             end
         end)
