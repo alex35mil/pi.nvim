@@ -44,13 +44,39 @@ end
 ---@param win integer
 ---@param title string
 ---@param hl_group string
-local function set_winbar(win, title, hl_group)
-    vim.wo[win].winbar = "%#" .. hl_group .. "#%=%#" .. hl_group .. "Title# " .. title .. " %#" .. hl_group .. "#%="
+---@param title_hl_group? string
+local function set_winbar(win, title, hl_group, title_hl_group)
+    title_hl_group = title_hl_group or (hl_group .. "Title")
+    vim.wo[win].winbar = "%#" .. hl_group .. "#%=%#" .. title_hl_group .. "# " .. title .. " %#" .. hl_group .. "#%="
 end
 
 ---@param win integer
 local function clear_winbar(win)
     vim.wo[win].winbar = ""
+end
+
+--- Update prompt title styling to reflect pending attention.
+---@param has_attention boolean
+function Layout:refresh_prompt_attention(has_attention)
+    local pwin = self:prompt_win()
+    if not pwin then
+        return
+    end
+
+    if self._mode == "float" then
+        vim.wo[pwin].winhighlight = has_attention and Highlights.CHAT_PROMPT_ATTENTION_WINHIGHLIGHT
+            or Highlights.CHAT_PROMPT_WINHIGHLIGHT
+        return
+    end
+
+    if Config.options.ui.layout.side.panels.prompt.winbar then
+        set_winbar(
+            pwin,
+            Config.options.ui.panels.prompt.title,
+            "PiChatPromptWinbar",
+            has_attention and "PiChatPromptWinbarAttentionTitle" or "PiChatPromptWinbarTitle"
+        )
+    end
 end
 
 ---@param mode pi.LayoutMode

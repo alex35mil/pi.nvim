@@ -66,6 +66,7 @@ local function request_redraw()
         local session = require("pi.sessions.manager").get()
         if session then
             session.chat:render_statusline()
+            session.chat:refresh_prompt_attention()
         end
     end)
 end
@@ -460,8 +461,8 @@ prune_stale_queue = function()
     end
 end
 
---- Present a blocking extension UI request immediately if π is focused,
---- otherwise queue it for later.
+--- Present a blocking extension UI request immediately only when the π
+--- prompt has focus and there is no draft; otherwise queue it for later.
 ---@param session pi.Session
 ---@param msg pi.RpcEvent
 ---@return boolean handled
@@ -471,7 +472,7 @@ function M.present(session, msg)
         return false
     end
 
-    if session.chat:has_focus() and not session.chat:has_draft() then
+    if session.chat:has_prompt_focus() and not session.chat:has_draft() then
         if not entry.open() then
             notify_expired(entry.kind)
         end

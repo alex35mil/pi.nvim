@@ -133,6 +133,7 @@ end
 function Chat:show(opts)
     if not self._layout:show() then
         -- already shown
+        self:refresh_prompt_attention()
         return
     end
     self:_set_keymaps()
@@ -141,6 +142,7 @@ function Chat:show(opts)
     else
         self:show_welcome()
     end
+    self:refresh_prompt_attention()
     self._prompt:focus()
 end
 
@@ -182,12 +184,14 @@ end
 
 function Chat:toggle_layout()
     self._layout:toggle()
+    self:refresh_prompt_attention()
     self:focus_prompt()
 end
 
 ---@param mode pi.LayoutMode
 function Chat:set_layout(mode)
     self._layout:set_mode(mode)
+    self:refresh_prompt_attention()
 end
 
 ---@return pi.LayoutMode
@@ -210,30 +214,40 @@ function Chat:prompt_win()
     return self._layout:prompt_win()
 end
 
----@return boolean
-function Chat:has_focus()
+---@return "history"|"prompt"|"attachments"|nil
+function Chat:focus_kind()
     local current_tab = vim.api.nvim_get_current_tabpage()
     local current_win = vim.api.nvim_get_current_win()
     if self._tab and self._tab ~= current_tab then
-        return false
+        return nil
     end
 
     local history_win = self._layout:history_win()
     if history_win and history_win == current_win then
-        return true
+        return "history"
     end
 
     local prompt_win = self._layout:prompt_win()
     if prompt_win and prompt_win == current_win then
-        return true
+        return "prompt"
     end
 
     local attachments_win = self._layout:attachments_win()
     if attachments_win and attachments_win == current_win then
-        return true
+        return "attachments"
     end
 
-    return false
+    return nil
+end
+
+---@return boolean
+function Chat:has_focus()
+    return self:focus_kind() ~= nil
+end
+
+---@return boolean
+function Chat:has_prompt_focus()
+    return self:focus_kind() == "prompt"
 end
 
 ---@return boolean
@@ -475,6 +489,11 @@ end
 --- Re-render the prompt status line.
 function Chat:render_statusline()
     self._prompt:statusline():render()
+end
+
+--- Refresh prompt title styling when attention state changes.
+function Chat:refresh_prompt_attention()
+    self._layout:refresh_prompt_attention(require("pi.attention").has_attention(self._tab))
 end
 
 --- Reset status line usage stats (new session / clear).

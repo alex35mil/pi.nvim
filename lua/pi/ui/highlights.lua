@@ -3,6 +3,8 @@ local M = {}
 M.DIALOG_WINHIGHLIGHT = "NormalFloat:PiFloat,FloatBorder:PiFloatBorder,FloatTitle:PiDialogTitle"
 M.CHAT_HISTORY_WINHIGHLIGHT = "NormalFloat:PiFloat,FloatBorder:PiFloatBorder,FloatTitle:PiChatHistoryFloatTitle"
 M.CHAT_PROMPT_WINHIGHLIGHT = "NormalFloat:PiFloat,FloatBorder:PiFloatBorder,FloatTitle:PiChatPromptFloatTitle"
+M.CHAT_PROMPT_ATTENTION_WINHIGHLIGHT =
+    "NormalFloat:PiFloat,FloatBorder:PiFloatBorder,FloatTitle:PiChatPromptFloatAttentionTitle"
 M.CHAT_ATTACHMENTS_WINHIGHLIGHT = "NormalFloat:PiFloat,FloatBorder:PiFloatBorder,FloatTitle:PiChatAttachmentsFloatTitle"
 M.DIFF_WINHIGHLIGHT = "WinBar:PiDiffWinbar,WinBarNC:PiDiffWinbar"
 
@@ -58,6 +60,11 @@ local function set_defaults()
     vim.api.nvim_set_hl(0, "PiChatHistoryWinbarTitle", { default = true, fg = normal.bg, bg = user.fg, bold = true })
     vim.api.nvim_set_hl(0, "PiChatPromptWinbar", { default = true, bg = normal.bg })
     vim.api.nvim_set_hl(0, "PiChatPromptWinbarTitle", { default = true, fg = comment.fg, bg = normal.bg, bold = true })
+    vim.api.nvim_set_hl(
+        0,
+        "PiChatPromptWinbarAttentionTitle",
+        { default = true, fg = warning.fg, bg = normal.bg, bold = true }
+    )
     vim.api.nvim_set_hl(0, "PiChatAttachmentsWinbar", { default = true, bg = normal.bg })
     vim.api.nvim_set_hl(
         0,
@@ -70,6 +77,11 @@ local function set_defaults()
     vim.api.nvim_set_hl(0, "PiDialogTitle", { default = true, fg = title.fg, bold = true })
     vim.api.nvim_set_hl(0, "PiChatHistoryFloatTitle", { default = true, fg = normal.bg, bg = user.fg })
     vim.api.nvim_set_hl(0, "PiChatPromptFloatTitle", { default = true, fg = comment.fg, bg = normal.bg })
+    vim.api.nvim_set_hl(
+        0,
+        "PiChatPromptFloatAttentionTitle",
+        { default = true, fg = warning.fg, bg = normal.bg, bold = true }
+    )
     vim.api.nvim_set_hl(0, "PiChatAttachmentsFloatTitle", { default = true, fg = comment.fg, bg = normal.bg })
 
     vim.api.nvim_set_hl(0, "PiDialogSelected", { default = true, link = "Visual" })
