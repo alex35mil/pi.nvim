@@ -934,7 +934,8 @@ function History:on_text_delta(delta)
 end
 
 ---@param done_verb? string
-function History:on_agent_end(done_verb)
+---@param opts? { force_completion?: boolean }
+function History:on_agent_end(done_verb, opts)
     vim.schedule(function()
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
@@ -954,17 +955,21 @@ function History:on_agent_end(done_verb)
         if not self._agent_start_time then
             return
         end
-        local secs = math.floor(vim.uv.hrtime() / 1e9 - self._agent_start_time)
+        local elapsed = vim.uv.hrtime() / 1e9 - self._agent_start_time
+        local secs = math.floor(elapsed)
         self._agent_start_time = nil
-        if secs < 1 then
+        local force_completion = opts and opts.force_completion == true
+        if secs < 1 and not force_completion then
             return
         end
         local verb = done_verb or "Completed"
         local text
         if secs >= 60 then
             text = verb .. " in " .. math.floor(secs / 60) .. "m " .. (secs % 60) .. "s"
-        else
+        elseif secs >= 1 then
             text = verb .. " in " .. secs .. "s"
+        else
+            text = verb .. " in <1s"
         end
         local start = self:_append_lines({ "", text })
         vim.api.nvim_buf_set_extmark(self._buf, ns, start + 1, 0, {
@@ -975,18 +980,39 @@ function History:on_agent_end(done_verb)
 end
 
 ---@param error_message string
-function History:on_error(error_message)
+---@param opts? { pad_top?: boolean, pad_bottom?: boolean }
+function History:on_error(error_message, opts)
     vim.schedule(function()
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
         end
         local icon = Config.options.ui.labels.error
-        local text = icon .. " " .. error_message
-        local start = self:_append_lines({ text })
-        vim.api.nvim_buf_set_extmark(self._buf, ns, start, 0, {
-            end_col = #text,
-            hl_group = "PiError",
-        })
+        local error_lines = vim.split(error_message, "\n", { plain = true })
+        local indent = string.rep(" ", vim.fn.strdisplaywidth(icon) + 1)
+        error_lines[1] = icon .. " " .. error_lines[1]
+        for i = 2, #error_lines do
+            error_lines[i] = indent .. error_lines[i]
+        end
+
+        local lines = {}
+        if opts and opts.pad_top then
+            lines[#lines + 1] = ""
+        end
+        local first_error_row = #lines + 1
+        for _, line in ipairs(error_lines) do
+            lines[#lines + 1] = line
+        end
+        if opts and opts.pad_bottom then
+            lines[#lines + 1] = ""
+        end
+
+        local start = self:_append_lines(lines)
+        for i, line in ipairs(error_lines) do
+            vim.api.nvim_buf_set_extmark(self._buf, ns, start + first_error_row + i - 2, 0, {
+                end_col = #line,
+                hl_group = "PiError",
+            })
+        end
         self:_maybe_scroll()
     end)
 end
@@ -1000,7 +1026,12 @@ function History:on_stderr(text)
         local label = " " .. Config.options.ui.labels.debug_message .. " "
         local time_str = format_time(os.time() * 1000)
         local label_line = label .. time_str
-        local start = self:_append_lines({ "", label_line, text })
+        local text_lines = vim.split(text, "\n", { plain = true })
+        local lines = { "", label_line }
+        for _, line in ipairs(text_lines) do
+            lines[#lines + 1] = line
+        end
+        local start = self:_append_lines(lines)
         local label_row = start + 1
         vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, 0, {
             end_col = #label,
@@ -1010,10 +1041,12 @@ function History:on_stderr(text)
             end_col = #label_line,
             hl_group = "PiMessageDateTime",
         })
-        vim.api.nvim_buf_set_extmark(self._buf, ns, label_row + 1, 0, {
-            end_col = #text,
-            hl_group = "PiDebug",
-        })
+        for i, line in ipairs(text_lines) do
+            vim.api.nvim_buf_set_extmark(self._buf, ns, label_row + i, 0, {
+                end_col = #line,
+                hl_group = "PiDebug",
+            })
+        end
         self:_maybe_scroll()
     end)
 end

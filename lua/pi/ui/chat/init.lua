@@ -14,6 +14,7 @@
 ---@field _steer_delivered boolean
 ---@field _active_verb string?
 ---@field _done_verb string?
+---@field _last_turn_stop_reason "aborted"|"error"|nil
 ---@field _attachments pi.ChatAttachments
 local Chat = {}
 Chat.__index = Chat
@@ -42,6 +43,7 @@ function Chat.new(tab, mode, agent)
     self._steer_delivered = false
     self._active_verb = nil
     self._done_verb = nil
+    self._last_turn_stop_reason = nil
     return self
 end
 
@@ -373,6 +375,7 @@ end
 ---@param timestamp? number
 function Chat:on_agent_start(timestamp)
     self._streaming = true
+    self._last_turn_stop_reason = nil
     local verbs = Config.random_verbs()
     self._active_verb = verbs[1]
     self._done_verb = verbs[2]
@@ -396,7 +399,22 @@ function Chat:on_agent_end()
         self._history:add_user_message(entry.text, nil, nil, entry.queue_type)
     end
     self._history:clear_pending_queue()
-    self._history:on_agent_end(self._done_verb)
+
+    local completion_text = self._done_verb
+    local force_completion = false
+    if self._last_turn_stop_reason == "aborted" then
+        completion_text = "Aborted"
+        force_completion = true
+    elseif self._last_turn_stop_reason == "error" then
+        completion_text = "Failed"
+        force_completion = true
+    end
+
+    self._active_verb = nil
+    self._done_verb = nil
+    self._last_turn_stop_reason = nil
+
+    self._history:on_agent_end(completion_text, { force_completion = force_completion })
     self:set_status(nil)
 end
 
@@ -457,6 +475,8 @@ function Chat:on_message_end(msg)
     end
 
     if stop == "aborted" or stop == "error" then
+        self._last_turn_stop_reason = stop
+
         local error_message
         if stop == "aborted" then
             error_message = "[aborted] Operation aborted"
@@ -464,6 +484,19 @@ function Chat:on_message_end(msg)
             error_message = message.errorMessage or "Error"
         end
         self._history:mark_pending_tools_errored(error_message)
+
+        local has_tool_calls = false
+        if type(message.content) == "table" then
+            for _, part in ipairs(message.content) do
+                if type(part) == "table" and part.type == "toolCall" then
+                    has_tool_calls = true
+                    break
+                end
+            end
+        end
+        if stop == "error" and not has_tool_calls then
+            self._history:on_error(error_message)
+        end
     end
 end
 
@@ -502,8 +535,9 @@ function Chat:reset_usage()
 end
 
 ---@param error_message string
-function Chat:on_error(error_message)
-    self._history:on_error(error_message)
+---@param opts? { pad_top?: boolean, pad_bottom?: boolean }
+function Chat:on_error(error_message, opts)
+    self._history:on_error(error_message, opts)
 end
 
 ---@param text string
@@ -553,6 +587,9 @@ end
 function Chat:clear()
     self._streaming = false
     self._steer_delivered = false
+    self._active_verb = nil
+    self._done_verb = nil
+    self._last_turn_stop_reason = nil
     self._history:clear()
     self._prompt:statusline():reset_usage()
 end

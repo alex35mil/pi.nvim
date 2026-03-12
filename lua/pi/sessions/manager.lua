@@ -105,7 +105,13 @@ local function handle_event(session, msg)
     elseif t == "auto_retry_start" then
         chat:set_status({ type = "agent", text = "Retrying…" })
     elseif t == "auto_retry_end" then
-        chat:set_status({ type = "agent", text = (chat:active_verb() or "Working") .. "…" })
+        chat:set_status(nil)
+        if msg.success == false then
+            chat:on_error(
+                "Retry failed after " .. tostring(msg.attempt or 0) .. " attempts: " .. (msg.finalError or "Unknown error"),
+                { pad_top = true, pad_bottom = true }
+            )
+        end
     elseif t == "extension_ui_request" then
         vim.schedule(function()
             Extension.handle(session, msg)

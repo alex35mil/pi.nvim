@@ -177,7 +177,7 @@ local defaults = {
             thinking = "󰟶",
             attachment = "",
             attachments = "",
-            error = " 󱚟 ",
+            error = "󰘨 󱚟 󱔁 ",
         },
         layout = {
             default = "side",
