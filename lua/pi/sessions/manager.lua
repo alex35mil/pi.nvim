@@ -399,74 +399,156 @@ local function replay_messages(session, messages)
     session.chat:set_replaying(false)
 end
 
---- Load a session by path: switch_session -> get_messages -> replay into chat.
+--- Load a session by path: switch_session -> clear chat -> get_messages -> replay.
 ---@param session pi.Session
 ---@param session_path string
 local function load_session(session, session_path)
     Attention.begin_session_transition(session)
-    local sent = session.rpc:send({ type = "abort" }, function(abort_res)
-        if not abort_res.success then
+
+    local sent_switch = session.rpc:send({ type = "switch_session", sessionPath = session_path }, function(msg)
+        local data = msg.data or {}
+        if not msg.success then
             vim.schedule(function()
                 Attention.end_session_transition(session, false)
-                Notify.error(abort_res.error or "Failed to abort current session")
+                Notify.error(msg.error or "Failed to switch session")
             end)
             return
         end
-        local sent_switch = session.rpc:send({ type = "switch_session", sessionPath = session_path }, function(msg)
-            local data = msg.data or {}
-            if not msg.success then
-                vim.schedule(function()
-                    Attention.end_session_transition(session, false)
-                    Notify.error(msg.error or "Failed to switch session")
-                end)
-                return
-            end
-            if data.cancelled then
-                vim.schedule(function()
-                    Attention.end_session_transition(session, false)
-                    Notify.warn("Session switch was cancelled")
-                end)
-                return
-            end
-            Attention.end_session_transition(session, true)
-            session.rpc:send({ type = "get_messages" }, function(res)
-                vim.schedule(function()
-                    local messages = (res.data or {}).messages or {}
-                    replay_messages(session, messages)
-                    session.chat:ensure_shown_and_focus_prompt()
-                end)
-            end)
-        end)
-        if not sent_switch then
+        if data.cancelled then
             vim.schedule(function()
                 Attention.end_session_transition(session, false)
+                Notify.warn("Session switch was cancelled")
+            end)
+            return
+        end
+
+        Attention.end_session_transition(session, true)
+        M.refresh_state(session)
+
+        vim.schedule(function()
+            session.chat:clear()
+            session.chat:show_loading()
+        end)
+
+        local sent_messages = session.rpc:send({ type = "get_messages" }, function(res)
+            vim.schedule(function()
+                session.chat:clear()
+                if not res.success then
+                    local err = res.error or "Failed to load session messages"
+                    Notify.error(err)
+                    session.chat:on_error(err, { pad_top = true, pad_bottom = true })
+                    session.chat:ensure_shown_and_focus_prompt()
+                    return
+                end
+
+                local messages = (res.data or {}).messages or {}
+                replay_messages(session, messages)
+                session.chat:ensure_shown_and_focus_prompt()
+            end)
+        end)
+        if not sent_messages then
+            vim.schedule(function()
+                session.chat:clear()
+                Notify.error("Failed to load session messages")
+                session.chat:on_error("Failed to load session messages", { pad_top = true, pad_bottom = true })
+                session.chat:ensure_shown_and_focus_prompt()
             end)
         end
     end)
-    if not sent then
+
+    if not sent_switch then
         Attention.end_session_transition(session, false)
     end
+end
+
+---@param current_session_file? string
+---@return string?
+local function find_continue_session_path(current_session_file)
+    local History = require("pi.sessions.history")
+    local sessions_list = History.list()
+    for _, session in ipairs(sessions_list) do
+        if session.path ~= current_session_file then
+            return session.path
+        end
+    end
+    return nil
+end
+
+---@param session pi.Session
+---@param state table?
+---@return boolean
+local function is_empty_session_state(session, state)
+    if type(state) ~= "table" then
+        return false
+    end
+
+    local message_count = type(state.messageCount) == "number" and state.messageCount or nil
+    local pending_count = type(state.pendingMessageCount) == "number" and state.pendingMessageCount or nil
+    if message_count == nil or pending_count == nil then
+        return false
+    end
+
+    return message_count == 0
+        and pending_count == 0
+        and state.isStreaming ~= true
+        and state.isCompacting ~= true
+        and not session.chat:has_draft()
+end
+
+---@param session pi.Session
+local function show_no_previous_sessions(session)
+    Notify.info("No previous sessions found")
+    session.chat:show_welcome()
+    session.chat:ensure_shown_and_focus_prompt()
 end
 
 --- Continue the most recent session for the current cwd.
 ---@param opts? pi.SessionCreateOpts
 function M.continue_session(opts)
-    local session = M.get_or_create(opts)
+    local session = M.get()
     if not session then
+        local session_path = find_continue_session_path(nil)
+        session = M.get_or_create(opts)
+        if not session then
+            return
+        end
+        if not session_path then
+            show_no_previous_sessions(session)
+            return
+        end
+        session.chat:show({ loading = true })
+        load_session(session, session_path)
         return
     end
-    session.chat:show({ loading = true })
 
-    local History = require("pi.sessions.history")
-    local sessions_list = History.list()
-    if #sessions_list == 0 then
-        Notify.info("No previous sessions found")
-        session.chat:show_welcome()
-        session.chat:ensure_shown_and_focus_prompt()
-        return
+    local sent = session.rpc:send({ type = "get_state" }, function(res)
+        vim.schedule(function()
+            if M.get() ~= session then
+                return
+            end
+            if not res.success then
+                Notify.error(res.error or "Failed to fetch session state")
+                return
+            end
+
+            local state = res.data or {}
+            if not is_empty_session_state(session, state) then
+                return
+            end
+
+            local session_path = find_continue_session_path(state.sessionFile)
+            if not session_path then
+                show_no_previous_sessions(session)
+                return
+            end
+
+            session.chat:show({ loading = true })
+            load_session(session, session_path)
+        end)
+    end)
+    if not sent then
+        Notify.error("Failed to fetch session state")
     end
-
-    load_session(session, sessions_list[1].path)
 end
 
 --- Show a picker to resume a past session.
