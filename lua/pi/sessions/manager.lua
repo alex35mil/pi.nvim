@@ -291,6 +291,11 @@ function M.new_session()
         return
     end
 
+    if not session.chat:is_streaming() then
+        start_new_session(session)
+        return
+    end
+
     Dialog.confirm({
         title = "Start new session?",
         message = "This opens a fresh session. You can resume the current conversation later.",
