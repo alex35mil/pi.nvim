@@ -20,6 +20,7 @@ local Chat = require("pi.ui.chat")
 local Config = require("pi.config")
 local Notify = require("pi.notify")
 local Attention = require("pi.attention")
+local Dialog = require("pi.ui.dialog")
 local Extension = require("pi.ui.extension")
 local CommandsCache = require("pi.cache.commands")
 
@@ -239,10 +240,9 @@ function M.stop()
     sessions[tab] = nil
 end
 
---- Start a new conversation in the current tab's session.
-function M.new_session()
-    local session = M.get()
-    if not session or not session.rpc:is_running() then
+---@param session pi.Session
+local function start_new_session(session)
+    if sessions[session.tab] ~= session or not session.rpc:is_running() then
         return
     end
 
@@ -282,6 +282,24 @@ function M.new_session()
     if not sent then
         Attention.end_session_transition(session, false)
     end
+end
+
+--- Start a new conversation in the current tab's session.
+function M.new_session()
+    local session = M.get()
+    if not session or not session.rpc:is_running() then
+        return
+    end
+
+    Dialog.confirm({
+        title = "Start new session?",
+        message = "This opens a fresh session. You can resume the current conversation later.",
+    }, function(confirmed)
+        if not confirmed then
+            return
+        end
+        start_new_session(session)
+    end)
 end
 
 --- Replay messages from get_messages response into chat.
