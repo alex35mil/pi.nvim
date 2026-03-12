@@ -35,12 +35,6 @@ local function write_file(path, lines)
     return true
 end
 
----@param path string
----@return string
-local function get_filetype(path)
-    return vim.filetype.match({ filename = path }) or ""
-end
-
 ---@param abs_path string
 local function reload_buf_for_file(abs_path)
     for _, b in ipairs(vim.api.nvim_list_bufs()) do
@@ -224,7 +218,6 @@ function M.open(payload, callback, opts)
         table.remove(proposed_lines)
     end
 
-    local ft = get_filetype(path)
     local rel_path = vim.fn.fnamemodify(path, ":~:.")
     local after_name = "pi://review" .. path
 
@@ -236,6 +229,7 @@ function M.open(payload, callback, opts)
     local left_win = vim.api.nvim_get_current_win()
     vim.cmd("edit " .. vim.fn.fnameescape(path))
     local before_buf = vim.api.nvim_win_get_buf(left_win)
+    local ft = vim.bo[before_buf].filetype
     local prev_modifiable = vim.bo[before_buf].modifiable
     local prev_readonly = vim.bo[before_buf].readonly
     vim.bo[before_buf].modifiable = false
