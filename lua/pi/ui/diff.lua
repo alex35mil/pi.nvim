@@ -272,23 +272,60 @@ function M.open(payload, callback, opts)
     end
     vim.cmd("wincmd =")
 
-    -- Defer diffthis until async handlers have settled
-    vim.defer_fn(function()
+    ---@return integer?
+    local function first_valid_review_win()
+        for _, win in ipairs({ right_win, left_win }) do
+            if vim.api.nvim_win_is_valid(win) then
+                return win
+            end
+        end
+        return nil
+    end
+
+    local function refresh_review_diff()
         if not vim.api.nvim_tabpage_is_valid(review_tab) then
             return
         end
-        for _, win in ipairs({ right_win, left_win }) do -- should go right then left
+        for _, win in ipairs({ right_win, left_win }) do
             if vim.api.nvim_win_is_valid(win) then
                 vim.api.nvim_win_call(win, function()
                     vim.cmd("diffthis")
                 end)
             end
         end
+        local diff_win = first_valid_review_win()
+        if not diff_win then
+            return
+        end
+        vim.api.nvim_win_call(diff_win, function()
+            pcall(vim.cmd, "diffupdate")
+            pcall(vim.cmd, "syncbind")
+        end)
+    end
+
+    -- Defer diff setup until async handlers have settled, then force one
+    -- more refresh after the initial jump/focus handoff. Calling :diffthis
+    -- unconditionally matters here: the manual workaround is to rerun it in
+    -- the left pane even when that window already has 'diff' set.
+    vim.defer_fn(function()
+        if not vim.api.nvim_tabpage_is_valid(review_tab) then
+            return
+        end
+        refresh_review_diff()
         pcall(vim.api.nvim_win_call, left_win, function()
             vim.cmd("normal! gg]c")
         end)
-        vim.api.nvim_set_current_win(right_win)
-        vim.cmd("stopinsert")
+        if vim.api.nvim_win_is_valid(right_win) then
+            vim.api.nvim_set_current_win(right_win)
+            refresh_review_diff()
+            vim.cmd("stopinsert")
+        end
+        vim.defer_fn(function()
+            if not vim.api.nvim_tabpage_is_valid(review_tab) then
+                return
+            end
+            refresh_review_diff()
+        end, 20)
     end, 50)
 
     local keymaps = Config.options.keymaps
@@ -312,14 +349,18 @@ function M.open(payload, callback, opts)
         if timeout then
             pcall(vim.fn.timer_stop, timeout)
         end
-        -- Clear winbar and diffoff on both windows to restore original state
+        -- Clear winbar and drop all diff state in the review tab, including
+        -- any hidden buffers that may still be remembered by the diff engine.
         for _, w in ipairs({ left_win, right_win }) do
             if vim.api.nvim_win_is_valid(w) then
                 vim.wo[w].winbar = ""
-                vim.api.nvim_win_call(w, function()
-                    vim.cmd("diffoff")
-                end)
             end
+        end
+        local diff_win = first_valid_review_win()
+        if diff_win then
+            vim.api.nvim_win_call(diff_win, function()
+                vim.cmd("diffoff!")
+            end)
         end
         -- Restore the real file buffer's original state
         if vim.api.nvim_buf_is_valid(before_buf) then
