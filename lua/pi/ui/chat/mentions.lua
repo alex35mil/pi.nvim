@@ -26,6 +26,7 @@ end
 --- `@path/to/file` → `[file: path/to/file]`
 --- `@path/to/file#L10` → `[file: path/to/file, line: 10]`
 --- `@path/to/file#L10-20` → `[file: path/to/file, lines: 10-20]`
+--- `@path/to/dir/` → `[directory: path/to/dir/]`
 --- No file content is inlined — the agent has Read tool.
 ---@param text string
 ---@return string
@@ -37,6 +38,9 @@ function M.expand(text)
             path = clean
         end
         local abs = vim.fn.fnamemodify(path, ":p")
+        if vim.fn.isdirectory(abs) == 1 then
+            return "[directory: " .. path .. "]" .. trailing
+        end
         if vim.fn.filereadable(abs) ~= 1 then
             return nil
         end

@@ -67,7 +67,7 @@ function M.exists(path)
         return true
     end
     local abs = vim.fn.fnamemodify(path, ":p")
-    return vim.fn.filereadable(abs) == 1
+    return vim.fn.filereadable(abs) == 1 or vim.fn.isdirectory(abs) == 1
 end
 
 --- Invalidate the cache.
