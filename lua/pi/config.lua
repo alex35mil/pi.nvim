@@ -45,7 +45,8 @@
 ---@class pi.Labels
 ---@field user_message string
 ---@field agent_response string
----@field debug_message string
+---@field system_message string
+---@field system_error string
 ---@field tool string
 ---@field tool_success string
 ---@field tool_failure string
@@ -109,7 +110,7 @@
 ---@class pi.UiConfig
 ---@field spinner pi.SpinnerPreset|string[]|{ refresh_rate?: integer, frames: string[] } preset name or custom
 ---@field show_thinking boolean
----@field show_debug boolean
+---@field show_system_messages boolean
 ---@field panels pi.Panels
 ---@field labels pi.Labels
 ---@field layout pi.LayoutConfig
@@ -163,7 +164,7 @@ local defaults = {
     ui = {
         spinner = "robot",
         show_thinking = false,
-        show_debug = false,
+        show_system_messages = true,
         panels = {
             history = { title = "π" },
             prompt = { title = "󰫽󰫿󰫼󰫺󰫽󰬁" },
@@ -172,7 +173,8 @@ local defaults = {
         labels = {
             user_message = "",
             agent_response = "󰚩",
-            debug_message = "",
+            system_message = "",
+            system_error = "󱚟",
             tool = "󰻂",
             tool_success = "",
             tool_failure = "",

@@ -4,11 +4,21 @@
 ---@field pending pi.AttentionEntry[]
 ---@field transition_seq? integer Hide queued entries with seq <= this while a session transition is in flight.
 
+---@class pi.SessionWidget
+---@field lines string[]
+---@field placement? string
+
+---@class pi.SystemErrorEntry
+---@field message string
+---@field timestamp integer
+
 ---@class pi.Session
 ---@field tab pi.TabId
 ---@field rpc pi.Rpc
 ---@field chat pi.Chat
 ---@field attention pi.SessionAttention
+---@field widgets table<string, pi.SessionWidget> Extension-provided text shown in the system preamble. Ad-hoc: the only way to surface extension info in the UI via RPC without polluting context.
+---@field system_errors pi.SystemErrorEntry[]
 
 ---@class pi.SessionCreateOpts
 ---@field layout? pi.LayoutMode
@@ -23,6 +33,32 @@ local Attention = require("pi.attention")
 local Dialog = require("pi.ui.dialog")
 local Extension = require("pi.ui.extension")
 local CommandsCache = require("pi.cache.commands")
+local SystemReport = require("pi.system_report")
+
+---@class pi.SystemInfoSection
+---@field header string
+---@field items string[]
+---@field hl? string
+
+---@param session pi.Session
+---@param commands? pi.SlashCommand[]
+local function show_system_info(session, commands)
+    if not Config.options.ui.show_system_messages then
+        return
+    end
+    local sections = SystemReport.build_startup_sections(session, commands)
+    if #sections > 0 or #session.system_errors > 0 then
+        session.chat:show_system_info(sections, session.system_errors)
+    end
+end
+
+--- Fetch commands and show system info on a session's chat if enabled.
+---@param session pi.Session
+local function fetch_commands_and_show_system_info(session)
+    CommandsCache.fetch(session.rpc, function(commands)
+        show_system_info(session, commands)
+    end)
+end
 
 ---@type table<pi.TabId, pi.Session>
 local sessions = {}
@@ -120,9 +156,28 @@ local function handle_event(session, msg)
         vim.schedule(function()
             Extension.handle(session, msg)
         end)
+    elseif t == "extension_error" then
+        local extension_path = type(msg.extensionPath) == "string" and msg.extensionPath or "unknown extension"
+        local extension_event = type(msg.event) == "string" and msg.event or "unknown event"
+        local error_message = type(msg.error) == "string" and msg.error or "Unknown error"
+        local formatted = "Extension error ("
+            .. vim.fn.fnamemodify(extension_path, ":~:.")
+            .. ", "
+            .. extension_event
+            .. "):\n"
+            .. error_message
+        session.system_errors[#session.system_errors + 1] = {
+            message = formatted,
+            timestamp = os.time() * 1000,
+        }
+        chat:on_system_error(formatted, { pad_top = true, pad_bottom = true })
     elseif t == "_stderr" then
-        if Config.options.ui.show_debug and type(msg.message) == "string" then
-            chat:on_stderr(msg.message --[[@as string]])
+        if type(msg.message) == "string" and msg.message ~= "" then
+            session.system_errors[#session.system_errors + 1] = {
+                message = msg.message --[[@as string]],
+                timestamp = os.time() * 1000,
+            }
+            chat:on_system_error(msg.message --[[@as string]], { pad_top = true, pad_bottom = true })
         end
     elseif t == "_process_exit" then
         vim.schedule(function()
@@ -207,6 +262,8 @@ function M.get_or_create(opts)
         rpc = rpc,
         chat = chat,
         attention = { pending = {} },
+        widgets = {},
+        system_errors = {},
     }
 
     rpc:set_handler(function(msg)
@@ -215,8 +272,8 @@ function M.get_or_create(opts)
 
     sessions[tab] = session
 
-    -- Fetch available /commands for completion and highlighting
-    CommandsCache.fetch(rpc)
+    -- Fetch available /commands for completion, highlighting, and system info
+    fetch_commands_and_show_system_info(session)
 
     -- Fetch initial state for status line (model, thinking level)
     M.refresh_state(session)
@@ -269,8 +326,10 @@ local function start_new_session(session)
                     return
                 end
                 Attention.end_session_transition(session, true)
+                session.widgets = {}
                 session.chat:clear()
                 session.chat:show_welcome()
+                fetch_commands_and_show_system_info(session)
             end)
         end)
         if not sent_new then
@@ -431,13 +490,15 @@ local function load_session(session, session_path)
         M.refresh_state(session)
 
         vim.schedule(function()
+            session.widgets = {}
             session.chat:clear()
             session.chat:show_loading()
         end)
 
         local sent_messages = session.rpc:send({ type = "get_messages" }, function(res)
             vim.schedule(function()
-                session.chat:clear()
+                session.widgets = {}
+                session.chat:clear_placeholder()
                 if not res.success then
                     local err = res.error or "Failed to load session messages"
                     Notify.error(err)
@@ -447,8 +508,12 @@ local function load_session(session, session_path)
                 end
 
                 local messages = (res.data or {}).messages or {}
-                replay_messages(session, messages)
-                session.chat:ensure_shown_and_focus_prompt()
+                -- Fetch commands, optionally show system info, then replay.
+                CommandsCache.fetch(session.rpc, function(commands)
+                    show_system_info(session, commands)
+                    replay_messages(session, messages)
+                    session.chat:ensure_shown_and_focus_prompt()
+                end)
             end)
         end)
         if not sent_messages then

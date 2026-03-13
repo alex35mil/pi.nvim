@@ -164,30 +164,18 @@ function Chat:show(opts)
     self._prompt:focus()
 end
 
---- Show a welcome placeholder on the empty history buffer.
+--- Show a welcome message on a session with no conversation content yet.
 function Chat:show_welcome()
-    local icon = " " .. Config.options.ui.labels.agent_response .. " "
-    self._history:set_placeholder({
-        { { "" } },
-        {
-            { icon, "PiAgentResponseLabel" },
-            { "  Hi! Ask me anything or describe what you'd like to build.", "PiWelcome" },
-        },
-        { { "" } },
-        {
-            { "     Use ", "PiWelcomeHint" },
-            { "@file", "PiMention" },
-            { " to mention files or ", "PiWelcomeHint" },
-            { "/command", "PiCommand" },
-            { " for shortcuts.", "PiWelcomeHint" },
-        },
-    })
+    if self._history:has_conversation_content() then
+        return
+    end
+    self._history:show_welcome_message()
 end
 
 --- Show a loading placeholder on the empty history buffer.
 function Chat:show_loading()
     local icon = " " .. Config.options.ui.labels.agent_response .. " "
-    self._history:set_placeholder({
+    self._history:show_loading_placeholder({
         { { "" } },
         {
             { icon, "PiAgentResponseLabel" },
@@ -570,15 +558,26 @@ function Chat:reset_usage()
     self._prompt:statusline():reset_usage()
 end
 
+---@param sections pi.SystemInfoSection[]
+---@param errors? pi.SystemErrorEntry[]
+function Chat:show_system_info(sections, errors)
+    self._history:show_system_info(sections, errors)
+end
+
+function Chat:clear_placeholder()
+    self._history:clear_placeholder()
+end
+
 ---@param error_message string
----@param opts? { pad_top?: boolean, pad_bottom?: boolean }
+---@param opts? pi.ChatErrorOpts
 function Chat:on_error(error_message, opts)
     self._history:on_error(error_message, opts)
 end
 
----@param text string
-function Chat:on_stderr(text)
-    self._history:on_stderr(text)
+---@param error_message string
+---@param opts? pi.ChatErrorOpts
+function Chat:on_system_error(error_message, opts)
+    self._history:on_system_error(error_message, opts)
 end
 
 ---@param tool_name string

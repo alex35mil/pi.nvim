@@ -22,6 +22,13 @@
 ---@field _thinking_blocks pi.ThinkingBlock[]
 ---@field _tool_blocks table<string, pi.ToolBlock>
 ---@field _placeholder_extmark integer?
+---@field _placeholder_mode? "loading"
+---@field _has_conversation_content boolean
+---@field _welcome_line_count integer
+---@field _system_preamble_line_count integer
+---@field _system_info_timestamp integer?
+---@field _system_info_sections pi.SystemInfoSection[]
+---@field _startup_system_errors pi.SystemErrorEntry[]
 ---@field _pending_queue pi.PendingQueueEntry[]
 ---@field _pending_queue_extmark_id integer?
 ---@field _replaying boolean
@@ -71,6 +78,16 @@ History.__index = History
 ---@field expanded_text string
 ---@field image_count? integer
 
+---@class pi.ChatErrorOpts
+---@field pad_top? boolean
+---@field pad_bottom? boolean
+
+---@class pi.HighlightMark
+---@field row integer
+---@field col_start integer
+---@field col_end integer
+---@field hl string
+
 local Ft = require("pi.filetypes")
 local Config = require("pi.config")
 local Tools = require("pi.ui.chat.tools")
@@ -78,6 +95,12 @@ local Tools = require("pi.ui.chat.tools")
 local ns = vim.api.nvim_create_namespace("pi-chat")
 
 local SCROLL_THRESHOLD = 10
+local SYSTEM_HL_PRIORITY = 200
+
+---@return integer
+local function now_ms()
+    return os.time() * 1000
+end
 
 ---@param image_count integer
 ---@return string
@@ -368,6 +391,13 @@ function History.new(tab)
     self._thinking_blocks = {}
     self._tool_blocks = {}
     self._placeholder_extmark = nil
+    self._placeholder_mode = nil
+    self._has_conversation_content = false
+    self._welcome_line_count = 0
+    self._system_preamble_line_count = 0
+    self._system_info_timestamp = nil
+    self._system_info_sections = {}
+    self._startup_system_errors = {}
     self._pending_queue = {}
     self._pending_queue_extmark_id = nil
     self._replaying = false
@@ -850,7 +880,7 @@ function History:add_user_message(msg, timestamp, image_count, queue_type)
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
         end
-        self:_clear_placeholder()
+        self:_begin_conversation_content()
         local label = " " .. Config.options.ui.labels.user_message .. " "
         local has_message_text = msg ~= ""
         local msg_lines = has_message_text and vim.split(msg, "\n", { plain = true }) or {}
@@ -916,7 +946,7 @@ function History:on_agent_start(timestamp)
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
         end
-        self:_clear_placeholder()
+        self:_begin_conversation_content()
         self._agent_start_time = vim.uv.hrtime() / 1e9
         self._first_delta = true
         self._needs_separator = false
@@ -1013,7 +1043,7 @@ function History:on_agent_end(done_verb, opts)
 end
 
 ---@param error_message string
----@param opts? { pad_top?: boolean, pad_bottom?: boolean }
+---@param opts? pi.ChatErrorOpts
 function History:on_error(error_message, opts)
     vim.schedule(function()
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
@@ -1050,38 +1080,369 @@ function History:on_error(error_message, opts)
     end)
 end
 
----@param text string
-function History:on_stderr(text)
+---@param error_message string
+---@param timestamp integer
+---@param opts? pi.ChatErrorOpts
+function History:_append_system_error_block(error_message, timestamp, opts)
+    local label = " " .. Config.options.ui.labels.system_error .. " "
+    local time_str = format_time(timestamp)
+    local label_line = label .. time_str
+    local error_lines = vim.split(error_message, "\n", { plain = true })
+
+    local lines = {}
+    if opts and opts.pad_top then
+        lines[#lines + 1] = ""
+    end
+    local label_row_offset = #lines
+    lines[#lines + 1] = label_line
+    for _, line in ipairs(error_lines) do
+        lines[#lines + 1] = line
+    end
+    if opts and opts.pad_bottom then
+        lines[#lines + 1] = ""
+    end
+
+    local start = self:_append_lines(lines)
+    local label_row = start + label_row_offset
+    vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, 0, {
+        end_col = #label,
+        hl_group = "PiSystemErrorLabel",
+        priority = SYSTEM_HL_PRIORITY,
+    })
+    vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, #label, {
+        end_col = #label_line,
+        hl_group = "PiMessageDateTime",
+        priority = SYSTEM_HL_PRIORITY,
+    })
+    for i, line in ipairs(error_lines) do
+        vim.api.nvim_buf_set_extmark(self._buf, ns, label_row + i, 0, {
+            end_col = #line,
+            hl_group = "PiSystemError",
+            priority = SYSTEM_HL_PRIORITY,
+        })
+    end
+    self:_maybe_scroll()
+end
+
+---@param sections table[]
+---@return pi.SystemInfoSection[]
+function History:_normalize_system_sections(sections)
+    local normalized = {} ---@type pi.SystemInfoSection[]
+    for _, section in ipairs(sections or {}) do
+        local header = section.header or section.title
+        local items = section.items or section.lines or {}
+        if type(header) == "string" and type(items) == "table" then
+            local normalized_items = {} ---@type string[]
+            for _, item in ipairs(items) do
+                if type(item) == "string" then
+                    normalized_items[#normalized_items + 1] = item
+                end
+            end
+            if #normalized_items > 0 then
+                normalized[#normalized + 1] = {
+                    header = header,
+                    items = normalized_items,
+                    hl = section.hl,
+                }
+            end
+        end
+    end
+    return normalized
+end
+
+function History:_remove_welcome_from_buffer()
+    local count = self._welcome_line_count
+    if count == 0 then
+        return
+    end
+    self:_with_modifiable(function()
+        local line_count = vim.api.nvim_buf_line_count(self._buf)
+        if line_count == count then
+            vim.api.nvim_buf_set_lines(self._buf, 0, count, false, { "" })
+        else
+            vim.api.nvim_buf_set_lines(self._buf, 0, count, false, {})
+        end
+    end)
+    self._welcome_line_count = 0
+    self:_update_status_extmark()
+end
+
+---@return string[], pi.HighlightMark[]
+function History:_build_welcome_message()
+    local label = " " .. Config.options.ui.labels.agent_response .. " "
+    local body = "  Hi! Ask me anything or describe what you'd like to build."
+    local hint_prefix = "     Use "
+    local mention = "@file"
+    local hint_middle = " to mention files or "
+    local command = "/command"
+    local hint_suffix = " for shortcuts."
+
+    local lines = {
+        "",
+        label .. body,
+        "",
+        hint_prefix .. mention .. hint_middle .. command .. hint_suffix,
+    }
+
+    local marks = {
+        { row = 1, col_start = 0, col_end = #label, hl = "PiAgentResponseLabel" },
+        { row = 1, col_start = #label, col_end = #lines[2], hl = "PiWelcome" },
+        { row = 3, col_start = 0, col_end = #hint_prefix, hl = "PiWelcomeHint" },
+        { row = 3, col_start = #hint_prefix, col_end = #hint_prefix + #mention, hl = "PiMention" },
+        {
+            row = 3,
+            col_start = #hint_prefix + #mention,
+            col_end = #hint_prefix + #mention + #hint_middle,
+            hl = "PiWelcomeHint",
+        },
+        {
+            row = 3,
+            col_start = #hint_prefix + #mention + #hint_middle,
+            col_end = #hint_prefix + #mention + #hint_middle + #command,
+            hl = "PiCommand",
+        },
+        {
+            row = 3,
+            col_start = #hint_prefix + #mention + #hint_middle + #command,
+            col_end = #lines[4],
+            hl = "PiWelcomeHint",
+        },
+    }
+
+    return lines, marks
+end
+
+function History:show_welcome_message()
+    if self._has_conversation_content or not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
+        return
+    end
+    if self._placeholder_mode == "loading" then
+        self:clear_placeholder()
+    end
+
+    local lines, marks = self:_build_welcome_message()
+    local old_count = self._welcome_line_count
+    self:_with_modifiable(function()
+        if old_count > 0 then
+            vim.api.nvim_buf_set_lines(self._buf, 0, old_count, false, lines)
+            return
+        end
+
+        local line_count = vim.api.nvim_buf_line_count(self._buf)
+        local first = vim.api.nvim_buf_get_lines(self._buf, 0, 1, false)[1]
+        if line_count == 1 and first == "" then
+            vim.api.nvim_buf_set_lines(self._buf, 0, 1, false, lines)
+        else
+            vim.api.nvim_buf_set_lines(self._buf, 0, 0, false, lines)
+        end
+    end)
+    self._welcome_line_count = #lines
+    for _, mark in ipairs(marks) do
+        vim.api.nvim_buf_set_extmark(self._buf, ns, mark.row, mark.col_start, {
+            end_col = mark.col_end,
+            hl_group = mark.hl,
+        })
+    end
+    self:_update_status_extmark()
+end
+
+function History:_begin_conversation_content()
+    if self._has_conversation_content then
+        return
+    end
+    self._has_conversation_content = true
+    self:clear_placeholder()
+    self:_remove_welcome_from_buffer()
+end
+
+---@param scroll_to_bottom boolean
+function History:_render_system_preamble(scroll_to_bottom)
+    if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
+        return
+    end
+
+    ---@type string[]
+    local lines = {}
+    ---@type pi.HighlightMark[]
+    local marks = {}
+
+    if #self._system_info_sections > 0 then
+        local label = " " .. Config.options.ui.labels.system_message .. " "
+        local time_str = format_time(self._system_info_timestamp or now_ms())
+        local label_line = label .. time_str
+        lines[#lines + 1] = label_line
+        marks[#marks + 1] = {
+            row = #lines - 1,
+            col_start = 0,
+            col_end = #label,
+            hl = "PiSystemMessageLabel",
+        }
+        marks[#marks + 1] = {
+            row = #lines - 1,
+            col_start = #label,
+            col_end = #label_line,
+            hl = "PiMessageDateTime",
+        }
+
+        local intro = "Loaded resources:"
+        lines[#lines + 1] = intro
+        marks[#marks + 1] = {
+            row = #lines - 1,
+            col_start = 0,
+            col_end = #intro,
+            hl = "PiSystemMessage",
+        }
+
+        for _, section in ipairs(self._system_info_sections) do
+            lines[#lines + 1] = ""
+            local header_line = section.header .. ":"
+            lines[#lines + 1] = header_line
+            marks[#marks + 1] = {
+                row = #lines - 1,
+                col_start = 0,
+                col_end = #header_line,
+                hl = "PiSystemMessage",
+            }
+            for _, item in ipairs(section.items) do
+                local item_line = "  " .. item
+                lines[#lines + 1] = item_line
+                marks[#marks + 1] = {
+                    row = #lines - 1,
+                    col_start = 0,
+                    col_end = #item_line,
+                    hl = "PiSystemMessage",
+                }
+            end
+        end
+    end
+
+    for _, entry in ipairs(self._startup_system_errors) do
+        if #lines > 0 then
+            lines[#lines + 1] = ""
+        end
+        local label = " " .. Config.options.ui.labels.system_error .. " "
+        local time_str = format_time(entry.timestamp)
+        local label_line = label .. time_str
+        lines[#lines + 1] = label_line
+        marks[#marks + 1] = {
+            row = #lines - 1,
+            col_start = 0,
+            col_end = #label,
+            hl = "PiSystemErrorLabel",
+        }
+        marks[#marks + 1] = {
+            row = #lines - 1,
+            col_start = #label,
+            col_end = #label_line,
+            hl = "PiMessageDateTime",
+        }
+
+        local error_lines = vim.split(entry.message, "\n", { plain = true })
+        for _, line in ipairs(error_lines) do
+            lines[#lines + 1] = line
+            marks[#marks + 1] = {
+                row = #lines - 1,
+                col_start = 0,
+                col_end = #line,
+                hl = "PiSystemError",
+            }
+        end
+    end
+
+    local start_row = self._welcome_line_count
+    if start_row > 0 and #lines > 0 then
+        table.insert(lines, 1, "")
+        for _, mark in ipairs(marks) do
+            mark.row = mark.row + 1
+        end
+    end
+
+    local old_count = self._system_preamble_line_count
+    if old_count > 0 then
+        vim.api.nvim_buf_clear_namespace(self._buf, ns, start_row, start_row + old_count)
+    end
+    self:_with_modifiable(function()
+        if #lines == 0 then
+            if old_count == 0 then
+                return
+            end
+            local line_count = vim.api.nvim_buf_line_count(self._buf)
+            if start_row == 0 and line_count == old_count then
+                vim.api.nvim_buf_set_lines(self._buf, 0, old_count, false, { "" })
+            else
+                vim.api.nvim_buf_set_lines(self._buf, start_row, start_row + old_count, false, {})
+            end
+            return
+        end
+
+        if old_count > 0 then
+            vim.api.nvim_buf_set_lines(self._buf, start_row, start_row + old_count, false, lines)
+            return
+        end
+
+        local line_count = vim.api.nvim_buf_line_count(self._buf)
+        local first = vim.api.nvim_buf_get_lines(self._buf, 0, 1, false)[1]
+        if start_row == 0 and line_count == 1 and first == "" then
+            vim.api.nvim_buf_set_lines(self._buf, 0, 1, false, lines)
+        else
+            vim.api.nvim_buf_set_lines(self._buf, start_row, start_row, false, lines)
+        end
+    end)
+
+    self._system_preamble_line_count = #lines
+    for _, mark in ipairs(marks) do
+        vim.api.nvim_buf_set_extmark(self._buf, ns, start_row + mark.row, mark.col_start, {
+            end_col = mark.col_end,
+            hl_group = mark.hl,
+            priority = SYSTEM_HL_PRIORITY,
+        })
+    end
+    self:_update_status_extmark()
+    if scroll_to_bottom then
+        self:_scroll_to_bottom()
+    end
+end
+
+---@param error_message string
+---@param opts? pi.ChatErrorOpts
+function History:on_system_error(error_message, opts)
     vim.schedule(function()
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
         end
-        local label = " " .. Config.options.ui.labels.debug_message .. " "
-        local time_str = format_time(os.time() * 1000)
-        local label_line = label .. time_str
-        local text_lines = vim.split(text, "\n", { plain = true })
-        local lines = { "", label_line }
-        for _, line in ipairs(text_lines) do
-            lines[#lines + 1] = line
+        local timestamp = now_ms()
+        if not self._has_conversation_content then
+            self._startup_system_errors[#self._startup_system_errors + 1] = {
+                message = error_message,
+                timestamp = timestamp,
+            }
+            if self._placeholder_mode == "loading" then
+                self:clear_placeholder()
+            end
+            self:_render_system_preamble(true)
+            return
         end
-        local start = self:_append_lines(lines)
-        local label_row = start + 1
-        vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, 0, {
-            end_col = #label,
-            hl_group = "PiDebugLabel",
-        })
-        vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, #label, {
-            end_col = #label_line,
-            hl_group = "PiMessageDateTime",
-        })
-        for i, line in ipairs(text_lines) do
-            vim.api.nvim_buf_set_extmark(self._buf, ns, label_row + i, 0, {
-                end_col = #line,
-                hl_group = "PiDebug",
-            })
-        end
-        self:_maybe_scroll()
+        self:_append_system_error_block(error_message, timestamp, opts)
     end)
+end
+
+---@param sections table[]
+---@param errors? pi.SystemErrorEntry[]
+function History:show_system_info(sections, errors)
+    if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
+        return
+    end
+    self._system_info_sections = self:_normalize_system_sections(sections)
+    self._startup_system_errors = vim.deepcopy(errors or {})
+    if #self._system_info_sections > 0 then
+        self._system_info_timestamp = self._system_info_timestamp or now_ms()
+    else
+        self._system_info_timestamp = nil
+    end
+    if not self._has_conversation_content and self._placeholder_mode == "loading" then
+        self:clear_placeholder()
+    end
+    self:_render_system_preamble(#self._startup_system_errors > 0 and not self._has_conversation_content)
 end
 
 ---@param tool_name string
@@ -1092,6 +1453,7 @@ function History:on_tool_start(tool_name, tool_call_id, tool_input)
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
         end
+        self:_begin_conversation_content()
         self._needs_separator = false
         local icon = Config.options.ui.labels.tool
         local renderer = Tools.get_renderer(tool_name)
@@ -1561,31 +1923,47 @@ function History:toggle_thinking()
     end)
 end
 
---- Show a placeholder message (virtual text) on the empty history buffer.
+---@return boolean
+function History:has_conversation_content()
+    return self._has_conversation_content
+end
+
+--- Show a placeholder message (virtual text) on the history buffer.
 --- Replaces any existing placeholder.
 ---@param virt_lines table[] virt_lines spec for nvim_buf_set_extmark
-function History:set_placeholder(virt_lines)
-    self:_clear_placeholder()
-    local line_count = vim.api.nvim_buf_line_count(self._buf)
-    if line_count ~= 1 then
-        return
-    end
-    local first = vim.api.nvim_buf_get_lines(self._buf, 0, 1, false)[1]
-    if first ~= "" then
-        return
+---@param opts? { force?: boolean, mode?: "loading" }
+function History:set_placeholder(virt_lines, opts)
+    self:clear_placeholder()
+    if not (opts and opts.force) then
+        local line_count = vim.api.nvim_buf_line_count(self._buf)
+        if line_count ~= 1 then
+            return
+        end
+        local first = vim.api.nvim_buf_get_lines(self._buf, 0, 1, false)[1]
+        if first ~= "" then
+            return
+        end
     end
     self._placeholder_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, 0, 0, {
         virt_lines = virt_lines,
     })
+    self._placeholder_mode = opts and opts.mode or nil
+end
+
+---@param virt_lines table[]
+function History:show_loading_placeholder(virt_lines)
+    self:set_placeholder(virt_lines, { mode = "loading" })
 end
 
 --- Remove the placeholder message if present.
-function History:_clear_placeholder()
+function History:clear_placeholder()
     if not self._placeholder_extmark then
+        self._placeholder_mode = nil
         return
     end
     pcall(vim.api.nvim_buf_del_extmark, self._buf, ns, self._placeholder_extmark)
     self._placeholder_extmark = nil
+    self._placeholder_mode = nil
 end
 
 --- Add a message to the pending queue (displayed as virtual text at the bottom).
@@ -1652,7 +2030,14 @@ function History:clear()
     self._thinking_accum = nil
     self._thinking_blocks = {}
     self._tool_blocks = {}
-    self._placeholder_extmark = nil
+    self._has_conversation_content = false
+    self._welcome_line_count = 0
+    self._system_preamble_line_count = 0
+    self._system_info_timestamp = nil
+    self._system_info_sections = {}
+    self._startup_system_errors = {}
+    self:clear_placeholder()
+    self._placeholder_mode = nil
     self._agent_text_start_row = nil
     self._last_agent_response_extmark_id = nil
     self:_with_modifiable(function()
