@@ -27,7 +27,7 @@ local function set_defaults()
     end
     vim.api.nvim_set_hl(0, "PiDebugLabel", { default = true, fg = normal.bg, bg = comment.fg, bold = true })
     vim.api.nvim_set_hl(0, "PiMessageDateTime", { default = true, fg = comment.fg })
-    vim.api.nvim_set_hl(0, "PiMessageQueueTag", { default = true, fg = warning.fg, italic = true })
+    vim.api.nvim_set_hl(0, "PiMessageQueueTag", { default = true, fg = comment.fg, italic = true })
     vim.api.nvim_set_hl(0, "PiPendingQueueLabel", { default = true, fg = warning.fg, italic = true })
     vim.api.nvim_set_hl(0, "PiPendingQueueText", { default = true, fg = comment.fg, italic = true })
     vim.api.nvim_set_hl(0, "PiMessageAttachments", { default = true, fg = comment.fg, italic = true })
