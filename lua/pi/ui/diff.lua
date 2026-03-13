@@ -361,13 +361,19 @@ function M.open(payload, callback, opts)
             vim.bo[before_buf].modifiable = prev_modifiable
             vim.bo[before_buf].readonly = prev_readonly
         end
+        -- Close the right window first, then wipe its scratch buffer,
+        -- then close the tab. This avoids E445 — deleting the acwrite
+        -- buffer while its window is open makes Neovim swap in an
+        -- alternate (possibly modified) buffer, poisoning tabclose.
+        if vim.api.nvim_win_is_valid(right_win) then
+            vim.api.nvim_win_close(right_win, true)
+        end
+        if vim.api.nvim_buf_is_valid(after_buf) then
+            vim.api.nvim_buf_delete(after_buf, { force = true })
+        end
         if review_tab and vim.api.nvim_tabpage_is_valid(review_tab) then
             vim.api.nvim_set_current_tabpage(review_tab)
             vim.cmd("tabclose")
-        end
-        -- Wipe the scratch review buffer
-        if vim.api.nvim_buf_is_valid(after_buf) then
-            vim.api.nvim_buf_delete(after_buf, { force = true })
         end
         if vim.api.nvim_tabpage_is_valid(prev_tab) then
             vim.api.nvim_set_current_tabpage(prev_tab)
