@@ -114,7 +114,10 @@ local Config = require("pi.config")
 local Notify = require("pi.notify")
 
 local DEBUG_OVERRIDE = nil ---@type boolean?
-local log_reset_done = false
+
+--- Per-project log state: tracks which log files have been reset this session.
+---@type table<string, boolean>
+local log_reset_done = {}
 
 local function debug_enabled()
     if DEBUG_OVERRIDE ~= nil then
@@ -123,16 +126,43 @@ local function debug_enabled()
     return Config.options.debug
 end
 
----@type string
-local log_path = vim.fn.stdpath("log") .. "/pi-rpc.log"
+--- Cached at module load time (main loop safe).
+local log_path ---@type string
+do
+    local cwd = vim.fn.getcwd()
+    local slug = cwd:gsub("^/", ""):gsub("/", "--")
+    if slug == "" then
+        slug = "root"
+    end
+    log_path = vim.fn.stdpath("log") .. "/pi/" .. slug .. "/rpc.log"
+end
 
---- Reset the log file.
-local function reset_log()
-    local file = io.open(log_path, "w")
+--- Recursively create directories (libuv-safe, no vim.fn).
+---@param dir string
+local function mkdirp(dir)
+    local stat = vim.uv.fs_stat(dir)
+    if stat then
+        return
+    end
+    local parent = dir:match("(.+)/[^/]+$")
+    if parent then
+        mkdirp(parent)
+    end
+    vim.uv.fs_mkdir(dir, 493) -- 0755
+end
+
+--- Reset a log file (creates parent directories if needed).
+---@param path string
+local function reset_log(path)
+    local dir = path:match("(.+)/[^/]+$")
+    if dir then
+        mkdirp(dir)
+    end
+    local file = io.open(path, "w")
     if file then
         file:close()
     end
-    log_reset_done = true
+    log_reset_done[path] = true
 end
 
 ---@param tag string
@@ -141,8 +171,8 @@ local function log(tag, msg)
     if not debug_enabled() then
         return
     end
-    if not log_reset_done then
-        reset_log()
+    if not log_reset_done[log_path] then
+        reset_log(log_path)
     end
     local file = io.open(log_path, "a")
     if not file then
@@ -303,7 +333,7 @@ end
 function Rpc.toggle_debug()
     DEBUG_OVERRIDE = not debug_enabled()
     if debug_enabled() then
-        reset_log()
+        reset_log(log_path)
         Notify.info("Debug ON -> " .. log_path)
     else
         Notify.info("Debug OFF")
