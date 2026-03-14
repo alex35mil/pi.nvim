@@ -249,7 +249,7 @@ function M.open(payload, callback, opts)
         vim.bo[after_buf].filetype = ft
     end
 
-    -- Reset window options that may be inherited from π windows.
+    -- Reset window options that may be inherited from the chat window.
     for _, w in ipairs({ left_win, right_win }) do
         vim.wo[w].number = true
         vim.wo[w].relativenumber = vim.go.relativenumber
@@ -261,7 +261,6 @@ function M.open(payload, callback, opts)
         vim.wo[w].list = vim.go.list
         vim.wo[w].cursorline = vim.go.cursorline
         vim.wo[w].winfixbuf = false
-        vim.wo[w].foldenable = true
         vim.wo[w].winhighlight = Highlights.DIFF_WINHIGHLIGHT
     end
     vim.cmd("wincmd =")
@@ -276,51 +275,29 @@ function M.open(payload, callback, opts)
         return nil
     end
 
-    local function refresh_review_diff()
-        if not vim.api.nvim_tabpage_is_valid(review_tab) then
-            return
-        end
-        for _, win in ipairs({ right_win, left_win }) do
-            if vim.api.nvim_win_is_valid(win) then
-                vim.api.nvim_win_call(win, function()
-                    vim.cmd("diffthis")
-                end)
-            end
-        end
-        local diff_win = first_valid_review_win()
-        if not diff_win then
-            return
-        end
-        vim.api.nvim_win_call(diff_win, function()
-            pcall(vim.cmd, "diffupdate")
-            pcall(vim.cmd, "syncbind")
-        end)
-    end
+    -- Enable diff: focus each pane and run diffthis synchronously.
+    vim.api.nvim_set_current_win(left_win)
+    vim.cmd("diffthis")
+    vim.api.nvim_set_current_win(right_win)
+    vim.cmd("diffthis")
 
-    -- Defer diff setup until async handlers have settled, then force one
-    -- more refresh after the initial jump/focus handoff. Calling :diffthis
-    -- unconditionally matters here: the manual workaround is to rerun it in
-    -- the left pane even when that window already has 'diff' set.
+    -- Post-render fixup: re-run diffthis on the left pane after
+    -- Neovim has rendered at least once, then jump to the first
+    -- change and sync viewports.
     vim.defer_fn(function()
         if not vim.api.nvim_tabpage_is_valid(review_tab) then
             return
         end
-        refresh_review_diff()
-        pcall(vim.api.nvim_win_call, left_win, function()
-            vim.cmd("normal! gg]c")
-        end)
+        if vim.api.nvim_win_is_valid(left_win) then
+            vim.api.nvim_set_current_win(left_win)
+            vim.cmd("diffthis")
+            pcall(vim.cmd, "normal! gg]c")
+            vim.cmd("syncbind")
+        end
         if vim.api.nvim_win_is_valid(right_win) then
             vim.api.nvim_set_current_win(right_win)
-            refresh_review_diff()
-            vim.cmd("stopinsert")
         end
-        vim.defer_fn(function()
-            if not vim.api.nvim_tabpage_is_valid(review_tab) then
-                return
-            end
-            refresh_review_diff()
-        end, 20)
-    end, 50)
+    end, 200)
 
     local keymaps = Config.options.keymaps
     local accept_key = keymaps.diff_accept
@@ -361,12 +338,15 @@ function M.open(payload, callback, opts)
             vim.bo[before_buf].modifiable = prev_modifiable
             vim.bo[before_buf].readonly = prev_readonly
         end
-        -- Close the right window first, then wipe its scratch buffer,
-        -- then close the tab. This avoids E445 — deleting the acwrite
-        -- buffer while its window is open makes Neovim swap in an
-        -- alternate (possibly modified) buffer, poisoning tabclose.
-        if vim.api.nvim_win_is_valid(right_win) then
-            vim.api.nvim_win_close(right_win, true)
+        -- Close all windows except left_win — this handles right_win
+        -- plus any plugin floats that landed in
+        -- the review tab and can make tabclose fail with E445.
+        if review_tab and vim.api.nvim_tabpage_is_valid(review_tab) then
+            for _, win in ipairs(vim.api.nvim_tabpage_list_wins(review_tab)) do
+                if win ~= left_win and vim.api.nvim_win_is_valid(win) then
+                    pcall(vim.api.nvim_win_close, win, true)
+                end
+            end
         end
         if vim.api.nvim_buf_is_valid(after_buf) then
             vim.api.nvim_buf_delete(after_buf, { force = true })
