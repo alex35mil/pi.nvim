@@ -76,6 +76,10 @@ function M.setup()
         Pi.toggle_thinking()
     end, { desc = "Toggle π thinking visibility" })
 
+    vim.api.nvim_create_user_command("PiToggleStartupDetails", function()
+        Pi.toggle_startup_details()
+    end, { desc = "Toggle π startup details between compact and expanded" })
+
     vim.api.nvim_create_user_command("PiCycleThinking", function()
         Pi.cycle_thinking_level()
     end, { desc = "Cycle π thinking level" })

@@ -169,6 +169,14 @@ function M.toggle_thinking()
     end
 end
 
+--- Toggle the startup block between compact and expanded.
+function M.toggle_startup_details()
+    local session = require("pi.sessions.manager").get()
+    if session then
+        session.chat:toggle_startup_block(false)
+    end
+end
+
 --- Cycle to the next thinking level.
 function M.cycle_thinking_level()
     local session = require("pi.sessions.manager").get()

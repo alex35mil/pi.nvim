@@ -26,8 +26,19 @@ local function set_defaults()
         vim.api.nvim_set_hl(0, "PiAgentResponseLabel", { default = true, fg = normal.bg, bg = agent.fg, bold = true })
     end
     vim.api.nvim_set_hl(0, "PiDebugLabel", { default = true, fg = normal.bg, bg = comment.fg, bold = true })
-    vim.api.nvim_set_hl(0, "PiSystemMessageLabel", { default = true, fg = normal.bg, bg = comment.fg, bold = true, nocombine = true })
-    vim.api.nvim_set_hl(0, "PiSystemErrorLabel", { default = true, fg = normal.bg, bg = diagnostic_error.fg, bold = true, nocombine = true })
+    vim.api.nvim_set_hl(
+        0,
+        "PiStartupLabel",
+        { default = true, fg = normal.bg, bg = comment.fg, bold = true, nocombine = true }
+    )
+    vim.api.nvim_set_hl(0, "PiStartupHint", { default = true, fg = comment.fg, italic = true })
+    vim.api.nvim_set_hl(
+        0,
+        "PiStartupErrorLabel",
+        { default = true, fg = normal.bg, bg = diagnostic_error.fg, bold = true, nocombine = true }
+    )
+    vim.api.nvim_set_hl(0, "PiStartupDetail", { default = true, fg = comment.fg, nocombine = true })
+    vim.api.nvim_set_hl(0, "PiStartupError", { default = true, fg = diagnostic_error.fg, nocombine = true })
     vim.api.nvim_set_hl(0, "PiMessageDateTime", { default = true, fg = comment.fg })
     vim.api.nvim_set_hl(0, "PiMessageQueueTag", { default = true, fg = comment.fg, italic = true })
     vim.api.nvim_set_hl(0, "PiPendingQueueLabel", { default = true, fg = warning.fg, italic = true })
@@ -48,9 +59,7 @@ local function set_defaults()
     vim.api.nvim_set_hl(0, "PiDiffDelete", { default = true, link = "DiffDelete" })
     vim.api.nvim_set_hl(0, "PiDiffLineNr", { default = true, fg = comment.fg })
     vim.api.nvim_set_hl(0, "PiDebug", { default = true, fg = comment.fg })
-    vim.api.nvim_set_hl(0, "PiSystemMessage", { default = true, fg = comment.fg, nocombine = true })
     vim.api.nvim_set_hl(0, "PiError", { default = true, fg = diagnostic_error.fg })
-    vim.api.nvim_set_hl(0, "PiSystemError", { default = true, fg = diagnostic_error.fg, nocombine = true })
     vim.api.nvim_set_hl(0, "PiWelcome", { default = true, fg = agent.fg })
     vim.api.nvim_set_hl(0, "PiWelcomeHint", { default = true, fg = comment.fg })
     vim.api.nvim_set_hl(0, "PiBusy", { default = true, fg = agent.fg, bold = true })

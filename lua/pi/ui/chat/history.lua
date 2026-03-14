@@ -24,11 +24,15 @@
 ---@field _placeholder_extmark integer?
 ---@field _placeholder_mode? "loading"
 ---@field _has_conversation_content boolean
----@field _welcome_line_count integer
----@field _system_preamble_line_count integer
----@field _system_info_timestamp integer?
----@field _system_info_sections pi.SystemInfoSection[]
----@field _startup_system_errors pi.SystemErrorEntry[]
+---@field _startup_block_line_count integer
+---@field _startup_block_expanded boolean
+---@field _startup_block_expanded_lines? string[]
+---@field _startup_block_expanded_marks? pi.HighlightMark[]
+---@field _startup_block_compact_lines? string[]
+---@field _startup_block_compact_marks? pi.HighlightMark[]
+---@field _startup_timestamp integer?
+---@field _startup_sections pi.StartupSection[]
+---@field _startup_errors pi.SystemErrorEntry[]
 ---@field _pending_queue pi.PendingQueueEntry[]
 ---@field _pending_queue_extmark_id integer?
 ---@field _replaying boolean
@@ -95,7 +99,7 @@ local Tools = require("pi.ui.chat.tools")
 local ns = vim.api.nvim_create_namespace("pi-chat")
 
 local SCROLL_THRESHOLD = 10
-local SYSTEM_HL_PRIORITY = 200
+local STARTUP_HL_PRIORITY = 200
 
 ---@return integer
 local function now_ms()
@@ -393,11 +397,15 @@ function History.new(tab)
     self._placeholder_extmark = nil
     self._placeholder_mode = nil
     self._has_conversation_content = false
-    self._welcome_line_count = 0
-    self._system_preamble_line_count = 0
-    self._system_info_timestamp = nil
-    self._system_info_sections = {}
-    self._startup_system_errors = {}
+    self._startup_block_line_count = 0
+    self._startup_block_expanded = Config.options.ui.expand_startup_details
+    self._startup_block_expanded_lines = nil
+    self._startup_block_expanded_marks = nil
+    self._startup_block_compact_lines = nil
+    self._startup_block_compact_marks = nil
+    self._startup_timestamp = nil
+    self._startup_sections = {}
+    self._startup_errors = {}
     self._pending_queue = {}
     self._pending_queue_extmark_id = nil
     self._replaying = false
@@ -1106,28 +1114,28 @@ function History:_append_system_error_block(error_message, timestamp, opts)
     local label_row = start + label_row_offset
     vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, 0, {
         end_col = #label,
-        hl_group = "PiSystemErrorLabel",
-        priority = SYSTEM_HL_PRIORITY,
+        hl_group = "PiStartupErrorLabel",
+        priority = STARTUP_HL_PRIORITY,
     })
     vim.api.nvim_buf_set_extmark(self._buf, ns, label_row, #label, {
         end_col = #label_line,
         hl_group = "PiMessageDateTime",
-        priority = SYSTEM_HL_PRIORITY,
+        priority = STARTUP_HL_PRIORITY,
     })
     for i, line in ipairs(error_lines) do
         vim.api.nvim_buf_set_extmark(self._buf, ns, label_row + i, 0, {
             end_col = #line,
-            hl_group = "PiSystemError",
-            priority = SYSTEM_HL_PRIORITY,
+            hl_group = "PiStartupError",
+            priority = STARTUP_HL_PRIORITY,
         })
     end
     self:_maybe_scroll()
 end
 
 ---@param sections table[]
----@return pi.SystemInfoSection[]
-function History:_normalize_system_sections(sections)
-    local normalized = {} ---@type pi.SystemInfoSection[]
+---@return pi.StartupSection[]
+function History:_normalize_startup_sections(sections)
+    local normalized = {} ---@type pi.StartupSection[]
     for _, section in ipairs(sections or {}) do
         local header = section.header or section.title
         local items = section.items or section.lines or {}
@@ -1150,25 +1158,21 @@ function History:_normalize_system_sections(sections)
     return normalized
 end
 
-function History:_remove_welcome_from_buffer()
-    local count = self._welcome_line_count
-    if count == 0 then
+function History:_begin_conversation_content()
+    if self._has_conversation_content then
         return
     end
-    self:_with_modifiable(function()
-        local line_count = vim.api.nvim_buf_line_count(self._buf)
-        if line_count == count then
-            vim.api.nvim_buf_set_lines(self._buf, 0, count, false, { "" })
-        else
-            vim.api.nvim_buf_set_lines(self._buf, 0, count, false, {})
-        end
-    end)
-    self._welcome_line_count = 0
-    self:_update_status_extmark()
+    self._has_conversation_content = true
+    self:clear_placeholder()
 end
 
+--- Build the welcome header used by both compact and expanded startup views.
 ---@return string[], pi.HighlightMark[]
-function History:_build_welcome_message()
+function History:_build_startup_header()
+    local lines = {} ---@type string[]
+    local marks = {} ---@type pi.HighlightMark[]
+
+    -- Welcome lines (always shown)
     local label = " " .. Config.options.ui.labels.agent_response .. " "
     local body = "  Hi! Ask me anything or describe what you'd like to build."
     local hint_prefix = "     Use "
@@ -1177,147 +1181,98 @@ function History:_build_welcome_message()
     local command = "/command"
     local hint_suffix = " for shortcuts."
 
-    local lines = {
-        "",
-        label .. body,
-        "",
-        hint_prefix .. mention .. hint_middle .. command .. hint_suffix,
-    }
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = label .. body
+    local welcome_row = #lines - 1
+    marks[#marks + 1] = { row = welcome_row, col_start = 0, col_end = #label, hl = "PiAgentResponseLabel" }
+    marks[#marks + 1] = { row = welcome_row, col_start = #label, col_end = #lines[#lines], hl = "PiWelcome" }
 
-    local marks = {
-        { row = 1, col_start = 0, col_end = #label, hl = "PiAgentResponseLabel" },
-        { row = 1, col_start = #label, col_end = #lines[2], hl = "PiWelcome" },
-        { row = 3, col_start = 0, col_end = #hint_prefix, hl = "PiWelcomeHint" },
-        { row = 3, col_start = #hint_prefix, col_end = #hint_prefix + #mention, hl = "PiMention" },
-        {
-            row = 3,
-            col_start = #hint_prefix + #mention,
-            col_end = #hint_prefix + #mention + #hint_middle,
-            hl = "PiWelcomeHint",
-        },
-        {
-            row = 3,
-            col_start = #hint_prefix + #mention + #hint_middle,
-            col_end = #hint_prefix + #mention + #hint_middle + #command,
-            hl = "PiCommand",
-        },
-        {
-            row = 3,
-            col_start = #hint_prefix + #mention + #hint_middle + #command,
-            col_end = #lines[4],
-            hl = "PiWelcomeHint",
-        },
-    }
+    lines[#lines + 1] = ""
+    local hint_line = hint_prefix .. mention .. hint_middle .. command .. hint_suffix
+    lines[#lines + 1] = hint_line
+    local hint_row = #lines - 1
+    local col = 0
+    marks[#marks + 1] = { row = hint_row, col_start = col, col_end = col + #hint_prefix, hl = "PiWelcomeHint" }
+    col = col + #hint_prefix
+    marks[#marks + 1] = { row = hint_row, col_start = col, col_end = col + #mention, hl = "PiMention" }
+    col = col + #mention
+    marks[#marks + 1] = { row = hint_row, col_start = col, col_end = col + #hint_middle, hl = "PiWelcomeHint" }
+    col = col + #hint_middle
+    marks[#marks + 1] = { row = hint_row, col_start = col, col_end = col + #command, hl = "PiCommand" }
+    col = col + #command
+    marks[#marks + 1] = { row = hint_row, col_start = col, col_end = col + #hint_suffix, hl = "PiWelcomeHint" }
+
+    lines[#lines + 1] = ""
 
     return lines, marks
 end
 
-function History:show_welcome_message()
-    if self._has_conversation_content or not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
-        return
-    end
-    if self._placeholder_mode == "loading" then
-        self:clear_placeholder()
-    end
+--- Build the compact (collapsed) startup block: header + summary line.
+---@return string[], pi.HighlightMark[]
+function History:_build_compact_startup()
+    local lines, marks = self:_build_startup_header()
 
-    local lines, marks = self:_build_welcome_message()
-    local old_count = self._welcome_line_count
-    self:_with_modifiable(function()
-        if old_count > 0 then
-            vim.api.nvim_buf_set_lines(self._buf, 0, old_count, false, lines)
-            return
-        end
-
-        local line_count = vim.api.nvim_buf_line_count(self._buf)
-        local first = vim.api.nvim_buf_get_lines(self._buf, 0, 1, false)[1]
-        if line_count == 1 and first == "" then
-            vim.api.nvim_buf_set_lines(self._buf, 0, 1, false, lines)
+    -- Build summary from known categories; count startup announcement sections separately.
+    local known_headers = { ["[Skills]"] = "skills", ["[Prompts]"] = "prompts", ["[Extensions]"] = "extensions" }
+    local parts = {} ---@type string[]
+    local announcement_count = 0
+    for _, section in ipairs(self._startup_sections) do
+        local label = known_headers[section.header]
+        if label then
+            parts[#parts + 1] = #section.items .. " " .. label
         else
-            vim.api.nvim_buf_set_lines(self._buf, 0, 0, false, lines)
+            announcement_count = announcement_count + 1
         end
-    end)
-    self._welcome_line_count = #lines
-    for _, mark in ipairs(marks) do
-        vim.api.nvim_buf_set_extmark(self._buf, ns, mark.row, mark.col_start, {
-            end_col = mark.col_end,
-            hl_group = mark.hl,
-        })
     end
-    self:_update_status_extmark()
+    if announcement_count > 0 then
+        parts[#parts + 1] = announcement_count
+            .. " extension"
+            .. (announcement_count > 1 and "s" or "")
+            .. " reported startup info"
+    end
+    local summary = "     Loaded resources: " .. table.concat(parts, ", ")
+    lines[#lines + 1] = summary
+    marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #summary, hl = "PiStartupDetail" }
+
+    local hint = "     Run :PiToggleStartupDetails to expand the details or focus this block and hit Tab"
+    lines[#lines + 1] = hint
+    marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #hint, hl = "PiStartupHint" }
+
+    return lines, marks
 end
 
-function History:_begin_conversation_content()
-    if self._has_conversation_content then
-        return
-    end
-    self._has_conversation_content = true
-    self:clear_placeholder()
-    self:_remove_welcome_from_buffer()
-end
+--- Build the expanded startup block: header + full section listing.
+---@return string[], pi.HighlightMark[]
+function History:_build_expanded_startup()
+    local lines, marks = self:_build_startup_header()
 
----@param scroll_to_bottom boolean
-function History:_render_system_preamble(scroll_to_bottom)
-    if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
-        return
-    end
+    local intro = "     Loaded resources:"
+    lines[#lines + 1] = intro
+    marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #intro, hl = "PiStartupDetail" }
 
-    ---@type string[]
-    local lines = {}
-    ---@type pi.HighlightMark[]
-    local marks = {}
-
-    if #self._system_info_sections > 0 then
-        local label = " " .. Config.options.ui.labels.system_message .. " "
-        local time_str = format_time(self._system_info_timestamp or now_ms())
-        local label_line = label .. time_str
-        lines[#lines + 1] = label_line
-        marks[#marks + 1] = {
-            row = #lines - 1,
-            col_start = 0,
-            col_end = #label,
-            hl = "PiSystemMessageLabel",
-        }
-        marks[#marks + 1] = {
-            row = #lines - 1,
-            col_start = #label,
-            col_end = #label_line,
-            hl = "PiMessageDateTime",
-        }
-
-        local intro = "Loaded resources:"
-        lines[#lines + 1] = intro
-        marks[#marks + 1] = {
-            row = #lines - 1,
-            col_start = 0,
-            col_end = #intro,
-            hl = "PiSystemMessage",
-        }
-
-        for _, section in ipairs(self._system_info_sections) do
-            lines[#lines + 1] = ""
-            local header_line = section.header .. ":"
-            lines[#lines + 1] = header_line
-            marks[#marks + 1] = {
-                row = #lines - 1,
-                col_start = 0,
-                col_end = #header_line,
-                hl = "PiSystemMessage",
-            }
-            for _, item in ipairs(section.items) do
-                local item_line = "  " .. item
-                lines[#lines + 1] = item_line
-                marks[#marks + 1] = {
-                    row = #lines - 1,
-                    col_start = 0,
-                    col_end = #item_line,
-                    hl = "PiSystemMessage",
-                }
-            end
+    for _, section in ipairs(self._startup_sections) do
+        lines[#lines + 1] = ""
+        local header_line = "     " .. section.header
+        lines[#lines + 1] = header_line
+        marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #header_line, hl = "PiStartupDetail" }
+        for _, item in ipairs(section.items) do
+            local item_line = "     " .. item
+            lines[#lines + 1] = item_line
+            marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #item_line, hl = "PiStartupDetail" }
         end
     end
 
-    for _, entry in ipairs(self._startup_system_errors) do
-        if #lines > 0 then
+    return lines, marks
+end
+
+--- Build error lines/marks for startup errors.
+---@param base_row integer row offset for marks
+---@return string[], pi.HighlightMark[]
+function History:_build_startup_error_lines(base_row)
+    local lines = {} ---@type string[]
+    local marks = {} ---@type pi.HighlightMark[]
+    for _, entry in ipairs(self._startup_errors) do
+        if base_row + #lines > 0 then
             lines[#lines + 1] = ""
         end
         local label = " " .. Config.options.ui.labels.system_error .. " "
@@ -1325,39 +1280,38 @@ function History:_render_system_preamble(scroll_to_bottom)
         local label_line = label .. time_str
         lines[#lines + 1] = label_line
         marks[#marks + 1] = {
-            row = #lines - 1,
+            row = base_row + #lines - 1,
             col_start = 0,
             col_end = #label,
-            hl = "PiSystemErrorLabel",
+            hl = "PiStartupErrorLabel",
         }
         marks[#marks + 1] = {
-            row = #lines - 1,
+            row = base_row + #lines - 1,
             col_start = #label,
             col_end = #label_line,
             hl = "PiMessageDateTime",
         }
-
         local error_lines = vim.split(entry.message, "\n", { plain = true })
         for _, line in ipairs(error_lines) do
             lines[#lines + 1] = line
             marks[#marks + 1] = {
-                row = #lines - 1,
+                row = base_row + #lines - 1,
                 col_start = 0,
                 col_end = #line,
-                hl = "PiSystemError",
+                hl = "PiStartupError",
             }
         end
     end
+    return lines, marks
+end
 
-    local start_row = self._welcome_line_count
-    if start_row > 0 and #lines > 0 then
-        table.insert(lines, 1, "")
-        for _, mark in ipairs(marks) do
-            mark.row = mark.row + 1
-        end
-    end
-
-    local old_count = self._system_preamble_line_count
+--- Write lines and highlight marks into the buffer, replacing the startup block region.
+---@param lines string[]
+---@param marks pi.HighlightMark[]
+---@param scroll_to_bottom boolean
+function History:_apply_startup_block(lines, marks, scroll_to_bottom)
+    local start_row = 0
+    local old_count = self._startup_block_line_count
     if old_count > 0 then
         vim.api.nvim_buf_clear_namespace(self._buf, ns, start_row, start_row + old_count)
     end
@@ -1389,18 +1343,85 @@ function History:_render_system_preamble(scroll_to_bottom)
         end
     end)
 
-    self._system_preamble_line_count = #lines
+    self._startup_block_line_count = #lines
     for _, mark in ipairs(marks) do
         vim.api.nvim_buf_set_extmark(self._buf, ns, start_row + mark.row, mark.col_start, {
             end_col = mark.col_end,
             hl_group = mark.hl,
-            priority = SYSTEM_HL_PRIORITY,
+            priority = STARTUP_HL_PRIORITY,
         })
     end
     self:_update_status_extmark()
     if scroll_to_bottom then
         self:_scroll_to_bottom()
     end
+end
+
+function History:_render_startup_block(scroll_to_bottom)
+    if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
+        return
+    end
+
+    -- Build and cache both views. Compact/expanded only differ when sections exist.
+    if #self._startup_sections > 0 then
+        self._startup_block_compact_lines, self._startup_block_compact_marks = self:_build_compact_startup()
+        self._startup_block_expanded_lines, self._startup_block_expanded_marks = self:_build_expanded_startup()
+    else
+        self._startup_block_compact_lines = nil
+        self._startup_block_compact_marks = nil
+        self._startup_block_expanded_lines = nil
+        self._startup_block_expanded_marks = nil
+    end
+
+    -- Pick active view. Always start with the welcome header.
+    local lines, marks
+    if self._startup_block_expanded and self._startup_block_expanded_lines then
+        lines = vim.deepcopy(self._startup_block_expanded_lines)
+        marks = vim.deepcopy(self._startup_block_expanded_marks)
+    elseif self._startup_block_compact_lines then
+        lines = vim.deepcopy(self._startup_block_compact_lines)
+        marks = vim.deepcopy(self._startup_block_compact_marks)
+    else
+        -- No sections yet — show welcome header with loading hint.
+        lines, marks = self:_build_startup_header()
+        local loading = "     Loading resources…"
+        lines[#lines + 1] = loading
+        marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #loading, hl = "PiStartupHint" }
+    end
+
+    -- Append startup errors after the startup block.
+    if #self._startup_errors > 0 then
+        local err_lines, err_marks = self:_build_startup_error_lines(#lines)
+        vim.list_extend(lines, err_lines)
+        vim.list_extend(marks, err_marks)
+    end
+
+    self:_apply_startup_block(lines, marks, scroll_to_bottom)
+end
+
+--- Toggle the startup block between compact and expanded.
+--- With check_cursor=true (default), only toggles if the cursor is on the block.
+--- With check_cursor=false, toggles unconditionally (for commands).
+---@param check_cursor? boolean default true
+---@return boolean toggled true if the block was toggled
+function History:toggle_startup_block(check_cursor)
+    if not self._startup_block_compact_lines or not self._startup_block_expanded_lines then
+        return false
+    end
+    if check_cursor ~= false then
+        local win = self:win()
+        if not win then
+            return false
+        end
+        local cursor_row = vim.api.nvim_win_get_cursor(win)[1] - 1 -- 0-indexed
+        local end_row = self._startup_block_line_count
+        if cursor_row >= end_row then
+            return false
+        end
+    end
+    self._startup_block_expanded = not self._startup_block_expanded
+    self:_render_startup_block(false)
+    return true
 end
 
 ---@param error_message string
@@ -1412,37 +1433,73 @@ function History:on_system_error(error_message, opts)
         end
         local timestamp = now_ms()
         if not self._has_conversation_content then
-            self._startup_system_errors[#self._startup_system_errors + 1] = {
+            self._startup_errors[#self._startup_errors + 1] = {
                 message = error_message,
                 timestamp = timestamp,
             }
             if self._placeholder_mode == "loading" then
                 self:clear_placeholder()
             end
-            self:_render_system_preamble(true)
+            self:_render_startup_block(true)
             return
         end
         self:_append_system_error_block(error_message, timestamp, opts)
     end)
 end
 
----@param sections table[]
----@param errors? pi.SystemErrorEntry[]
-function History:show_system_info(sections, errors)
+---@param opts { sections: pi.StartupSection[], errors?: pi.SystemErrorEntry[] }
+function History:show_startup_block(opts)
     if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
         return
     end
-    self._system_info_sections = self:_normalize_system_sections(sections)
-    self._startup_system_errors = vim.deepcopy(errors or {})
-    if #self._system_info_sections > 0 then
-        self._system_info_timestamp = self._system_info_timestamp or now_ms()
+    self._startup_sections = self:_normalize_startup_sections(opts.sections)
+    self._startup_errors = vim.deepcopy(opts.errors or {})
+    if #self._startup_sections > 0 then
+        self._startup_timestamp = self._startup_timestamp or now_ms()
     else
-        self._system_info_timestamp = nil
+        self._startup_timestamp = nil
     end
     if not self._has_conversation_content and self._placeholder_mode == "loading" then
         self:clear_placeholder()
     end
-    self:_render_system_preamble(#self._startup_system_errors > 0 and not self._has_conversation_content)
+    self:_render_startup_block(#self._startup_errors > 0 and not self._has_conversation_content)
+end
+
+--- Render a custom block inline in the history.
+--- Each line is an array of chunks: { {text, hl?}, ... }.
+---@param block pi.CustomBlock
+function History:append_custom_block(block)
+    vim.schedule(function()
+        if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
+            return
+        end
+        if not block.content or #block.content == 0 then
+            return
+        end
+        for _, line_chunks in ipairs(block.content) do
+            -- Build the plain text for the buffer line
+            local parts = {} ---@type string[]
+            for _, chunk in ipairs(line_chunks) do
+                parts[#parts + 1] = chunk[1] or ""
+            end
+            local text = table.concat(parts)
+            local row = self:_append_lines({ text })
+
+            -- Apply chunk highlights
+            local col = 0
+            for _, chunk in ipairs(line_chunks) do
+                local chunk_text = chunk[1] or ""
+                local hl = chunk[2]
+                if hl and #chunk_text > 0 then
+                    vim.api.nvim_buf_set_extmark(self._buf, ns, row, col, {
+                        end_col = col + #chunk_text,
+                        hl_group = hl,
+                    })
+                end
+                col = col + #chunk_text
+            end
+        end
+    end)
 end
 
 ---@param tool_name string
@@ -1708,10 +1765,11 @@ function History:_maybe_collapse_tool(tool_call_id)
 end
 
 --- Toggle expand/collapse for the tool block under the cursor.
+---@return boolean toggled true if a tool block was toggled
 function History:toggle_tool_block()
     local win = self:win()
     if not win then
-        return
+        return false
     end
     local cursor_row = vim.api.nvim_win_get_cursor(win)[1] - 1 -- 0-indexed
 
@@ -1729,7 +1787,7 @@ function History:toggle_tool_block()
     end
 
     if not target_block then
-        return
+        return false
     end
 
     local header_row = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, target_block.icon_extmark, {})[1]
@@ -1753,6 +1811,7 @@ function History:toggle_tool_block()
             target_block.expanded = true
         end
     end)
+    return true
 end
 
 ---@param tool_name string
@@ -2031,11 +2090,15 @@ function History:clear()
     self._thinking_blocks = {}
     self._tool_blocks = {}
     self._has_conversation_content = false
-    self._welcome_line_count = 0
-    self._system_preamble_line_count = 0
-    self._system_info_timestamp = nil
-    self._system_info_sections = {}
-    self._startup_system_errors = {}
+    self._startup_block_line_count = 0
+    self._startup_block_expanded = Config.options.ui.expand_startup_details
+    self._startup_block_expanded_lines = nil
+    self._startup_block_expanded_marks = nil
+    self._startup_block_compact_lines = nil
+    self._startup_block_compact_marks = nil
+    self._startup_timestamp = nil
+    self._startup_sections = {}
+    self._startup_errors = {}
     self:clear_placeholder()
     self._placeholder_mode = nil
     self._agent_text_start_row = nil

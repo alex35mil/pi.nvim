@@ -1,8 +1,8 @@
---- Startup/system report for RPC mode using only data provided by pi.
+--- Startup block data for RPC mode using only data provided by pi.
 ---
 --- Current sources:
 --- - RPC get_commands results for prompt / skill / extension-backed commands
---- - RPC extension setWidget text blocks captured by pi.nvim
+--- - Extension startup announcements (setWidget keys ending with `:startup`)
 ---
 --- No local filesystem discovery is performed here.
 
@@ -191,15 +191,15 @@ end
 
 ---@param session pi.Session
 ---@return pi.SystemSection[]
-local function widget_sections(session)
-    local widgets = session.widgets or {}
+local function announcement_sections(session)
+    local announcements = session.startup_announcements or {}
     local keys = {} ---@type string[]
-    for key, widget in pairs(widgets) do
+    for key, entry in pairs(announcements) do
         if
             type(key) == "string"
-            and type(widget) == "table"
-            and type(widget.lines) == "table"
-            and #widget.lines > 0
+            and type(entry) == "table"
+            and type(entry.lines) == "table"
+            and #entry.lines > 0
         then
             keys[#keys + 1] = key
         end
@@ -208,13 +208,15 @@ local function widget_sections(session)
 
     local sections = {} ---@type pi.SystemSection[]
     for _, key in ipairs(keys) do
-        local widget = widgets[key]
+        local entry = announcements[key]
         local lines = {} ---@type string[]
-        for _, line in ipairs(widget.lines) do
+        for _, line in ipairs(entry.lines) do
             lines[#lines + 1] = line == "" and "" or ("  " .. line)
         end
+        -- Strip `:startup` suffix so the title shows just the extension name.
+        local display_key = key:gsub(":startup$", "")
         sections[#sections + 1] = {
-            title = "Extension: " .. key,
+            title = "[Extension: " .. display_key .. "]",
             lines = lines,
         }
     end
@@ -229,16 +231,16 @@ function M.build_startup_sections(session, commands)
     local sections = {} ---@type pi.SystemSection[]
 
     if #skills > 0 then
-        sections[#sections + 1] = { title = "Skills", lines = format_skill_lines(skills) }
+        sections[#sections + 1] = { title = "[Skills]", lines = format_skill_lines(skills) }
     end
     if #prompts > 0 then
-        sections[#sections + 1] = { title = "Prompts", lines = format_prompt_lines(prompts) }
+        sections[#sections + 1] = { title = "[Prompts]", lines = format_prompt_lines(prompts) }
     end
     if #extensions > 0 then
-        sections[#sections + 1] = { title = "Extensions", lines = format_extension_lines(extensions) }
+        sections[#sections + 1] = { title = "[Extensions]", lines = format_extension_lines(extensions) }
     end
 
-    vim.list_extend(sections, widget_sections(session))
+    vim.list_extend(sections, announcement_sections(session))
     return sections
 end
 

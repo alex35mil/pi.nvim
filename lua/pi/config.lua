@@ -110,7 +110,7 @@
 ---@class pi.UiConfig
 ---@field spinner pi.SpinnerPreset|string[]|{ refresh_rate?: integer, frames: string[] } preset name or custom
 ---@field show_thinking boolean
----@field show_system_messages boolean
+---@field expand_startup_details boolean Default expand/collapse state for the startup block (skills, extensions, startup announcements). Always rendered; Tab on the block or API call toggles.
 ---@field panels pi.Panels
 ---@field labels pi.Labels
 ---@field layout pi.LayoutConfig
@@ -143,11 +143,24 @@
 ---@field indicator string sign text for selected item
 ---@field keys pi.DialogKeys
 
+--- A single styled text chunk: { text, hl_group? }.
+---@alias pi.CustomBlockChunk string[]
+
+--- A line of styled chunks.
+---@alias pi.CustomBlockLine pi.CustomBlockChunk[]
+
+--- Return value from on_widget to render a custom block inline in history.
+---@class pi.CustomBlock
+---@field target "history" Where to render the block.
+---@field block "custom" Block type.
+---@field content pi.CustomBlockLine[] Lines of styled chunks to render.
+
 ---@class pi.Options
 ---@field bin string
 ---@field agent_dir? string Override the π agent directory (default: $PI_CODING_AGENT_DIR or ~/.pi/agent)
 ---@field debug boolean Enable RPC debug logging to stdpath("log")/pi-rpc.log
 ---@field models? pi.ModelEntry[] Preferred models for cycling and :PiSelectModel
+---@field on_widget? fun(key: string, lines: string[]?, placement: string?): pi.CustomBlock? Handle extension setWidget calls. Return a custom block to render inline in history, or nil to ignore. Not called for `:startup` widgets (keys ending with `:startup`), which are always stored as startup announcements and rendered in the system preamble.
 ---@field ui pi.UiConfig
 ---@field keymaps pi.Keymaps
 
@@ -164,7 +177,7 @@ local defaults = {
     ui = {
         spinner = "robot",
         show_thinking = false,
-        show_system_messages = true,
+        expand_startup_details = true,
         panels = {
             history = { title = "π" },
             prompt = { title = "󰫽󰫿󰫼󰫺󰫽󰬁" },

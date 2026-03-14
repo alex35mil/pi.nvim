@@ -138,14 +138,18 @@ function Chat:_set_keymaps()
         vim.api.nvim_put({ "", "" }, "c", false, true)
     end, { buffer = pbuf, desc = "New line" })
 
-    -- Toggle tool block expand/collapse
+    -- Toggle collapsible blocks (system preamble, tool blocks)
     vim.keymap.set("n", "<Tab>", function()
-        self._history:toggle_tool_block()
-    end, { buffer = hbuf, desc = "Toggle tool block" })
+        if self._history:toggle_startup_block() then
+            return
+        elseif self._history:toggle_tool_block() then
+            return
+        end
+    end, { buffer = hbuf, desc = "Toggle block under cursor" })
 end
 
 ---@class pi.ChatShowOpts
----@field loading? boolean Show "Loading session…" instead of welcome
+---@field loading? boolean Show "Loading session…" placeholder
 
 ---@param opts? pi.ChatShowOpts
 function Chat:show(opts)
@@ -158,25 +162,17 @@ function Chat:show(opts)
     if opts and opts.loading then
         self:show_loading()
     else
-        self:show_welcome()
+        -- Render the startup block (welcome header + any loaded resources so far).
+        self:show_startup_block({ sections = {}, errors = {} })
     end
     self:refresh_prompt_attention()
     self._prompt:focus()
-end
-
---- Show a welcome message on a session with no conversation content yet.
-function Chat:show_welcome()
-    if self._history:has_conversation_content() then
-        return
-    end
-    self._history:show_welcome_message()
 end
 
 --- Show a loading placeholder on the empty history buffer.
 function Chat:show_loading()
     local icon = " " .. Config.options.ui.labels.agent_response .. " "
     self._history:show_loading_placeholder({
-        { { "" } },
         {
             { icon, "PiAgentResponseLabel" },
             { "  Loading session…", "PiWelcomeHint" },
@@ -543,6 +539,12 @@ function Chat:set_extension_status(key, value)
     self._prompt:statusline():set_extension_status(key, value)
 end
 
+--- Render a custom block inline in the chat history.
+---@param block pi.CustomBlock
+function Chat:append_custom_block(block)
+    self._history:append_custom_block(block)
+end
+
 --- Re-render the prompt status line.
 function Chat:render_statusline()
     self._prompt:statusline():render()
@@ -558,10 +560,9 @@ function Chat:reset_usage()
     self._prompt:statusline():reset_usage()
 end
 
----@param sections pi.SystemInfoSection[]
----@param errors? pi.SystemErrorEntry[]
-function Chat:show_system_info(sections, errors)
-    self._history:show_system_info(sections, errors)
+---@param opts { sections: pi.StartupSection[], errors?: pi.SystemErrorEntry[] }
+function Chat:show_startup_block(opts)
+    self._history:show_startup_block(opts)
 end
 
 function Chat:clear_placeholder()
@@ -617,6 +618,13 @@ end
 
 function Chat:toggle_thinking()
     self._history:toggle_thinking()
+end
+
+--- Toggle the startup block between compact and expanded.
+---@param check_cursor? boolean default true; false skips cursor check (for commands)
+---@return boolean toggled
+function Chat:toggle_startup_block(check_cursor)
+    return self._history:toggle_startup_block(check_cursor)
 end
 
 function Chat:clear()

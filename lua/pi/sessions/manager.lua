@@ -4,9 +4,8 @@
 ---@field pending pi.AttentionEntry[]
 ---@field transition_seq? integer Hide queued entries with seq <= this while a session transition is in flight.
 
----@class pi.SessionWidget
+---@class pi.StartupAnnouncement
 ---@field lines string[]
----@field placement? string
 
 ---@class pi.SystemErrorEntry
 ---@field message string
@@ -17,7 +16,7 @@
 ---@field rpc pi.Rpc
 ---@field chat pi.Chat
 ---@field attention pi.SessionAttention
----@field widgets table<string, pi.SessionWidget> Extension-provided text shown in the system preamble. Ad-hoc: the only way to surface extension info in the UI via RPC without polluting context.
+---@field startup_announcements table<string, pi.StartupAnnouncement> Extension startup data (keys ending with `:startup`) shown in the system preamble. Process-level: persists across session switches.
 ---@field system_errors pi.SystemErrorEntry[]
 
 ---@class pi.SessionCreateOpts
@@ -28,35 +27,30 @@ local M = {}
 local Rpc = require("pi.rpc")
 local Chat = require("pi.ui.chat")
 local Config = require("pi.config")
+local Startup = require("pi.startup")
 local Notify = require("pi.notify")
 local Attention = require("pi.attention")
 local Dialog = require("pi.ui.dialog")
 local Extension = require("pi.ui.extension")
 local CommandsCache = require("pi.cache.commands")
-local SystemReport = require("pi.system_report")
 
----@class pi.SystemInfoSection
+---@class pi.StartupSection
 ---@field header string
 ---@field items string[]
 ---@field hl? string
 
 ---@param session pi.Session
 ---@param commands? pi.SlashCommand[]
-local function show_system_info(session, commands)
-    if not Config.options.ui.show_system_messages then
-        return
-    end
-    local sections = SystemReport.build_startup_sections(session, commands)
-    if #sections > 0 or #session.system_errors > 0 then
-        session.chat:show_system_info(sections, session.system_errors)
-    end
+local function show_startup_block(session, commands)
+    local sections = Startup.build_startup_sections(session, commands)
+    session.chat:show_startup_block({ sections = sections, errors = session.system_errors })
 end
 
---- Fetch commands and show system info on a session's chat if enabled.
+--- Fetch commands and render the startup block on a session's chat.
 ---@param session pi.Session
-local function fetch_commands_and_show_system_info(session)
+local function fetch_commands_and_show_startup_block(session)
     CommandsCache.fetch(session.rpc, function(commands)
-        show_system_info(session, commands)
+        show_startup_block(session, commands)
     end)
 end
 
@@ -187,7 +181,13 @@ local function handle_event(session, msg)
             end
         end)
     elseif t == "response" then
-        return false -- handled by rpc:send() one-shot callbacks
+        -- Normally handled by rpc:send() one-shot callbacks. Late error
+        -- responses (e.g. async prompt failures like auth errors) arrive
+        -- after the initial success response already consumed the callback.
+        if msg.success == false and type(msg.error) == "string" then
+            chat:on_error(msg.error, { pad_top = true, pad_bottom = true })
+        end
+        return false
     elseif t == "message_start" then
         chat:on_message_start(msg)
     elseif t == "message_end" then
@@ -262,7 +262,7 @@ function M.get_or_create(opts)
         rpc = rpc,
         chat = chat,
         attention = { pending = {} },
-        widgets = {},
+        startup_announcements = {},
         system_errors = {},
     }
 
@@ -273,7 +273,7 @@ function M.get_or_create(opts)
     sessions[tab] = session
 
     -- Fetch available /commands for completion, highlighting, and system info
-    fetch_commands_and_show_system_info(session)
+    fetch_commands_and_show_startup_block(session)
 
     -- Fetch initial state for status line (model, thinking level)
     M.refresh_state(session)
@@ -326,10 +326,8 @@ local function start_new_session(session)
                     return
                 end
                 Attention.end_session_transition(session, true)
-                session.widgets = {}
                 session.chat:clear()
-                session.chat:show_welcome()
-                fetch_commands_and_show_system_info(session)
+                fetch_commands_and_show_startup_block(session)
             end)
         end)
         if not sent_new then
@@ -490,14 +488,12 @@ local function load_session(session, session_path)
         M.refresh_state(session)
 
         vim.schedule(function()
-            session.widgets = {}
             session.chat:clear()
             session.chat:show_loading()
         end)
 
         local sent_messages = session.rpc:send({ type = "get_messages" }, function(res)
             vim.schedule(function()
-                session.widgets = {}
                 session.chat:clear_placeholder()
                 if not res.success then
                     local err = res.error or "Failed to load session messages"
@@ -508,9 +504,9 @@ local function load_session(session, session_path)
                 end
 
                 local messages = (res.data or {}).messages or {}
-                -- Fetch commands, optionally show system info, then replay.
+                -- Fetch commands, show startup block, then replay.
                 CommandsCache.fetch(session.rpc, function(commands)
-                    show_system_info(session, commands)
+                    show_startup_block(session, commands)
                     replay_messages(session, messages)
                     session.chat:ensure_shown_and_focus_prompt()
                 end)
@@ -568,7 +564,6 @@ end
 ---@param session pi.Session
 local function show_no_previous_sessions(session)
     Notify.info("No previous sessions found")
-    session.chat:show_welcome()
     session.chat:ensure_shown_and_focus_prompt()
 end
 
