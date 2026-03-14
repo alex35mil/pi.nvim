@@ -108,8 +108,15 @@ end
 ---@param history pi.ChatHistory
 ---@param text string
 ---@param hl_group? string
-local function render_body_line(history, text, hl_group)
-    local start = history:_append_lines({ text })
+---@param insert_at? integer  when set, insert at this row instead of appending
+---@return integer? next_insert_at  advanced insertion cursor (nil when appending)
+local function render_body_line(history, text, hl_group, insert_at)
+    local start
+    if insert_at then
+        start, insert_at = history:_insert_lines(insert_at, { text })
+    else
+        start = history:_append_lines({ text })
+    end
     M.set_border(history, start, M.GLYPHS.MID)
     if #text > 0 then
         vim.api.nvim_buf_set_extmark(history:buf(), history:ns(), start, 0, {
@@ -117,12 +124,20 @@ local function render_body_line(history, text, hl_group)
             hl_group = hl_group or "PiToolCall",
         })
     end
+    return insert_at
 end
 
 ---@param history pi.ChatHistory
 ---@param text string
-local function render_output(history, text)
-    local sep_row = history:_append_lines({ "" })
+---@param insert_at? integer  when set, insert at this row instead of appending
+---@return integer? next_insert_at  advanced insertion cursor (nil when appending)
+local function render_output(history, text, insert_at)
+    local sep_row
+    if insert_at then
+        sep_row, insert_at = history:_insert_lines(insert_at, { "" })
+    else
+        sep_row = history:_append_lines({ "" })
+    end
     M.set_border(history, sep_row, M.GLYPHS.SEP)
     local output_lines = vim.split(text, "\n", { plain = true })
     -- The history buffer uses treesitter markdown for rendering agent prose.
@@ -145,7 +160,12 @@ local function render_output(history, text)
         output_lines[#output_lines + 1] = "```"
         auto_closed = true
     end
-    local start = history:_append_lines(output_lines)
+    local start
+    if insert_at then
+        start, insert_at = history:_insert_lines(insert_at, output_lines)
+    else
+        start = history:_append_lines(output_lines)
+    end
     for i = 0, #output_lines - 1 do
         M.set_border(history, start + i, M.GLYPHS.MID)
         local line = output_lines[i + 1] or ""
@@ -164,6 +184,7 @@ local function render_output(history, text)
             virt_text_pos = "inline",
         })
     end
+    return insert_at
 end
 
 --- Parse treesitter highlights for a source string.
@@ -226,7 +247,9 @@ end
 ---@param new_text string
 ---@param line_offset? integer  added to line numbers (0-based file offset)
 ---@param path? string  file path for syntax highlighting
-local function render_diff(history, old_text, new_text, line_offset, path)
+---@param insert_at? integer  when set, insert at this row instead of appending
+---@return integer? next_insert_at  advanced insertion cursor (nil when appending)
+local function render_diff(history, old_text, new_text, line_offset, path, insert_at)
     line_offset = line_offset or 0
     -- Ensure trailing newlines for vim.diff
     if not old_text:find("\n$") then
@@ -237,7 +260,7 @@ local function render_diff(history, old_text, new_text, line_offset, path)
     end
     local diff_text = vim.diff(old_text, new_text)
     if not diff_text or diff_text == "" then
-        return
+        return insert_at
     end
 
     -- Parse unified diff: collect content lines with line numbers, highlight type, and source mapping
@@ -290,10 +313,15 @@ local function render_diff(history, old_text, new_text, line_offset, path)
         end
     end
     if #rendered == 0 then
-        return
+        return insert_at
     end
 
-    local sep_row = history:_append_lines({ "" })
+    local sep_row
+    if insert_at then
+        sep_row, insert_at = history:_insert_lines(insert_at, { "" })
+    else
+        sep_row = history:_append_lines({ "" })
+    end
     M.set_border(history, sep_row, M.GLYPHS.SEP)
 
     local lines = {}
@@ -301,7 +329,12 @@ local function render_diff(history, old_text, new_text, line_offset, path)
         lines[#lines + 1] = r.text
     end
 
-    local start = history:_append_lines(lines)
+    local start
+    if insert_at then
+        start, insert_at = history:_insert_lines(insert_at, lines)
+    else
+        start = history:_append_lines(lines)
+    end
     for i = 0, #lines - 1 do
         M.set_border(history, start + i, M.GLYPHS.MID)
     end
@@ -340,6 +373,7 @@ local function render_diff(history, old_text, new_text, line_offset, path)
             end
         end
     end
+    return insert_at
 end
 
 --- Truncate a line to max_width, appending "…" if truncated.
@@ -498,7 +532,7 @@ end
 
 ---@class pi.ToolRenderer
 ---@field on_start? fun(history: pi.ChatHistory, args: table?)
----@field on_end? fun(history: pi.ChatHistory, args: table?, result: table?, is_error: boolean?)
+---@field on_end? fun(history: pi.ChatHistory, args: table?, result: table?, is_error: boolean?, insert_at: integer?): integer?
 ---@field input_visible? integer  lines to show when collapsed (default: show all)
 ---@field output_visible? integer lines to show when collapsed (default: show all)
 ---@field inline? boolean  render as a single line (no header/footer)
@@ -519,11 +553,12 @@ local renderers = {
                 end
             end
         end,
-        on_end = function(history, _, result)
+        on_end = function(history, _, result, _, insert_at)
             local text = extract_result_text(result)
             if text and text ~= "" then
-                render_output(history, text)
+                insert_at = render_output(history, text, insert_at)
             end
+            return insert_at
         end,
     },
     read = {
@@ -546,7 +581,7 @@ local renderers = {
                 render_body_line(history, args.path or args.file_path)
             end
         end,
-        on_end = function(history, args)
+        on_end = function(history, args, _, _, insert_at)
             if args and args.oldText and args.newText then
                 -- NOTE: This renders the *proposed* diff (oldText→newText). When a
                 -- permission extension lets the user accept-with-modifications, the
@@ -573,8 +608,9 @@ local renderers = {
                         end
                     end
                 end
-                render_diff(history, args.oldText, args.newText, offset, path)
+                insert_at = render_diff(history, args.oldText, args.newText, offset, path, insert_at)
             end
+            return insert_at
         end,
     },
     write = {
@@ -610,16 +646,16 @@ local renderers = {
                 args._original_content = original or ""
             end
         end,
-        on_end = function(history, args)
+        on_end = function(history, args, _, _, insert_at)
             if not args or not args.content then
-                return
+                return insert_at
             end
             local original = args._original_content
             if not original then
-                return
+                return insert_at
             end
             local path = args.path or args.file_path
-            render_diff(history, original, args.content, 0, path)
+            return render_diff(history, original, args.content, 0, path, insert_at)
         end,
     },
 }
@@ -648,11 +684,12 @@ local default_renderer = {
             end
         end
     end,
-    on_end = function(history, _, result)
+    on_end = function(history, _, result, _, insert_at)
         local text = extract_result_text(result)
         if text and text ~= "" then
-            render_output(history, text)
+            insert_at = render_output(history, text, insert_at)
         end
+        return insert_at
     end,
 }
 

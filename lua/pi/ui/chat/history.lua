@@ -52,6 +52,7 @@ History.__index = History
 ---@class pi.ToolBlock
 ---@field tool_name string
 ---@field icon_extmark integer
+---@field tail_extmark? integer marks last row of block after on_start; used for positional insertion in on_tool_end
 ---@field output_extmark? integer
 ---@field end_extmark? integer
 ---@field tool_input? table
@@ -631,6 +632,22 @@ function History:_append_lines(lines_list)
     self:_update_status_extmark()
     self:_maybe_scroll()
     return start_row
+end
+
+--- Insert lines at a specific row instead of appending at the buffer end.
+--- Used by on_tool_end to place output inside the correct tool block when
+--- multiple tools run in parallel.
+---@param row integer 0-indexed row to insert before
+---@param lines_list string[]
+---@return integer start_row 0-indexed row where the first line was placed
+---@return integer next_row row after the last inserted line (for chaining)
+function History:_insert_lines(row, lines_list)
+    self:_with_modifiable(function()
+        vim.api.nvim_buf_set_lines(self._buf, row, row, false, lines_list)
+    end)
+    self:_update_status_extmark()
+    self:_maybe_scroll()
+    return row, row + #lines_list
 end
 
 ---@param header string
@@ -1588,9 +1605,14 @@ function History:on_tool_start(tool_name, tool_call_id, tool_input)
         end
 
         if tool_call_id then
+            -- tail_extmark marks the last row of the block after on_start.
+            -- on_tool_end uses it to insert output at the right position
+            -- when multiple tools run in parallel.
+            local tail_row = vim.api.nvim_buf_line_count(self._buf) - 1
             self._tool_blocks[tool_call_id] = {
                 tool_name = tool_name,
                 icon_extmark = icon_extmark,
+                tail_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, tail_row, 0, {}),
                 tool_input = tool_input,
                 expanded = true,
             }
@@ -1665,17 +1687,29 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
             return
         end
 
-        local pre_output_line = vim.api.nvim_buf_line_count(self._buf) - 1
+        -- Compute insertion point: after the tool block's on_start content.
+        -- When tools run in parallel, multiple headers are appended before
+        -- any on_tool_end fires, so we must insert output at the correct
+        -- position rather than appending at the buffer end.
+        local insert_at ---@type integer?
+        if block and block.tail_extmark then
+            local tail_pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.tail_extmark, {})
+            if tail_pos[1] then
+                insert_at = tail_pos[1] + 1
+            end
+        end
+
+        local output_start = insert_at or vim.api.nvim_buf_line_count(self._buf)
 
         local renderer = Tools.get_renderer(tool_name)
         if renderer.on_end then
-            renderer.on_end(self, block and block.tool_input, result, is_error)
+            insert_at = renderer.on_end(self, block and block.tool_input, result, is_error, insert_at)
         end
 
         -- Mark the first output line (if renderer.on_end added anything)
-        local post_output_line = vim.api.nvim_buf_line_count(self._buf) - 1
-        if block and post_output_line > pre_output_line then
-            block.output_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, pre_output_line + 1, 0, {})
+        local output_end = insert_at or vim.api.nvim_buf_line_count(self._buf)
+        if block and output_end > output_start then
+            block.output_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, output_start, 0, {})
         end
 
         local labels = Config.options.ui.labels
@@ -1683,7 +1717,12 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
         local is_success = status == "completed"
         local footer = is_success and (labels.tool_success .. " completed") or (labels.tool_failure .. " " .. status)
         local footer_hl = is_success and "PiToolStatus" or "PiToolError"
-        local start = self:_append_lines({ footer })
+        local start
+        if insert_at then
+            start, insert_at = self:_insert_lines(insert_at, { footer })
+        else
+            start = self:_append_lines({ footer })
+        end
         Tools.set_border(self, start, Tools.GLYPHS.BOT)
         local footer_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, start, 0, {
             end_col = #footer,
