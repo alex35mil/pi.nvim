@@ -33,6 +33,7 @@ function M.setup(opts)
     require("pi.attention").setup_autocmds()
     require("pi.sessions.manager").setup_autocmds()
     require("pi.commands").setup()
+    require("pi.ui.winfix").setup()
 end
 
 --- Show the chat and focus the prompt. Creates a session if none exists.

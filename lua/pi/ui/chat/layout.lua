@@ -26,16 +26,18 @@ local editor_foldcolumn = vim.wo.foldcolumn
 local function set_win_opts(win, extra)
     vim.wo[win].wrap = true
     vim.wo[win].linebreak = true
-    vim.wo[win].number = false
-    vim.wo[win].relativenumber = false
     vim.wo[win].signcolumn = "no"
     vim.wo[win].foldcolumn = editor_foldcolumn
     vim.wo[win].foldenable = false
     vim.wo[win].list = false
     vim.wo[win].conceallevel = 2
-    vim.wo[win].concealcursor = "nvic"
-    vim.wo[win].cursorline = false
     vim.wo[win].winfixbuf = true
+    -- These options form the fingerprint used by pi.ui.winfix to detect
+    -- windows inherited from pi. Keep in sync with has_pi_fingerprint().
+    vim.wo[win].concealcursor = "nvic"
+    vim.wo[win].number = false
+    vim.wo[win].relativenumber = false
+    vim.wo[win].cursorline = false
     if extra then
         extra(win)
     end
@@ -110,13 +112,16 @@ function Layout:_open_attachments_in_side_layout(after_win)
     vim.api.nvim_win_set_buf(self._attachments_win, self._attachments:buf())
     vim.wo[self._attachments_win].winfixheight = true
     vim.wo[self._attachments_win].winfixwidth = true
-    vim.wo[self._attachments_win].number = false
-    vim.wo[self._attachments_win].relativenumber = false
     vim.wo[self._attachments_win].signcolumn = "no"
     vim.wo[self._attachments_win].foldcolumn = editor_foldcolumn
-    vim.wo[self._attachments_win].cursorline = false
     vim.wo[self._attachments_win].winfixbuf = true
     vim.wo[self._attachments_win].wrap = false
+    -- Fingerprint options — see pi.ui.winfix
+    vim.wo[self._attachments_win].concealcursor = "nvic"
+    vim.wo[self._attachments_win].number = false
+    vim.wo[self._attachments_win].relativenumber = false
+    vim.wo[self._attachments_win].cursorline = false
+
     vim.api.nvim_set_current_win(prev_win)
 end
 
@@ -144,13 +149,15 @@ function Layout:_open_attachments_in_float_layout(col, row, width, border)
         title_pos = "center",
     })
     vim.wo[self._attachments_win].winfixheight = true
-    vim.wo[self._attachments_win].number = false
-    vim.wo[self._attachments_win].relativenumber = false
     vim.wo[self._attachments_win].signcolumn = "yes"
-    vim.wo[self._attachments_win].cursorline = false
     vim.wo[self._attachments_win].winfixbuf = true
     vim.wo[self._attachments_win].wrap = false
     vim.wo[self._attachments_win].winhighlight = Highlights.CHAT_ATTACHMENTS_WINHIGHLIGHT
+    -- Fingerprint options — see pi.ui.winfix
+    vim.wo[self._attachments_win].concealcursor = "nvic"
+    vim.wo[self._attachments_win].number = false
+    vim.wo[self._attachments_win].relativenumber = false
+    vim.wo[self._attachments_win].cursorline = false
 end
 
 function Layout:_close_history_win()
