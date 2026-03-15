@@ -117,6 +117,11 @@ function M.setup()
         Pi.compact(instructions)
     end, { nargs = "?", desc = "Compact π conversation context" })
 
+    vim.api.nvim_create_user_command("PiSessionName", function(cmd)
+        local name = cmd.args ~= "" and cmd.args or nil
+        Pi.set_session_name(name)
+    end, { nargs = "?", desc = "Set or show π session display name" })
+
     vim.api.nvim_create_user_command("PiToggleDebug", function()
         Pi.toggle_debug()
     end, { desc = "Toggle π RPC debug logging" })

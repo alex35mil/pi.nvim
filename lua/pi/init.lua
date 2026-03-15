@@ -307,6 +307,50 @@ function M.compact(custom_instructions)
     end)
 end
 
+--- Set or show the session display name.
+--- With no argument, shows the current name. With a name, sets it.
+---@param name? string session name to set (nil to show current)
+function M.set_session_name(name)
+    local Notify = require("pi.notify")
+    local Dialog = require("pi.ui.dialog")
+    local session = require("pi.sessions.manager").get()
+    if not session or not session.rpc:is_running() then
+        Notify.warn("No active session")
+        return
+    end
+
+    if name and name ~= "" then
+        session.rpc:send({ type = "set_session_name", name = name }, function(res)
+            vim.schedule(function()
+                if res.success then
+                    Notify.info("Session name set: " .. name)
+                else
+                    Notify.error("Failed to set session name: " .. (res.error or "unknown error"))
+                end
+            end)
+        end)
+        return
+    end
+
+    -- No name provided — prompt for one, pre-filling with current name
+    session.rpc:send({ type = "get_state" }, function(res)
+        vim.schedule(function()
+            if not res.success then
+                Notify.error("Failed to get session state")
+                return
+            end
+            Dialog.input({
+                title = "Session Name",
+                default = res.data and res.data.sessionName or "",
+            }, function(value)
+                if value and value ~= "" then
+                    M.set_session_name(value)
+                end
+            end)
+        end)
+    end)
+end
+
 --- Toggle RPC debug logging.
 function M.toggle_debug()
     require("pi.rpc").toggle_debug()

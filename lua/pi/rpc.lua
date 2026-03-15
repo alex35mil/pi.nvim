@@ -51,6 +51,7 @@
 ---| "set_model"
 ---| "cycle_model"
 ---| "get_available_models"
+---| "set_session_name"
 ---| "extension_ui_response"
 
 ---@class pi.RpcImageContent

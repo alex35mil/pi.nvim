@@ -301,10 +301,16 @@ function M.input(opts, callback)
         end,
     })
 
-    -- Place cursor at end of last line and enter insert mode
+    -- Place cursor at end of last line and enter insert mode.
+    -- Deferred: opening the float triggers BufLeave on the prompt buffer,
+    -- which calls stopinsert. We must schedule startinsert! after that.
     local last_line = lines[#lines] or ""
     vim.api.nvim_win_set_cursor(win, { #lines, #last_line })
-    vim.cmd("startinsert!")
+    vim.defer_fn(function()
+        if vim.api.nvim_win_is_valid(win) and vim.api.nvim_get_current_win() == win then
+            vim.cmd("startinsert!")
+        end
+    end, 10)
 
     local responded = false
     local timeout = nil ---@type integer?

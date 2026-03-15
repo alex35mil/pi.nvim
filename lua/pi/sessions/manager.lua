@@ -649,8 +649,9 @@ function M.resume_session(opts)
         format_item = function(item)
             local session = item.session
             local date = session.timestamp:match("^(%d%d%d%d%-%d%d%-%d%d)") or session.timestamp
-            local msg = session.first_message ~= "" and session.first_message or "(empty)"
-            return date .. "  " .. msg
+            local label = session.name
+                or (session.first_message ~= "" and session.first_message or "(empty)")
+            return date .. "  " .. label
         end,
         -- snacks.nvim (if installed) overrides vim.ui.select with its picker.
         -- It has a bug where the list height can be non-integer, crashing

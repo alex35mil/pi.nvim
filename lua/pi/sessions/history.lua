@@ -8,6 +8,7 @@ local Config = require("pi.config")
 ---@field timestamp string     ISO timestamp from header
 ---@field modified number      file mtime (for sorting)
 ---@field first_message string first user message (truncated)
+---@field name? string         display name from session_info entry
 
 --- Resolve the pi agent directory.
 ---@return string
@@ -59,29 +60,30 @@ local function parse_session_file(path)
         return nil
     end
 
-    -- Scan for first user message (read up to 20 lines)
+    -- Scan entire file for first user message and session name (latest wins).
     local first_message = ""
-    for _ = 1, 20 do
-        local line = file:read("*l")
-        if not line then
-            break
-        end
+    local name = nil
+    for line in file:lines() do
         local lok, entry = pcall(vim.json.decode, line)
-        if lok and entry and entry.type == "message" then
-            local msg = entry.message
-            if msg and msg.role == "user" then
-                local content = msg.content
-                if type(content) == "string" then
-                    first_message = content
-                elseif type(content) == "table" then
-                    for _, part in ipairs(content) do
-                        if type(part) == "table" and part.type == "text" then
-                            first_message = part.text or ""
-                            break
+        if lok and entry then
+            if entry.type == "session_info" and type(entry.name) == "string" and entry.name ~= "" then
+                name = entry.name:match("^%s*(.-)%s*$") -- trim
+            end
+            if first_message == "" and entry.type == "message" then
+                local msg = entry.message
+                if msg and msg.role == "user" then
+                    local content = msg.content
+                    if type(content) == "string" then
+                        first_message = content
+                    elseif type(content) == "table" then
+                        for _, part in ipairs(content) do
+                            if type(part) == "table" and part.type == "text" then
+                                first_message = part.text or ""
+                                break
+                            end
                         end
                     end
                 end
-                break
             end
         end
     end
@@ -96,6 +98,7 @@ local function parse_session_file(path)
         timestamp = header.timestamp or "",
         modified = vim.fn.getftime(path),
         first_message = first_message,
+        name = name,
     }
 end
 
