@@ -1468,6 +1468,12 @@ function History:on_system_error(error_message, opts)
     end)
 end
 
+--- Render the welcome header with "Loading resources…" hint.
+--- Used on initial chat show to provide feedback while startup data is being fetched.
+function History:show_loading_startup()
+    self:_render_startup_block(false)
+end
+
 ---@param opts { sections: pi.StartupSection[], errors?: pi.SystemErrorEntry[] }
 function History:show_startup_block(opts)
     if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
@@ -2148,6 +2154,7 @@ function History:clear()
     self._placeholder_mode = nil
     self._agent_text_start_row = nil
     self._last_agent_response_extmark_id = nil
+    vim.api.nvim_buf_clear_namespace(self._buf, ns, 0, -1)
     self:_with_modifiable(function()
         vim.api.nvim_buf_set_lines(self._buf, 0, -1, false, { "" })
     end)

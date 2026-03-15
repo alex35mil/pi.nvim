@@ -162,8 +162,8 @@ function Chat:show(opts)
     if opts and opts.loading then
         self:show_loading()
     else
-        -- Render the startup block (welcome header + any loaded resources so far).
-        self:show_startup_block({ sections = {}, errors = {} })
+        -- Render the welcome header with loading hint until startup data arrives.
+        self._history:show_loading_startup()
     end
     self:refresh_prompt_attention()
     self._prompt:focus()
