@@ -326,6 +326,8 @@ local function start_new_session(session)
                     return
                 end
                 Attention.end_session_transition(session, true)
+                session.startup_announcements = {}
+                session.system_errors = {}
                 session.chat:clear()
                 fetch_commands_and_show_startup_block(session)
             end)

@@ -32,6 +32,7 @@
 ---@field _startup_block_compact_marks? pi.HighlightMark[]
 ---@field _startup_timestamp integer?
 ---@field _startup_sections pi.StartupSection[]
+---@field _startup_loaded boolean whether startup data has been fetched at least once
 ---@field _startup_errors pi.SystemErrorEntry[]
 ---@field _pending_queue pi.PendingQueueEntry[]
 ---@field _pending_queue_extmark_id integer?
@@ -406,6 +407,7 @@ function History.new(tab)
     self._startup_block_compact_marks = nil
     self._startup_timestamp = nil
     self._startup_sections = {}
+    self._startup_loaded = false
     self._startup_errors = {}
     self._pending_queue = {}
     self._pending_queue_extmark_id = nil
@@ -1399,11 +1401,13 @@ function History:_render_startup_block(scroll_to_bottom)
         lines = vim.deepcopy(self._startup_block_compact_lines)
         marks = vim.deepcopy(self._startup_block_compact_marks)
     else
-        -- No sections yet — show welcome header with loading hint.
         lines, marks = self:_build_startup_header()
-        local loading = "     Loading resources…"
-        lines[#lines + 1] = loading
-        marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #loading, hl = "PiStartupHint" }
+        if not self._startup_loaded then
+            -- Still waiting for startup data — show loading hint.
+            local loading = "     Loading resources…"
+            lines[#lines + 1] = loading
+            marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #loading, hl = "PiStartupHint" }
+        end
     end
 
     -- Append startup errors after the startup block.
@@ -1470,6 +1474,7 @@ function History:show_startup_block(opts)
         return
     end
     self._startup_sections = self:_normalize_startup_sections(opts.sections)
+    self._startup_loaded = true
     self._startup_errors = vim.deepcopy(opts.errors or {})
     if #self._startup_sections > 0 then
         self._startup_timestamp = self._startup_timestamp or now_ms()
@@ -2137,6 +2142,7 @@ function History:clear()
     self._startup_block_compact_marks = nil
     self._startup_timestamp = nil
     self._startup_sections = {}
+    self._startup_loaded = false
     self._startup_errors = {}
     self:clear_placeholder()
     self._placeholder_mode = nil
