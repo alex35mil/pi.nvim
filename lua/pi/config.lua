@@ -34,17 +34,22 @@
 ---@field side pi.SideLayout
 ---@field float pi.FloatLayout
 
+---@alias pi.KeySpec string|{ [1]: string, modes: string[] }
+
 ---@class pi.ZenKeys
----@field toggle? pi.DialogKey Key to enter/exit zen mode
----@field exit? pi.DialogKey[] Additional keys that only exit zen mode
+---@field toggle? pi.KeySpec Key to enter/exit zen mode
+---@field exit? pi.KeySpec[] Additional keys that only exit zen mode
 
 ---@class pi.ZenConfig
 ---@field width? integer Prompt width in columns (default: textwidth if set, otherwise 80)
 ---@field keys pi.ZenKeys
 
----@class pi.Keymaps
----@field diff_accept pi.DialogKey
----@field diff_reject pi.DialogKey
+---@class pi.DiffKeys
+---@field accept pi.KeySpec
+---@field reject pi.KeySpec
+
+---@class pi.DiffConfig
+---@field keys pi.DiffKeys
 
 ---@alias pi.SpinnerPreset "classic"|"robot"
 
@@ -123,18 +128,17 @@
 ---@field labels pi.Labels
 ---@field layout pi.LayoutConfig
 ---@field statusline pi.StatusLineConfig
+---@field diff pi.DiffConfig
 ---@field attention pi.UiAttentionConfig
 ---@field zen pi.ZenConfig
 ---@field dialog pi.DialogConfig
 ---@field verbs? pi.VerbPair[] Custom verb pairs for status messages, picked randomly per run
 
----@alias pi.DialogKey string|{ [1]: string, modes: string[] }
-
 ---@class pi.DialogKeys
----@field confirm? pi.DialogKey[]
----@field cancel? pi.DialogKey[]
----@field next? pi.DialogKey[]
----@field prev? pi.DialogKey[]
+---@field confirm? pi.KeySpec[]
+---@field cancel? pi.KeySpec[]
+---@field next? pi.KeySpec[]
+---@field prev? pi.KeySpec[]
 
 --- A preferred model entry for cycling/selection.
 --- String: exact model ID.
@@ -171,7 +175,6 @@
 ---@field models? pi.ModelEntry[] Preferred models for cycling and :PiSelectModel
 ---@field on_widget? fun(key: string, lines: string[]?, placement: string?): pi.CustomBlock? Handle extension setWidget calls. Return a custom block to render inline in history, or nil to ignore. Not called for `:startup` widgets (keys ending with `:startup`), which are always stored as startup announcements and rendered in the system preamble.
 ---@field ui pi.UiConfig
----@field keymaps pi.Keymaps
 
 ---@class pi.ConfigModule
 ---@field options pi.Options
@@ -240,6 +243,12 @@ local defaults = {
                 thinking = { icon = "󰟶" },
             },
         },
+        diff = {
+            keys = {
+                accept = "<Leader>da",
+                reject = "<Leader>dr",
+            },
+        },
         attention = {
             auto_open_on_prompt_focus = true,
         },
@@ -281,10 +290,6 @@ local defaults = {
             { "Dangerously skipping permissions", "Dangerously skipped permissions" },
             { "Agently replacing you", "Agently replaced you" },
         },
-    },
-    keymaps = {
-        diff_accept = "<Leader>da",
-        diff_reject = "<Leader>dr",
     },
 }
 

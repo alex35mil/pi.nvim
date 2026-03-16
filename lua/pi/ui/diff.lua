@@ -4,6 +4,7 @@
 local M = {}
 
 local Config = require("pi.config")
+local Keys = require("pi.keys")
 local Notify = require("pi.notify")
 local Highlights = require("pi.ui.highlights")
 
@@ -299,11 +300,11 @@ function M.open(payload, callback, opts)
         end
     end, 200)
 
-    local keymaps = Config.options.keymaps
-    local accept_key = keymaps.diff_accept
-    local reject_key = keymaps.diff_reject
-    local accept_lhs = type(accept_key) == "table" and accept_key[1] or accept_key --[[@as string]]
-    local reject_lhs = type(reject_key) == "table" and reject_key[1] or reject_key --[[@as string]]
+    local diff_keys = Config.options.ui.diff.keys
+    local accept_key = diff_keys.accept
+    local reject_key = diff_keys.reject
+    local accept_lhs = Keys.lhs(accept_key)
+    local reject_lhs = Keys.lhs(reject_key)
     vim.wo[left_win].winbar = "%#PiDiffWinbar# %#PiDiffWinbarCurrent#CURRENT: " .. rel_path .. "%#PiDiffWinbar#"
     vim.wo[right_win].winbar = "%#PiDiffWinbar# %#PiDiffWinbarProposed# PROPOSED: "
         .. rel_path
@@ -431,10 +432,8 @@ function M.open(payload, callback, opts)
     end
 
     for _, b in ipairs({ before_buf, after_buf }) do
-        local accept_modes = type(accept_key) == "table" and accept_key.modes or "n"
-        local reject_modes = type(reject_key) == "table" and reject_key.modes or "n"
-        vim.keymap.set(accept_modes, accept_lhs, accept, { buffer = b, desc = "Accept edit" })
-        vim.keymap.set(reject_modes, reject_lhs, reject, { buffer = b, desc = "Reject edit" })
+        Keys.bind(b, accept_key, accept, { desc = "Accept edit" })
+        Keys.bind(b, reject_key, reject, { desc = "Reject edit" })
     end
 
     -- :w on the proposed buffer accepts the diff

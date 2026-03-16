@@ -2,6 +2,8 @@
 
 local M = {}
 
+local Keys = require("pi.keys")
+
 local ns = vim.api.nvim_create_namespace("pi-dialog")
 
 local WINHIGHLIGHT = require("pi.ui.highlights").DIALOG_WINHIGHLIGHT
@@ -24,28 +26,16 @@ local BASE_KEYS = {
     prev = { "k", "<Up>" },
 }
 
---- Bind a single key entry (string = normal only, table = specified modes).
----@param buf integer
----@param key string|pi.DialogKey
----@param handler function
-local function bind_key(buf, key, handler)
-    if type(key) == "string" then
-        vim.keymap.set("n", key, handler, { buffer = buf, nowait = true })
-    elseif type(key) == "table" then
-        vim.keymap.set(key.modes or "n", key[1], handler, { buffer = buf, nowait = true })
-    end
-end
-
 --- Bind base keys + user keys for a dialog action.
 ---@param buf integer
 ---@param action "confirm"|"cancel"|"next"|"prev"
 ---@param handler function
 local function bind_keys(buf, action, handler)
     for _, key in ipairs(BASE_KEYS[action] or {}) do
-        bind_key(buf, key, handler)
+        Keys.bind(buf, key, handler, { nowait = true })
     end
     for _, key in ipairs(get_config().keys[action] or {}) do
-        bind_key(buf, key, handler)
+        Keys.bind(buf, key, handler, { nowait = true })
     end
 end
 
@@ -248,7 +238,7 @@ function M.select(opts, callback)
     end)
     if opts.shortcuts then
         for key, value in pairs(opts.shortcuts) do
-            bind_key(buf, key, function()
+            Keys.bind(buf, key, function()
                 resolve(value)
             end)
         end

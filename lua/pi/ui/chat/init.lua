@@ -21,6 +21,7 @@ local Chat = {}
 Chat.__index = Chat
 
 local Config = require("pi.config")
+local Keys = require("pi.keys")
 local Layout = require("pi.ui.chat.layout")
 local History = require("pi.ui.chat.history")
 local Prompt = require("pi.ui.chat.prompt")
@@ -154,31 +155,16 @@ function Chat:_set_keymaps()
     local zen_keys = Config.options.ui.zen and Config.options.ui.zen.keys or nil
     if zen_keys then
         if zen_keys.toggle then
-            local key = zen_keys.toggle
-            if type(key) == "string" then
-                vim.keymap.set({ "n", "i" }, key, function()
-                    self:zen_toggle()
-                end, { buffer = pbuf, nowait = true, desc = "Toggle π zen mode" })
-            elseif type(key) == "table" then
-                vim.keymap.set(key.modes or { "n", "i" }, key[1], function()
-                    self:zen_toggle()
-                end, { buffer = pbuf, nowait = true, desc = "Toggle π zen mode" })
-            end
+            Keys.bind(pbuf, zen_keys.toggle, function()
+                self:zen_toggle()
+            end, { modes = { "n", "i" }, nowait = true, desc = "Toggle π zen mode" })
         end
         for _, key in ipairs(zen_keys.exit or {}) do
-            if type(key) == "string" then
-                vim.keymap.set({ "n", "i" }, key, function()
-                    if self._zen:is_active() then
-                        self._zen:exit()
-                    end
-                end, { buffer = pbuf, nowait = true, desc = "Exit π zen mode" })
-            elseif type(key) == "table" then
-                vim.keymap.set(key.modes or { "n", "i" }, key[1], function()
-                    if self._zen:is_active() then
-                        self._zen:exit()
-                    end
-                end, { buffer = pbuf, nowait = true, desc = "Exit π zen mode" })
-            end
+            Keys.bind(pbuf, key, function()
+                if self._zen:is_active() then
+                    self._zen:exit()
+                end
+            end, { modes = { "n", "i" }, nowait = true, desc = "Exit π zen mode" })
         end
     end
 end
