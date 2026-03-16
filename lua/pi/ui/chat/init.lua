@@ -16,6 +16,7 @@
 ---@field _done_verb string?
 ---@field _last_turn_stop_reason "aborted"|"error"|nil
 ---@field _attachments pi.ChatAttachments
+---@field _zen pi.Zen
 local Chat = {}
 Chat.__index = Chat
 
@@ -25,6 +26,7 @@ local History = require("pi.ui.chat.history")
 local Prompt = require("pi.ui.chat.prompt")
 local Attachments = require("pi.ui.chat.attachments")
 local Mentions = require("pi.ui.chat.mentions")
+local Zen = require("pi.ui.chat.zen")
 
 ---@param tab pi.TabId
 ---@param mode pi.LayoutMode
@@ -44,6 +46,7 @@ function Chat.new(tab, mode, agent)
     self._active_verb = nil
     self._done_verb = nil
     self._last_turn_stop_reason = nil
+    self._zen = Zen.new(self._prompt)
     return self
 end
 
@@ -146,6 +149,38 @@ function Chat:_set_keymaps()
             return
         end
     end, { buffer = hbuf, desc = "Toggle block under cursor" })
+
+    -- Zen mode keymaps
+    local zen_keys = Config.options.ui.zen and Config.options.ui.zen.keys or nil
+    if zen_keys then
+        if zen_keys.toggle then
+            local key = zen_keys.toggle
+            if type(key) == "string" then
+                vim.keymap.set({ "n", "i" }, key, function()
+                    self:zen_toggle()
+                end, { buffer = pbuf, nowait = true, desc = "Toggle π zen mode" })
+            elseif type(key) == "table" then
+                vim.keymap.set(key.modes or { "n", "i" }, key[1], function()
+                    self:zen_toggle()
+                end, { buffer = pbuf, nowait = true, desc = "Toggle π zen mode" })
+            end
+        end
+        for _, key in ipairs(zen_keys.exit or {}) do
+            if type(key) == "string" then
+                vim.keymap.set({ "n", "i" }, key, function()
+                    if self._zen:is_active() then
+                        self._zen:exit()
+                    end
+                end, { buffer = pbuf, nowait = true, desc = "Exit π zen mode" })
+            elseif type(key) == "table" then
+                vim.keymap.set(key.modes or { "n", "i" }, key[1], function()
+                    if self._zen:is_active() then
+                        self._zen:exit()
+                    end
+                end, { buffer = pbuf, nowait = true, desc = "Exit π zen mode" })
+            end
+        end
+    end
 end
 
 ---@class pi.ChatShowOpts
@@ -181,6 +216,9 @@ function Chat:show_loading()
 end
 
 function Chat:hide()
+    if self._zen:is_active() then
+        self._zen:exit()
+    end
     self._layout:hide()
 end
 
@@ -304,6 +342,19 @@ function Chat:toggle()
     end
 end
 
+--- Toggle zen mode (full-screen prompt float).
+function Chat:zen_toggle()
+    if not self._layout:is_visible() then
+        self:ensure_shown_and_focus_prompt()
+    end
+    self._zen:toggle()
+end
+
+---@return boolean
+function Chat:zen_active()
+    return self._zen:is_active()
+end
+
 --- Submit the prompt. When streaming, sends as a steer (interrupt); otherwise regular prompt.
 function Chat:submit()
     self:_send_message(self._streaming and "steer" or nil)
@@ -329,6 +380,11 @@ function Chat:_send_message(queue_type)
 
     if text == "" and self._attachments:count() == 0 then
         return
+    end
+
+    -- Exit zen mode before sending so the user returns to normal chat.
+    if self._zen:is_active() then
+        self._zen:exit()
     end
 
     self._prompt:clear_text()

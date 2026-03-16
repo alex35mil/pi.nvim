@@ -34,6 +34,14 @@
 ---@field side pi.SideLayout
 ---@field float pi.FloatLayout
 
+---@class pi.ZenKeys
+---@field toggle? pi.DialogKey Key to enter/exit zen mode
+---@field exit? pi.DialogKey[] Additional keys that only exit zen mode
+
+---@class pi.ZenConfig
+---@field width? integer Prompt width in columns (default: textwidth if set, otherwise 80)
+---@field keys pi.ZenKeys
+
 ---@class pi.Keymaps
 ---@field diff_accept pi.DialogKey
 ---@field diff_reject pi.DialogKey
@@ -116,6 +124,7 @@
 ---@field layout pi.LayoutConfig
 ---@field statusline pi.StatusLineConfig
 ---@field attention pi.UiAttentionConfig
+---@field zen pi.ZenConfig
 ---@field dialog pi.DialogConfig
 ---@field verbs? pi.VerbPair[] Custom verb pairs for status messages, picked randomly per run
 
@@ -244,6 +253,13 @@ local defaults = {
                 -- cancel
                 -- next
                 -- prev
+            },
+        },
+        zen = {
+            width = nil,
+            keys = {
+                toggle = nil,
+                exit = nil,
             },
         },
         verbs = {

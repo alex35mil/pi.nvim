@@ -7,6 +7,7 @@
 ---@field _statusline pi.StatusLine
 ---@field _attachments pi.ChatAttachments
 ---@field _tab pi.TabId
+---@field _zen boolean
 local Prompt = {}
 Prompt.__index = Prompt
 
@@ -55,6 +56,7 @@ function Prompt.new(tab, attachments)
     self._win = nil
     self._attachments = attachments
     self._tab = tab
+    self._zen = false
 
     local panel = Config.options.ui.panels.prompt
     local name = panel.name and panel.name(tab) or ("π-prompt | " .. tab)
@@ -197,7 +199,15 @@ function Prompt:set_layout(mode)
     self:_render_statusline()
 end
 
+---@param zen boolean
+function Prompt:set_zen(zen)
+    self._zen = zen
+end
+
 function Prompt:resize()
+    if self._zen then
+        return
+    end
     if not self._win or not vim.api.nvim_win_is_valid(self._win) then
         return
     end

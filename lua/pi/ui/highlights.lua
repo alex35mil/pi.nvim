@@ -97,6 +97,9 @@ local function set_defaults()
     )
     vim.api.nvim_set_hl(0, "PiChatAttachmentsFloatTitle", { default = true, fg = comment.fg, bg = normal.bg })
 
+    vim.api.nvim_set_hl(0, "PiZen", { default = true, bg = normal.bg })
+    vim.api.nvim_set_hl(0, "PiZenBackdrop", { default = true, bg = normal.bg })
+
     vim.api.nvim_set_hl(0, "PiDialogSelected", { default = true, link = "Visual" })
 
     vim.api.nvim_set_hl(0, "PiDiffWinbar", { default = true, bg = agent.fg })
