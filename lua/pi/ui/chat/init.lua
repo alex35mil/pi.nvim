@@ -21,7 +21,7 @@ local Chat = {}
 Chat.__index = Chat
 
 local Config = require("pi.config")
-local Keys = require("pi.keys")
+
 local Layout = require("pi.ui.chat.layout")
 local History = require("pi.ui.chat.history")
 local Prompt = require("pi.ui.chat.prompt")
@@ -151,21 +151,15 @@ function Chat:_set_keymaps()
         end
     end, { buffer = hbuf, desc = "Toggle block under cursor" })
 
-    -- Zen mode keymaps
-    local zen_keys = Config.options.zen and Config.options.zen.keys or nil
-    if zen_keys then
-        if zen_keys.toggle then
-            Keys.bind(pbuf, zen_keys.toggle, function()
-                self:zen_toggle()
-            end, { modes = { "n", "i" }, nowait = true, desc = "Toggle π zen mode" })
-        end
-        for _, key in ipairs(zen_keys.exit or {}) do
-            Keys.bind(pbuf, key, function()
-                if self._zen:is_active() then
-                    self._zen:exit()
-                end
-            end, { modes = { "n", "i" }, nowait = true, desc = "Exit π zen mode" })
-        end
+    -- Zen toggle key — permanent on the prompt buffer.
+    -- Enters zen when inactive, exits when active.
+    local zen_cfg = Config.options.zen
+    local zen_keys = zen_cfg and zen_cfg.keys or nil
+    if zen_keys and zen_keys.toggle then
+        local Keys = require("pi.keys")
+        Keys.bind(pbuf, zen_keys.toggle, function()
+            self:zen_toggle()
+        end, { modes = { "n", "i" }, nowait = true, desc = "Toggle π zen mode" })
     end
 end
 

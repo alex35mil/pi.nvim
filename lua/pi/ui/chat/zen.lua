@@ -7,10 +7,12 @@
 ---@field _prev_win integer?
 ---@field _winleave_aucmd integer?
 ---@field _resize_aucmd integer?
+---@field _bound_keys { lhs: string, modes: string[], saved: table<string, table?> }[]
 local Zen = {}
 Zen.__index = Zen
 
 local Config = require("pi.config")
+local Keys = require("pi.keys")
 
 --- Z-index: above normal pi floats (10) but below dialogs (default 50).
 local BACKDROP_ZINDEX = 40
@@ -26,6 +28,7 @@ function Zen.new(prompt)
     self._prev_win = nil
     self._winleave_aucmd = nil
     self._resize_aucmd = nil
+    self._bound_keys = {}
     return self
 end
 
@@ -169,7 +172,84 @@ function Zen:enter()
         end,
     })
 
+    -- Bind zen keymaps on the prompt buffer (removed on exit).
+    self:_bind_keys()
+
     vim.cmd("startinsert")
+end
+
+--- Look up an existing buffer-local mapping for a given mode and lhs.
+---@param buf integer
+---@param mode string
+---@param lhs string
+---@return table? mapping info table from vim.api.nvim_buf_get_keymap, or nil
+local function get_buf_mapping(buf, mode, lhs)
+    for _, map in ipairs(vim.api.nvim_buf_get_keymap(buf, mode)) do
+        if map.lhs == lhs then
+            return map
+        end
+    end
+    return nil
+end
+
+--- Bind zen exit keys on the prompt buffer (temporary, removed on exit).
+--- Saves any existing buffer-local mappings so they can be restored.
+--- The toggle key is set permanently in Chat:_set_keymaps().
+function Zen:_bind_keys()
+    local zen_cfg = Config.options.zen
+    local zen_keys = zen_cfg and zen_cfg.keys or nil
+    if not zen_keys then
+        return
+    end
+    local buf = self._prompt:buf()
+    self._bound_keys = {}
+    local default_modes = { "n", "i" }
+    for _, key in ipairs(zen_keys.exit or {}) do
+        local lhs = Keys.lhs(key)
+        -- Resolve actual modes: table key specs may override default_modes
+        local modes = (type(key) == "table" and key.modes) or default_modes
+        if type(modes) == "string" then
+            modes = { modes }
+        end
+        -- Save existing mappings before overriding
+        local saved = {}
+        for _, mode in ipairs(modes) do
+            saved[mode] = get_buf_mapping(buf, mode, lhs)
+        end
+        Keys.bind(buf, key, function()
+            self:exit()
+        end, { modes = default_modes, nowait = true, desc = "Exit π zen mode" })
+        self._bound_keys[#self._bound_keys + 1] = { lhs = lhs, modes = modes, saved = saved }
+    end
+end
+
+--- Remove zen keymaps from the prompt buffer and restore previous mappings.
+function Zen:_unbind_keys()
+    local buf = self._prompt:buf()
+    if not vim.api.nvim_buf_is_valid(buf) then
+        self._bound_keys = {}
+        return
+    end
+    for _, entry in ipairs(self._bound_keys) do
+        for _, mode in ipairs(entry.modes) do
+            pcall(vim.keymap.del, mode, entry.lhs, { buffer = buf })
+            -- Restore the previous buffer-local mapping if one existed
+            local prev = entry.saved[mode]
+            if prev then
+                local rhs = prev.callback or prev.rhs or ""
+                local opts = {
+                    buffer = buf,
+                    silent = prev.silent == 1,
+                    nowait = prev.nowait == 1,
+                    expr = prev.expr == 1,
+                    noremap = prev.noremap == 1,
+                    desc = prev.desc,
+                }
+                pcall(vim.keymap.set, mode, entry.lhs, rhs, opts)
+            end
+        end
+    end
+    self._bound_keys = {}
 end
 
 --- Reposition backdrop and prompt floats to match current editor dimensions.
@@ -199,6 +279,10 @@ function Zen:exit()
     if not self:is_active() then
         return
     end
+
+    -- Remove zen keymaps before autocmds so the user's original
+    -- buffer-local mappings take effect again immediately.
+    self:_unbind_keys()
 
     -- Remove autocmds
     if self._winleave_aucmd then
