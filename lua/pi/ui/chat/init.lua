@@ -208,6 +208,12 @@ function Chat:hide()
     self._layout:hide()
 end
 
+--- Handle editor resize. Re-evaluates layout config and updates geometry.
+function Chat:on_resize()
+    self._layout:on_resize()
+    self:refresh_prompt_attention()
+end
+
 function Chat:toggle_layout()
     self._layout:toggle()
     self:refresh_prompt_attention()

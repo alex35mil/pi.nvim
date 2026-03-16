@@ -30,9 +30,9 @@
 ---@alias pi.LayoutMode "side"|"float"
 
 ---@class pi.LayoutConfig
----@field default pi.LayoutMode
----@field side pi.SideLayout
----@field float pi.FloatLayout
+---@field default pi.LayoutMode|fun(): pi.LayoutMode
+---@field side pi.SideLayout|fun(): pi.SideLayout
+---@field float pi.FloatLayout|fun(): pi.FloatLayout
 
 ---@alias pi.KeySpec string|{ [1]: string, modes: string[] }
 
@@ -292,6 +292,41 @@ M.options = vim.deepcopy(defaults)
 ---@param opts? pi.Options
 function M.setup(opts)
     M.options = vim.tbl_deep_extend("force", defaults, opts or {})
+end
+
+--- Resolve a config value that may be a function, merging the result with
+--- a fallback table when provided.
+---@generic T
+---@param value T|fun(): T
+---@param fallback? T
+---@return T
+local function resolve(value, fallback)
+    if type(value) ~= "function" then
+        return value
+    end
+    local result = value()
+    if fallback and type(result) == "table" and type(fallback) == "table" then
+        return vim.tbl_deep_extend("force", fallback, result)
+    end
+    return result
+end
+
+--- Resolve layout.default (may be a string or a function returning one).
+---@return pi.LayoutMode
+function M.resolve_default_layout_mode()
+    return resolve(M.options.layout.default) --[[@as pi.LayoutMode]]
+end
+
+--- Resolve layout.side (may be a table or a function returning a partial table).
+---@return pi.SideLayout
+function M.resolve_side_layout()
+    return resolve(M.options.layout.side, defaults.layout.side) --[[@as pi.SideLayout]]
+end
+
+--- Resolve layout.float (may be a table or a function returning a partial table).
+---@return pi.FloatLayout
+function M.resolve_float_layout()
+    return resolve(M.options.layout.float, defaults.layout.float) --[[@as pi.FloatLayout]]
 end
 
 --- Pick a random verb pair, returns { active, done }.

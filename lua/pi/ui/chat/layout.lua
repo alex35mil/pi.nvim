@@ -71,7 +71,8 @@ function Layout:refresh_prompt_attention(has_attention)
         return
     end
 
-    if Config.options.layout.side.panels.prompt.winbar then
+    local side_cfg = Config.resolve_side_layout()
+    if side_cfg.panels.prompt.winbar then
         set_winbar(
             pwin,
             Config.options.panels.prompt.title,
@@ -196,7 +197,15 @@ function Layout:_close_attachments_win()
     self._attachments_win = nil
 end
 
-function Layout:_reposition_float_stack()
+--- Reposition (and optionally resize) the float window stack.
+--- When target_width / target_height are given, windows are resized to match
+--- the new dimensions (used on VimResized). Without them, the current window
+--- sizes are preserved and only positions are recalculated (used when the
+--- attachment count changes).
+---@param target_width? integer
+---@param target_height? integer
+---@param float_cfg? pi.FloatLayout Pre-resolved config; resolved internally if omitted.
+function Layout:_reposition_float_stack(target_width, target_height, float_cfg)
     if not self._history_win or not vim.api.nvim_win_is_valid(self._history_win) then
         return
     end
@@ -204,15 +213,26 @@ function Layout:_reposition_float_stack()
         return
     end
 
-    local float_cfg = Config.options.layout.float
+    float_cfg = float_cfg or Config.resolve_float_layout()
     local ui_width = vim.o.columns
     local ui_height = vim.o.lines - vim.o.cmdheight - 1
     local border = float_cfg.border or "rounded"
 
-    local width = vim.api.nvim_win_get_width(self._history_win)
-    local history_height = vim.api.nvim_win_get_height(self._history_win)
+    local width = target_width or vim.api.nvim_win_get_width(self._history_win)
     local prompt_height = vim.api.nvim_win_get_height(self._prompt_win)
     local attach_count = self._attachments:count()
+
+    local history_height
+    if target_height then
+        -- Derive history height from the target total height.
+        history_height = target_height - prompt_height - 1
+        if attach_count > 0 then
+            history_height = history_height - attach_count - 2
+        end
+        history_height = math.max(3, history_height)
+    else
+        history_height = vim.api.nvim_win_get_height(self._history_win)
+    end
 
     -- border takes 2 lines per window (top + bottom)
     local total = history_height + 2 + prompt_height + 2
@@ -250,6 +270,7 @@ function Layout:_reposition_float_stack()
         relative = "editor",
         row = prompt_row,
         col = col,
+        width = width,
     })
 
     if attach_count > 0 then
@@ -301,7 +322,8 @@ function Layout:_refresh_attachments()
         end
         local awin = self:attachments_win()
         if awin then
-            if Config.options.layout.side.panels.attachments.winbar then
+            local side_cfg = Config.resolve_side_layout()
+            if side_cfg.panels.attachments.winbar then
                 set_winbar(awin, Config.options.panels.attachments.title, "PiChatAttachmentsWinbar")
             end
             -- Account for winbar + padding in target height
@@ -324,13 +346,39 @@ function Layout:_refresh_attachments()
     end
 end
 
-function Layout:_open_in_side_layout()
-    local side_cfg = Config.options.layout.side
-    local panels = side_cfg.panels
-    local w = side_cfg.width
-    if w < 1 then
-        w = math.floor(vim.o.columns * w)
+--- Resolve a dimension (width or height) from a config value.
+--- Values < 1 are treated as fractions of the available space.
+---@param value number
+---@param available integer
+---@return integer
+local function resolve_dimension(value, available)
+    if value < 1 then
+        return math.floor(available * value)
     end
+    return math.floor(value)
+end
+
+--- Resolve side panel width in columns from config.
+---@return integer
+local function resolve_side_width()
+    local side_cfg = Config.resolve_side_layout()
+    return resolve_dimension(side_cfg.width, vim.o.columns)
+end
+
+--- Resolve float dimensions in pixels from config.
+---@param float_cfg? pi.FloatLayout Pre-resolved config; resolved internally if omitted.
+---@return integer width, integer total_height
+local function resolve_float_size(float_cfg)
+    float_cfg = float_cfg or Config.resolve_float_layout()
+    local width = resolve_dimension(float_cfg.width, vim.o.columns)
+    local total_height = resolve_dimension(float_cfg.height, vim.o.lines - vim.o.cmdheight - 1)
+    return width, total_height
+end
+
+function Layout:_open_in_side_layout()
+    local side_cfg = Config.resolve_side_layout()
+    local panels = side_cfg.panels
+    local w = resolve_side_width()
     vim.cmd("botright " .. w .. "vsplit")
 
     self._history_win = vim.api.nvim_get_current_win()
@@ -364,21 +412,11 @@ function Layout:_open_in_side_layout()
 end
 
 function Layout:_open_in_float_layout()
-    local float_cfg = Config.options.layout.float
-    local ui_width = vim.o.columns
-    local ui_height = vim.o.lines - vim.o.cmdheight - 1
-
-    ---@type integer
-    local width = type(float_cfg.width) == "number" and float_cfg.width < 1 and math.floor(ui_width * float_cfg.width)
-        or (float_cfg.width or 80)
-    ---@type integer
-    local total_height = type(float_cfg.height) == "number"
-            and float_cfg.height < 1
-            and math.floor(ui_height * float_cfg.height)
-        or (float_cfg.height or 30)
+    local float_cfg = Config.resolve_float_layout()
+    local width, total_height = resolve_float_size(float_cfg)
     local history_height = total_height - Prompt.HEIGHT - 1
-    local col = math.floor((ui_width - width) / 2)
-    local row = math.floor((ui_height - total_height) / 2)
+    local col = math.floor((vim.o.columns - width) / 2)
+    local row = math.floor((vim.o.lines - vim.o.cmdheight - 1 - total_height) / 2)
     local border = float_cfg.border or "rounded"
     local user_win = float_cfg.win or {}
 
@@ -428,6 +466,24 @@ function Layout:_open_in_float_layout()
     vim.wo[self._prompt_win].winhighlight = Highlights.CHAT_PROMPT_WINHIGHLIGHT
     self._prompt:set_layout("float")
     self._prompt:set_win(self._prompt_win)
+end
+
+--- Handle editor resize. Re-evaluates layout config (which may be a function)
+--- and updates window geometry in the current mode.
+function Layout:on_resize()
+    if not self:is_visible() then
+        return
+    end
+
+    if self._mode == "float" then
+        local float_cfg = Config.resolve_float_layout()
+        local width, total_height = resolve_float_size(float_cfg)
+        self:_reposition_float_stack(width, total_height, float_cfg)
+    else
+        if self._history_win and vim.api.nvim_win_is_valid(self._history_win) then
+            vim.api.nvim_win_set_width(self._history_win, resolve_side_width())
+        end
+    end
 end
 
 ---@return boolean opened true if a fresh open occurred

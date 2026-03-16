@@ -245,7 +245,7 @@ function M.get_or_create(opts)
         return nil
     end
 
-    local layout = opts.layout or Config.options.layout.default
+    local layout = opts.layout or Config.resolve_default_layout_mode()
 
     ---@type pi.ChatAgent
     local agent = {
@@ -715,6 +715,16 @@ function M.setup_autocmds()
             for _, session in pairs(sessions) do
                 Attention.clear_session(session)
                 session.rpc:stop()
+            end
+        end,
+    })
+
+    vim.api.nvim_create_autocmd("VimResized", {
+        callback = function()
+            for _, session in pairs(sessions) do
+                if session.chat:is_visible() then
+                    session.chat:on_resize()
+                end
             end
         end,
     })
