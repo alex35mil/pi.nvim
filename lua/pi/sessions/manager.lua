@@ -651,22 +651,60 @@ function M.resume_session(opts)
         format_item = function(item)
             local session = item.session
             local date = session.timestamp:match("^(%d%d%d%d%-%d%d%-%d%d)") or session.timestamp
-            local label = session.name
-                or (session.first_message ~= "" and session.first_message or "(empty)")
+            local label = session.name or (session.first_message ~= "" and session.first_message or "(empty)")
             return date .. "  " .. label
         end,
-        -- snacks.nvim (if installed) overrides vim.ui.select with its picker.
-        -- It has a bug where the list height can be non-integer, crashing
-        -- nvim_win_set_config. This `snacks` key is merged into the picker
-        -- config and overrides the broken height calculation with math.floor.
-        -- Safe to include even if snacks isn't used — the key is just ignored.
         snacks = {
+            -- snacks.nvim (if installed) overrides vim.ui.select with its picker.
+            -- It has a bug where the list height can be non-integer, crashing
+            -- nvim_win_set_config. This `snacks` key is merged into the picker
+            -- config and overrides the broken height calculation with math.floor.
+            -- Safe to include even if snacks isn't used — the key is just ignored.
             layout = {
                 config = function(layout)
                     for _, box in ipairs(layout.layout) do
                         if box.win == "list" then
                             box.height = math.floor(math.max(math.min(#items, vim.o.lines * 0.8 - 10), 2))
                         end
+                    end
+                end,
+            },
+            win = {
+                input = { keys = { ["<C-x>"] = { "delete_session", mode = { "i", "n" }, desc = "Delete session" } } },
+                list = { keys = { ["<C-x>"] = { "delete_session", mode = { "n" }, desc = "Delete session" } } },
+            },
+            actions = {
+                delete_session = function(picker)
+                    local selected = picker:selected({ fallback = true })
+                    if #selected == 0 then
+                        return
+                    end
+                    local n = #selected
+                    local msg = n == 1 and "Delete session?" or ("Delete %d sessions?"):format(n)
+                    if vim.fn.confirm(msg, "&Yes\n&No", 2) ~= 1 then
+                        return
+                    end
+                    ---@type table<string, boolean>
+                    local deleted = {}
+                    for _, sel in ipairs(selected) do
+                        local path = sel.item.file
+                        local ok, err = os.remove(path)
+                        if ok then
+                            deleted[path] = true
+                        else
+                            Notify.warn("Failed to delete session: " .. (err or path))
+                        end
+                    end
+                    for i = #items, 1, -1 do
+                        if deleted[items[i].file] then
+                            table.remove(items, i)
+                        end
+                    end
+                    if #items == 0 then
+                        picker:close()
+                        Notify.info("No sessions remaining")
+                    else
+                        picker:refresh()
                     end
                 end,
             },
