@@ -111,7 +111,7 @@ end
 ---@param image_count integer
 ---@return string
 local function format_attachment_info(image_count)
-    local icon = Config.options.ui.labels.attachments
+    local icon = Config.options.labels.attachments
     return image_count == 1 and (icon .. " 1 image attached") or (icon .. " %d images attached"):format(image_count)
 end
 
@@ -390,7 +390,7 @@ function History.new(tab)
     self._fence_open = false
     self._first_delta = false
     self._agent_start_time = nil
-    self._show_thinking = Config.options.ui.show_thinking
+    self._show_thinking = Config.options.show_thinking
     self._is_thinking = false
     self._needs_separator = false
     self._thinking_accum = nil
@@ -400,7 +400,7 @@ function History.new(tab)
     self._placeholder_mode = nil
     self._has_conversation_content = false
     self._startup_block_line_count = 0
-    self._startup_block_expanded = Config.options.ui.expand_startup_details
+    self._startup_block_expanded = Config.options.expand_startup_details
     self._startup_block_expanded_lines = nil
     self._startup_block_expanded_marks = nil
     self._startup_block_compact_lines = nil
@@ -415,7 +415,7 @@ function History.new(tab)
     self._agent_text_start_row = nil
     self._last_agent_response_extmark_id = nil
 
-    local panel = Config.options.ui.panels.history
+    local panel = Config.options.panels.history
     local name = panel.name and panel.name(tab) or ("π-chat | " .. tab)
     wipe_stale_buf(name)
     self._buf = vim.api.nvim_create_buf(false, true)
@@ -516,7 +516,7 @@ function History:scroll_to_last_agent_response()
 end
 
 function History:_pick_spinner()
-    local opt = Config.options.ui.spinner
+    local opt = Config.options.spinner
     ---@type pi.SpinnerDef
     local s
     if type(opt) == "table" then
@@ -546,8 +546,8 @@ function History:_update_status_extmark()
         ---@type table[]
         local virt = { { { "" } } }
         for _, entry in ipairs(self._pending_queue) do
-            local label = entry.queue_type == "steer" and (Config.options.ui.labels.steer_message .. " ")
-                or (Config.options.ui.labels.follow_up_message .. " ")
+            local label = entry.queue_type == "steer" and (Config.options.labels.steer_message .. " ")
+                or (Config.options.labels.follow_up_message .. " ")
             local preview = entry.text:gsub("\n", " ")
             if preview == "" and entry.image_count and entry.image_count > 0 then
                 preview = format_attachment_info(entry.image_count)
@@ -582,7 +582,7 @@ function History:_update_status_extmark()
     local content = frame .. "  " .. self._status_text
     local suffix = ""
     if self._is_thinking then
-        suffix = " · " .. Config.options.ui.labels.thinking
+        suffix = " · " .. Config.options.labels.thinking
     end
     local full_width = vim.fn.strdisplaywidth(content .. elapsed .. suffix)
     local pad = 0
@@ -656,7 +656,7 @@ end
 ---@param content string[]
 ---@return string[]
 function History:_build_thinking_block(header, content)
-    local label = Config.options.ui.labels.thinking
+    local label = Config.options.labels.thinking
     local result = { "", label .. " " .. header }
     for _, line in ipairs(content) do
         result[#result + 1] = line
@@ -908,7 +908,7 @@ function History:add_user_message(msg, timestamp, image_count, queue_type)
             return
         end
         self:_begin_conversation_content()
-        local label = " " .. Config.options.ui.labels.user_message .. " "
+        local label = " " .. Config.options.labels.user_message .. " "
         local has_message_text = msg ~= ""
         local msg_lines = has_message_text and vim.split(msg, "\n", { plain = true }) or {}
         -- Treesitter highlights fenced code blocks — an unclosed fence bleeds
@@ -926,9 +926,9 @@ function History:add_user_message(msg, timestamp, image_count, queue_type)
         local time_str = format_time(time)
         local queue_tag = ""
         if queue_type == "steer" then
-            queue_tag = "  " .. Config.options.ui.labels.steer_message
+            queue_tag = "  " .. Config.options.labels.steer_message
         elseif queue_type == "follow_up" then
-            queue_tag = "  " .. Config.options.ui.labels.follow_up_message
+            queue_tag = "  " .. Config.options.labels.follow_up_message
         end
         local label_line = label .. time_str .. queue_tag
         local lines = { "", label_line }
@@ -979,7 +979,7 @@ function History:on_agent_start(timestamp)
         self._needs_separator = false
         self._last_was_inline = false
         self:_pick_spinner()
-        local label = " " .. Config.options.ui.labels.agent_response .. " "
+        local label = " " .. Config.options.labels.agent_response .. " "
         local time = timestamp or (os.time() * 1000)
         local time_str = format_time(time)
         local label_line = label .. time_str
@@ -1076,7 +1076,7 @@ function History:on_error(error_message, opts)
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
         end
-        local icon = Config.options.ui.labels.error
+        local icon = Config.options.labels.error
         local error_lines = vim.split(error_message, "\n", { plain = true })
         local indent = string.rep(" ", vim.fn.strdisplaywidth(icon) + 1)
         error_lines[1] = icon .. " " .. error_lines[1]
@@ -1111,7 +1111,7 @@ end
 ---@param timestamp integer
 ---@param opts? pi.ChatErrorOpts
 function History:_append_system_error_block(error_message, timestamp, opts)
-    local label = " " .. Config.options.ui.labels.system_error .. " "
+    local label = " " .. Config.options.labels.system_error .. " "
     local time_str = format_time(timestamp)
     local label_line = label .. time_str
     local error_lines = vim.split(error_message, "\n", { plain = true })
@@ -1192,7 +1192,7 @@ function History:_build_startup_header()
     local marks = {} ---@type pi.HighlightMark[]
 
     -- Welcome lines (always shown)
-    local label = " " .. Config.options.ui.labels.agent_response .. " "
+    local label = " " .. Config.options.labels.agent_response .. " "
     local body = "  Hi! Ask me anything or describe what you'd like to build."
     local hint_prefix = "     Use "
     local mention = "@file"
@@ -1294,7 +1294,7 @@ function History:_build_startup_error_lines(base_row)
         if base_row + #lines > 0 then
             lines[#lines + 1] = ""
         end
-        local label = " " .. Config.options.ui.labels.system_error .. " "
+        local label = " " .. Config.options.labels.system_error .. " "
         local time_str = format_time(entry.timestamp)
         local label_line = label .. time_str
         lines[#lines + 1] = label_line
@@ -1540,7 +1540,7 @@ function History:on_tool_start(tool_name, tool_call_id, tool_input)
         end
         self:_begin_conversation_content()
         self._needs_separator = false
-        local icon = Config.options.ui.labels.tool
+        local icon = Config.options.labels.tool
         local renderer = Tools.get_renderer(tool_name)
 
         -- Inline tools render as a single line: icon + tool_name + detail
@@ -1656,7 +1656,7 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
 
         -- Inline tools: append status indicator to the existing line
         if block and block.inline then
-            local labels = Config.options.ui.labels
+            local labels = Config.options.labels
             local status = Tools.resolve_status(result, is_error)
             local is_success = status == "completed"
             local icon_hl = is_success and "PiToolHeader" or "PiToolError"
@@ -1664,7 +1664,7 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
             local status_hl = is_success and "PiToolStatus" or "PiToolError"
 
             -- Update icon color
-            local icon = Config.options.ui.labels.tool
+            local icon = Config.options.labels.tool
             local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
             if not pos[1] then
                 return
@@ -1723,7 +1723,7 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
             block.output_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, output_start, 0, {})
         end
 
-        local labels = Config.options.ui.labels
+        local labels = Config.options.labels
         local status = Tools.resolve_status(result, is_error)
         local is_success = status == "completed"
         local footer = is_success and (labels.tool_success .. " completed") or (labels.tool_failure .. " " .. status)
@@ -1742,7 +1742,7 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
 
         if block then
             local icon_hl = is_success and "PiToolHeader" or "PiToolError"
-            local icon = Config.options.ui.labels.tool
+            local icon = Config.options.labels.tool
             local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
             if pos[1] then
                 vim.api.nvim_buf_set_extmark(self._buf, ns, pos[1], 0, {
@@ -1896,7 +1896,7 @@ function History:on_thinking_start()
             return
         end
         self._is_thinking = true
-        local label = Config.options.ui.labels.thinking
+        local label = Config.options.labels.thinking
         local last_line = vim.api.nvim_buf_line_count(self._buf) - 1
         local anchor = vim.api.nvim_buf_set_extmark(self._buf, ns, last_line, 0, {
             right_gravity = false,
@@ -1988,7 +1988,7 @@ function History:on_thinking_end()
         if visible then
             local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, self._thinking_accum.anchor, {})
             local header_row = pos[1] + 1
-            local label = Config.options.ui.labels.thinking
+            local label = Config.options.labels.thinking
             local header_text = label .. " " .. header
             self:_with_modifiable(function()
                 vim.api.nvim_buf_set_lines(self._buf, header_row, header_row + 1, false, { header_text })
@@ -2141,7 +2141,7 @@ function History:clear()
     self._tool_blocks = {}
     self._has_conversation_content = false
     self._startup_block_line_count = 0
-    self._startup_block_expanded = Config.options.ui.expand_startup_details
+    self._startup_block_expanded = Config.options.expand_startup_details
     self._startup_block_expanded_lines = nil
     self._startup_block_expanded_marks = nil
     self._startup_block_compact_lines = nil

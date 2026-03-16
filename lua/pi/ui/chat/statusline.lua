@@ -71,7 +71,7 @@ end
 ---@param name pi.StatusLineBuiltinName
 ---@return table
 local function component_config(name)
-    local components = ((Config.options.ui.statusline or {}).components or {})
+    local components = ((Config.options.statusline or {}).components or {})
     local cfg = components[name]
     return type(cfg) == "table" and cfg or {}
 end
@@ -440,7 +440,7 @@ function StatusLine:render()
     local win = self._win_fn()
     local width = win and text_area_width(win) or 80
 
-    local sl_cfg = Config.options.ui.statusline
+    local sl_cfg = Config.options.statusline
     local left_names = sl_cfg and sl_cfg.layout and sl_cfg.layout.left or { "context" }
     local right_names = sl_cfg and sl_cfg.layout and sl_cfg.layout.right or { "model", " · ", "thinking" }
 

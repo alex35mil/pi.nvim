@@ -71,10 +71,10 @@ function Layout:refresh_prompt_attention(has_attention)
         return
     end
 
-    if Config.options.ui.layout.side.panels.prompt.winbar then
+    if Config.options.layout.side.panels.prompt.winbar then
         set_winbar(
             pwin,
-            Config.options.ui.panels.prompt.title,
+            Config.options.panels.prompt.title,
             "PiChatPromptWinbar",
             has_attention and "PiChatPromptWinbarAttentionTitle" or "PiChatPromptWinbarTitle"
         )
@@ -145,7 +145,7 @@ function Layout:_open_attachments_in_float_layout(col, row, width, border)
         style = "minimal",
         border = border,
         zindex = FLOAT_ZINDEX,
-        title = " " .. Config.options.ui.panels.attachments.title .. " ",
+        title = " " .. Config.options.panels.attachments.title .. " ",
         title_pos = "center",
     })
     vim.wo[self._attachments_win].winfixheight = true
@@ -204,7 +204,7 @@ function Layout:_reposition_float_stack()
         return
     end
 
-    local float_cfg = Config.options.ui.layout.float
+    local float_cfg = Config.options.layout.float
     local ui_width = vim.o.columns
     local ui_height = vim.o.lines - vim.o.cmdheight - 1
     local border = float_cfg.border or "rounded"
@@ -301,8 +301,8 @@ function Layout:_refresh_attachments()
         end
         local awin = self:attachments_win()
         if awin then
-            if Config.options.ui.layout.side.panels.attachments.winbar then
-                set_winbar(awin, Config.options.ui.panels.attachments.title, "PiChatAttachmentsWinbar")
+            if Config.options.layout.side.panels.attachments.winbar then
+                set_winbar(awin, Config.options.panels.attachments.title, "PiChatAttachmentsWinbar")
             end
             -- Account for winbar + padding in target height
             local aheight = self._attachments:count() + 1 -- +1 for padding line
@@ -325,7 +325,7 @@ function Layout:_refresh_attachments()
 end
 
 function Layout:_open_in_side_layout()
-    local side_cfg = Config.options.ui.layout.side
+    local side_cfg = Config.options.layout.side
     local panels = side_cfg.panels
     local w = side_cfg.width
     if w < 1 then
@@ -342,7 +342,7 @@ function Layout:_open_in_side_layout()
         vim.wo[win].conceallevel = 0
     end)
     if panels.history.winbar then
-        set_winbar(self._history_win, Config.options.ui.panels.history.title, "PiChatHistoryWinbar")
+        set_winbar(self._history_win, Config.options.panels.history.title, "PiChatHistoryWinbar")
     end
     self._history:set_win(self._history_win)
 
@@ -357,14 +357,14 @@ function Layout:_open_in_side_layout()
         vim.wo[win].virtualedit = "onemore"
     end)
     if prompt_winbar then
-        set_winbar(self._prompt_win, Config.options.ui.panels.prompt.title, "PiChatPromptWinbar")
+        set_winbar(self._prompt_win, Config.options.panels.prompt.title, "PiChatPromptWinbar")
     end
     self._prompt:set_layout("side")
     self._prompt:set_win(self._prompt_win)
 end
 
 function Layout:_open_in_float_layout()
-    local float_cfg = Config.options.ui.layout.float
+    local float_cfg = Config.options.layout.float
     local ui_width = vim.o.columns
     local ui_height = vim.o.lines - vim.o.cmdheight - 1
 
@@ -394,7 +394,7 @@ function Layout:_open_in_float_layout()
             style = "minimal",
             border = border,
             zindex = FLOAT_ZINDEX,
-            title = " " .. Config.options.ui.panels.history.title .. " ",
+            title = " " .. Config.options.panels.history.title .. " ",
             title_pos = "center",
         }, user_win)
     )
@@ -416,7 +416,7 @@ function Layout:_open_in_float_layout()
             style = "minimal",
             border = border,
             zindex = FLOAT_ZINDEX,
-            title = " " .. Config.options.ui.panels.prompt.title .. " ",
+            title = " " .. Config.options.panels.prompt.title .. " ",
             title_pos = "center",
         }, user_win)
     )

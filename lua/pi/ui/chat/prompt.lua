@@ -58,7 +58,7 @@ function Prompt.new(tab, attachments)
     self._tab = tab
     self._zen = false
 
-    local panel = Config.options.ui.panels.prompt
+    local panel = Config.options.panels.prompt
     local name = panel.name and panel.name(tab) or ("π-prompt | " .. tab)
     wipe_stale_buf(name)
     self._buf = vim.api.nvim_create_buf(false, true)

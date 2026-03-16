@@ -152,7 +152,7 @@ function Chat:_set_keymaps()
     end, { buffer = hbuf, desc = "Toggle block under cursor" })
 
     -- Zen mode keymaps
-    local zen_keys = Config.options.ui.zen and Config.options.ui.zen.keys or nil
+    local zen_keys = Config.options.zen and Config.options.zen.keys or nil
     if zen_keys then
         if zen_keys.toggle then
             Keys.bind(pbuf, zen_keys.toggle, function()
@@ -192,7 +192,7 @@ end
 
 --- Show a loading placeholder on the empty history buffer.
 function Chat:show_loading()
-    local icon = " " .. Config.options.ui.labels.agent_response .. " "
+    local icon = " " .. Config.options.labels.agent_response .. " "
     self._history:show_loading_placeholder({
         {
             { icon, "PiAgentResponseLabel" },
@@ -283,7 +283,7 @@ end
 
 ---@return boolean opened
 function Chat:_auto_dispatch_attention_on_prompt_focus()
-    local attention_config = Config.options.ui.attention
+    local attention_config = Config.options.attention
     if not attention_config or not attention_config.auto_open_on_prompt_focus then
         return false
     end

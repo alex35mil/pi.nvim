@@ -245,7 +245,7 @@ function M.get_or_create(opts)
         return nil
     end
 
-    local layout = opts.layout or Config.options.ui.layout.default
+    local layout = opts.layout or Config.options.layout.default
 
     ---@type pi.ChatAgent
     local agent = {

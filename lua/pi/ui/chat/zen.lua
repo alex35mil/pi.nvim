@@ -38,7 +38,7 @@ end
 --- Uses config `zen.width`, then `textwidth` if set, then 80.
 ---@return integer
 local function resolve_width()
-    local zen_cfg = Config.options.ui.zen
+    local zen_cfg = Config.options.zen
     if zen_cfg and zen_cfg.width then
         return zen_cfg.width
     end

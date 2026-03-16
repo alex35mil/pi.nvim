@@ -79,7 +79,7 @@ end
 
 function Attachments:_update_buffer()
     vim.bo[self._buf].modifiable = true
-    local icon = Config.options.ui.labels.attachment
+    local icon = Config.options.labels.attachment
     local lines = {}
     for _, item in ipairs(self._items) do
         lines[#lines + 1] = icon .. " " .. item.name

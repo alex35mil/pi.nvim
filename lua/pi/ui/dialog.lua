@@ -16,7 +16,7 @@ end
 ---@return pi.DialogConfig
 local function get_config()
     local config = require("pi.config")
-    return config.options.ui.dialog
+    return config.options.dialog
 end
 
 local BASE_KEYS = {

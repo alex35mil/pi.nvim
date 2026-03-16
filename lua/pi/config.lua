@@ -58,7 +58,6 @@
 ---@class pi.Labels
 ---@field user_message string
 ---@field agent_response string
----@field system_message string
 ---@field system_error string
 ---@field tool string
 ---@field tool_success string
@@ -120,20 +119,6 @@
 ---@class pi.UiAttentionConfig
 ---@field auto_open_on_prompt_focus boolean Automatically open the next pending attention request for the current tab when the prompt gains focus and has no draft.
 
----@class pi.UiConfig
----@field spinner pi.SpinnerPreset|string[]|{ refresh_rate?: integer, frames: string[] } preset name or custom
----@field show_thinking boolean
----@field expand_startup_details boolean Default expand/collapse state for the startup block (skills, extensions, startup announcements). Always rendered; Tab on the block or API call toggles.
----@field panels pi.Panels
----@field labels pi.Labels
----@field layout pi.LayoutConfig
----@field statusline pi.StatusLineConfig
----@field diff pi.DiffConfig
----@field attention pi.UiAttentionConfig
----@field zen pi.ZenConfig
----@field dialog pi.DialogConfig
----@field verbs? pi.VerbPair[] Custom verb pairs for status messages, picked randomly per run
-
 ---@class pi.DialogKeys
 ---@field confirm? pi.KeySpec[]
 ---@field cancel? pi.KeySpec[]
@@ -173,8 +158,19 @@
 ---@field agent_dir? string Override the π agent directory (default: $PI_CODING_AGENT_DIR or ~/.pi/agent)
 ---@field debug boolean Enable RPC debug logging to stdpath("log")/pi-rpc.log
 ---@field models? pi.ModelEntry[] Preferred models for cycling and :PiSelectModel
+---@field spinner pi.SpinnerPreset|string[]|{ refresh_rate?: integer, frames: string[] } preset name or custom
+---@field show_thinking boolean
+---@field expand_startup_details boolean Default expand/collapse state for the startup block (skills, extensions, startup announcements). Always rendered; Tab on the block or API call toggles.
+---@field panels pi.Panels
+---@field labels pi.Labels
+---@field layout pi.LayoutConfig
+---@field statusline pi.StatusLineConfig
+---@field diff pi.DiffConfig
+---@field attention pi.UiAttentionConfig
+---@field zen pi.ZenConfig
+---@field dialog pi.DialogConfig
+---@field verbs? pi.VerbPair[] Custom verb pairs for status messages, picked randomly per run
 ---@field on_widget? fun(key: string, lines: string[]?, placement: string?): pi.CustomBlock? Handle extension setWidget calls. Return a custom block to render inline in history, or nil to ignore. Not called for `:startup` widgets (keys ending with `:startup`), which are always stored as startup announcements and rendered in the system preamble.
----@field ui pi.UiConfig
 
 ---@class pi.ConfigModule
 ---@field options pi.Options
@@ -186,110 +182,107 @@ math.randomseed(os.time())
 local defaults = {
     bin = "pi",
     debug = false,
-    ui = {
-        spinner = "robot",
-        show_thinking = false,
-        expand_startup_details = true,
-        panels = {
-            history = { title = "π" },
-            prompt = { title = "󰫽󰫿󰫼󰫺󰫽󰬁" },
-            attachments = { title = "󰫮󰬁󰬁󰫮󰫰󰫵󰫺󰫲󰫻󰬁󰬀" },
-        },
-        labels = {
-            user_message = "",
-            agent_response = "󰚩",
-            system_message = "",
-            system_error = "󱚟",
-            tool = "󰻂",
-            tool_success = "",
-            tool_failure = "",
-            steer_message = "󰾘",
-            follow_up_message = "󱇼",
-            thinking = "󰟶",
-            attachment = "",
-            attachments = "",
-            error = "󰘨 󱚟 󱔁 ",
-        },
-        layout = {
-            default = "side",
-            side = {
-                position = "right",
-                width = 80,
-                panels = {
-                    history = { winbar = true },
-                    prompt = { winbar = true },
-                    attachments = { winbar = true },
-                },
-            },
-            float = {
-                width = 0.6,
-                height = 0.8,
-                border = "rounded",
+    spinner = "robot",
+    show_thinking = false,
+    expand_startup_details = true,
+    panels = {
+        history = { title = "π" },
+        prompt = { title = "󰫽󰫿󰫼󰫺󰫽󰬁" },
+        attachments = { title = "󰫮󰬁󰬁󰫮󰫰󰫵󰫺󰫲󰫻󰬁󰬀" },
+    },
+    labels = {
+        user_message = "",
+        agent_response = "󰚩",
+        system_error = "󱚟",
+        tool = "󰻂",
+        tool_success = "",
+        tool_failure = "",
+        steer_message = "󰾘",
+        follow_up_message = "󱇼",
+        thinking = "󰟶",
+        attachment = "",
+        attachments = "",
+        error = "󰘨 󱚟 󱔁 ",
+    },
+    layout = {
+        default = "side",
+        side = {
+            position = "right",
+            width = 80,
+            panels = {
+                history = { winbar = true },
+                prompt = { winbar = true },
+                attachments = { winbar = true },
             },
         },
-        statusline = {
-            layout = {
-                left = { "context", "  ", "attention" },
-                right = { "model", "   ", "thinking" },
-            },
-            components = {
-                tokens = { icon = "" },
-                cache = { icon = "󰆼" },
-                cost = { icon = "" },
-                compaction = { icon = false },
-                context = { icon = "", warn = 70, error = 90 },
-                attention = { icon = "󰵚", counter = false },
-                model = { icon = "󰚩" },
-                thinking = { icon = "󰟶" },
-            },
-        },
-        diff = {
-            keys = {
-                accept = "<Leader>da",
-                reject = "<Leader>dr",
-            },
-        },
-        attention = {
-            auto_open_on_prompt_focus = true,
-        },
-        dialog = {
+        float = {
+            width = 0.6,
+            height = 0.8,
             border = "rounded",
-            max_width = 0.8,
-            max_height = 0.8,
-            indicator = "▸",
-            keys = {
-                -- confirm
-                -- cancel
-                -- next
-                -- prev
-            },
         },
-        zen = {
-            width = nil,
-            keys = {
-                toggle = nil,
-                exit = nil,
-            },
+    },
+    statusline = {
+        layout = {
+            left = { "context", "  ", "attention" },
+            right = { "model", "   ", "thinking" },
         },
-        verbs = {
-            { "rm -rf'ing /", "rm -rf'd /" },
-            { "Cooking spaghetti", "Cooked" },
-            { "Burning tokens", "Burned tokens" },
-            { "Shaving yaks", "Shaved yak" },
-            { "Racking up debt", "Racked up debt" },
-            { "Mining bitcoins", "Mined ₿" },
-            { "Stacking overflow", "Stacked overflow" },
-            { "Opening kournikova.jpg", "Opened kournikova.jpg" },
-            { "Deploying on Friday", "Paniced" },
-            { "Jiggling wiggling", "Jiggled wiggled" },
-            { "Rewriting in Rust", "Rewrote in Rust" },
-            { "Git blaming", "Git blamed" },
-            { "Tail-recursing", "Stack overflowed" },
-            { "Making no mistakes", "Made no mistakes" },
-            { "Making your codebase great again", "Made your codebase great again" },
-            { "Dangerously skipping permissions", "Dangerously skipped permissions" },
-            { "Agently replacing you", "Agently replaced you" },
+        components = {
+            tokens = { icon = "" },
+            cache = { icon = "󰆼" },
+            cost = { icon = "" },
+            compaction = { icon = false },
+            context = { icon = "", warn = 70, error = 90 },
+            attention = { icon = "󰵚", counter = false },
+            model = { icon = "󰚩" },
+            thinking = { icon = "󰟶" },
         },
+    },
+    diff = {
+        keys = {
+            accept = "<Leader>da",
+            reject = "<Leader>dr",
+        },
+    },
+    attention = {
+        auto_open_on_prompt_focus = true,
+    },
+    dialog = {
+        border = "rounded",
+        max_width = 0.8,
+        max_height = 0.8,
+        indicator = "▸",
+        keys = {
+            -- confirm
+            -- cancel
+            -- next
+            -- prev
+        },
+    },
+    zen = {
+        width = nil,
+        keys = {
+            toggle = nil,
+            exit = nil,
+        },
+    },
+    verbs = {
+        { "rm -rf'ing /", "rm -rf'd /" },
+        { "Cooking spaghetti", "Cooked" },
+        { "Burning tokens", "Burned tokens" },
+        { "Shaving yaks", "Shaved yak" },
+        { "Racking up debt", "Racked up debt" },
+        { "Mining bitcoins", "Mined ₿" },
+        { "Stacking overflow", "Stacked overflow" },
+        { "Opening kournikova.jpg", "Opened kournikova.jpg" },
+        { "Deploying on Friday", "Paniced" },
+        { "Jiggling wiggling", "Jiggled wiggled" },
+        { "Rewriting in Rust", "Rewrote in Rust" },
+        { "Git blaming", "Git blamed" },
+        { "Tail-recursing", "Stack overflowed" },
+        { "Making no mistakes", "Made no mistakes" },
+        { "Making your codebase great again", "Made your codebase great again" },
+        { "Dangerously skipping permissions", "Dangerously skipped permissions" },
+        { "Agently replacing you", "Agently replaced you" },
     },
 }
 
@@ -305,7 +298,7 @@ end
 --- Falls back to { "Working", "Completed" } if no custom verbs.
 ---@return pi.VerbPair
 function M.random_verbs()
-    local verbs = M.options.ui.verbs
+    local verbs = M.options.verbs
     if not verbs or #verbs == 0 then
         return { "Working", "Completed" }
     end

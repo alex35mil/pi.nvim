@@ -300,7 +300,7 @@ function M.open(payload, callback, opts)
         end
     end, 200)
 
-    local diff_keys = Config.options.ui.diff.keys
+    local diff_keys = Config.options.diff.keys
     local accept_key = diff_keys.accept
     local reject_key = diff_keys.reject
     local accept_lhs = Keys.lhs(accept_key)
