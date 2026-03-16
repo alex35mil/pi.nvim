@@ -112,7 +112,23 @@ function Chat:_set_keymaps()
                     return
                 end
                 if vim.api.nvim_get_mode().mode ~= "i" then
-                    vim.cmd("startinsert")
+                    local resume = self._prompt._resume_insert
+                    if resume then
+                        self._prompt._resume_insert = nil
+                        if resume == "eol" then
+                            vim.cmd("startinsert!")
+                        elseif resume == "mid" then
+                            -- Mid-line: move cursor right to undo the
+                            -- InsertLeave left-shift, then enter insert.
+                            vim.cmd("normal! l")
+                            vim.cmd("startinsert")
+                        else
+                            -- bol: InsertLeave doesn't shift at col 0.
+                            vim.cmd("startinsert")
+                        end
+                    else
+                        vim.cmd("startinsert")
+                    end
                 end
             end)
         end,
@@ -209,8 +225,35 @@ function Chat:on_resize()
 end
 
 function Chat:toggle_layout()
+    self._prompt._resume_insert = nil
     self._layout:toggle()
     self:refresh_prompt_attention()
+
+    -- Determine how to re-enter insert mode based on the normal-mode
+    -- cursor position after the switch.  InsertLeave shifts the cursor
+    -- left by 1 (except at col 0), so we compensate:
+    --   eol (on or past last char) → startinsert!  (A)
+    --   bol (col 0)                → startinsert   (no shift happened)
+    --   mid                        → normal! l + startinsert
+    local pwin = self._layout:prompt_win()
+    if pwin then
+        local cur = vim.api.nvim_win_get_cursor(pwin)
+        local line = vim.api.nvim_buf_get_lines(
+            vim.api.nvim_win_get_buf(pwin),
+            cur[1] - 1,
+            cur[1],
+            false
+        )[1] or ""
+        local last_col = math.max(0, #line - 1)
+        if cur[2] >= last_col then
+            self._prompt._resume_insert = "eol"
+        elseif cur[2] == 0 then
+            self._prompt._resume_insert = "bol"
+        else
+            self._prompt._resume_insert = "mid"
+        end
+    end
+
     self:focus_prompt()
 end
 

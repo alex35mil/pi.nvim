@@ -527,12 +527,29 @@ end
 
 ---@param mode pi.LayoutMode
 function Layout:set_mode(mode)
+    -- Save prompt cursor before tearing down windows.
+    local prompt_cursor
+    local pwin = self:prompt_win()
+    if pwin then
+        prompt_cursor = vim.api.nvim_win_get_cursor(pwin)
+    end
+
     self:hide()
     self._mode = mode
     self:show()
     self._prompt:resize()
     if self._attachments:count() > 0 then
         self:_refresh_attachments()
+    end
+
+    -- Restore prompt cursor in the new window.
+    if prompt_cursor then
+        pwin = self:prompt_win()
+        if pwin then
+            local line_count = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(pwin))
+            prompt_cursor[1] = math.min(prompt_cursor[1], line_count)
+            vim.api.nvim_win_set_cursor(pwin, prompt_cursor)
+        end
     end
 end
 

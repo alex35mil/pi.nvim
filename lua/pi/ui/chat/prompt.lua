@@ -8,6 +8,7 @@
 ---@field _attachments pi.ChatAttachments
 ---@field _tab pi.TabId
 ---@field _zen boolean
+---@field _resume_insert? "eol"|"bol"|"mid"
 local Prompt = {}
 Prompt.__index = Prompt
 
