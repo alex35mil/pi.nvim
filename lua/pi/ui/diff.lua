@@ -292,11 +292,11 @@ function M.open(payload, callback, opts)
         if vim.api.nvim_win_is_valid(left_win) then
             vim.api.nvim_set_current_win(left_win)
             vim.cmd("diffthis")
-            pcall(vim.cmd, "normal! gg]czz")
-            vim.cmd("syncbind")
         end
         if vim.api.nvim_win_is_valid(right_win) then
             vim.api.nvim_set_current_win(right_win)
+            pcall(vim.cmd, "normal! gg]c")
+            vim.cmd("syncbind")
         end
     end, 200)
 
