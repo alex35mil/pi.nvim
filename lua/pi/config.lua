@@ -55,6 +55,10 @@
 
 ---@alias pi.VerbPair [string, string] [0]=active (e.g. "Cooking"), [1]=done (e.g. "Cooked")
 
+---@class pi.VerbsConfig
+---@field use_defaults? boolean When true (default), user pairs are appended to the built-in list; when false, they replace it
+---@field pairs? pi.VerbPair[] Verb pairs
+
 ---@class pi.Labels
 ---@field user_message string
 ---@field agent_response string
@@ -169,7 +173,7 @@
 ---@field attention pi.UiAttentionConfig
 ---@field zen pi.ZenConfig
 ---@field dialog pi.DialogConfig
----@field verbs? pi.VerbPair[] Custom verb pairs for status messages, picked randomly per run
+---@field verbs pi.VerbsConfig Verb pairs for status messages, picked randomly per run
 ---@field on_widget? fun(key: string, lines: string[]?, placement: string?): pi.CustomBlock? Handle extension setWidget calls. Return a custom block to render inline in history, or nil to ignore. Not called for `:startup` widgets (keys ending with `:startup`), which are always stored as startup announcements and rendered in the system preamble.
 
 ---@class pi.ConfigModule
@@ -266,23 +270,26 @@ local defaults = {
         },
     },
     verbs = {
-        { "rm -rf'ing /", "rm -rf'd /" },
-        { "Cooking spaghetti", "Cooked" },
-        { "Burning tokens", "Burned tokens" },
-        { "Shaving yaks", "Shaved yak" },
-        { "Racking up debt", "Racked up debt" },
-        { "Mining bitcoins", "Mined ₿" },
-        { "Stacking overflow", "Stacked overflow" },
-        { "Opening kournikova.jpg", "Opened kournikova.jpg" },
-        { "Deploying on Friday", "Paniced" },
-        { "Jiggling wiggling", "Jiggled wiggled" },
-        { "Rewriting in Rust", "Rewrote in Rust" },
-        { "Git blaming", "Git blamed" },
-        { "Tail-recursing", "Stack overflowed" },
-        { "Making no mistakes", "Made no mistakes" },
-        { "Making your codebase great again", "Made your codebase great again" },
-        { "Dangerously skipping permissions", "Dangerously skipped permissions" },
-        { "Agently replacing you", "Agently replaced you" },
+        use_defaults = true,
+        pairs = {
+            { "rm -rf'ing /", "rm -rf'd /" },
+            { "Cooking spaghetti", "Cooked" },
+            { "Burning tokens", "Burned tokens" },
+            { "Shaving yaks", "Shaved yak" },
+            { "Racking up debt", "Racked up debt" },
+            { "Mining bitcoins", "Mined ₿" },
+            { "Stacking overflow", "Stacked overflow" },
+            { "Opening kournikova.jpg", "Opened kournikova.jpg" },
+            { "Deploying on Friday", "Paniced" },
+            { "Jiggling wiggling", "Jiggled wiggled" },
+            { "Rewriting in Rust", "Rewrote in Rust" },
+            { "Git blaming", "Git blamed" },
+            { "Tail-recursing", "Stack overflowed" },
+            { "Making no mistakes", "Made no mistakes" },
+            { "Making your codebase great again", "Made your codebase great again" },
+            { "Dangerously skipping permissions", "Dangerously skipped permissions" },
+            { "Agently replacing you", "Agently replaced you" },
+        },
     },
 }
 
@@ -291,7 +298,30 @@ M.options = vim.deepcopy(defaults)
 
 ---@param opts? pi.Options
 function M.setup(opts)
+    -- Stash user verbs before deep-extend mangles the list.
+    local user_verbs = opts and opts.verbs or nil
+    if opts then
+        opts = vim.deepcopy(opts)
+        opts.verbs = nil
+    end
+
     M.options = vim.tbl_deep_extend("force", defaults, opts or {})
+
+    -- Resolve verbs: merge or replace based on use_defaults.
+    if user_verbs then
+        local use_defaults = user_verbs.use_defaults
+        if use_defaults == nil then
+            use_defaults = defaults.verbs.use_defaults
+        end
+        local user_pairs = user_verbs.pairs or {}
+        if use_defaults then
+            local merged = vim.deepcopy(defaults.verbs.pairs) --[[@as pi.VerbPair[] ]]
+            vim.list_extend(merged, user_pairs)
+            M.options.verbs = { use_defaults = true, pairs = merged }
+        else
+            M.options.verbs = { use_defaults = false, pairs = user_pairs }
+        end
+    end
 end
 
 --- Resolve a config value that may be a function, merging the result with
@@ -333,11 +363,11 @@ end
 --- Falls back to { "Working", "Completed" } if no custom verbs.
 ---@return pi.VerbPair
 function M.random_verbs()
-    local verbs = M.options.verbs
-    if not verbs or #verbs == 0 then
+    local pairs = M.options.verbs and M.options.verbs.pairs
+    if not pairs or #pairs == 0 then
         return { "Working", "Completed" }
     end
-    local pick = verbs[math.random(#verbs)]
+    local pick = pairs[math.random(#pairs)]
     if pick[1] == "Deploying on Friday" and os.date("*t").wday ~= 6 then
         return M.random_verbs()
     end
