@@ -102,12 +102,32 @@ function M.toggle_chat()
 end
 
 --- Toggle between side and float layout. No-op if no session exists.
-function M.toggle_layout()
+--- If given, callback runs after pi has switched layouts, focused the new
+--- prompt window, and requested insert mode.
+---@param cb? fun(layout: pi.LayoutMode)
+function M.toggle_layout(cb)
     local session = require("pi.sessions.manager").get()
     if not session then
         return
     end
-    session.chat:toggle_layout()
+    if cb then
+        session.chat:toggle_layout(function()
+            cb(session.chat:layout())
+        end)
+    else
+        session.chat:toggle_layout()
+    end
+end
+
+--- Return the current chat layout mode.
+--- Returns nil if no session is active.
+---@return pi.LayoutMode?
+function M.layout()
+    local session = require("pi.sessions.manager").get()
+    if not session then
+        return nil
+    end
+    return session.chat:layout()
 end
 
 --- Abort the current agent operation.

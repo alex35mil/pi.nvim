@@ -238,13 +238,17 @@ function Prompt:win()
     return nil
 end
 
-function Prompt:focus()
+---@param cb? fun()
+function Prompt:focus(cb)
     if not self._win or not vim.api.nvim_win_is_valid(self._win) then
         return
     end
     vim.api.nvim_set_current_win(self._win)
     vim.schedule(function()
         vim.cmd("startinsert")
+        if cb then
+            cb()
+        end
     end)
 end
 

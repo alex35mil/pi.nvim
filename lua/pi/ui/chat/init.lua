@@ -224,7 +224,8 @@ function Chat:on_resize()
     self:refresh_prompt_attention()
 end
 
-function Chat:toggle_layout()
+---@param cb? fun()
+function Chat:toggle_layout(cb)
     self._prompt._resume_insert = nil
     self._layout:toggle()
     self:refresh_prompt_attention()
@@ -254,7 +255,7 @@ function Chat:toggle_layout()
         end
     end
 
-    self:focus_prompt()
+    self:focus_prompt(cb)
 end
 
 ---@param mode pi.LayoutMode
@@ -336,9 +337,10 @@ function Chat:_auto_dispatch_attention_on_prompt_focus()
     return require("pi.attention").open_next_for_tab(self._tab)
 end
 
-function Chat:focus_prompt()
+---@param cb? fun()
+function Chat:focus_prompt(cb)
     vim.schedule(function()
-        self._prompt:focus()
+        self._prompt:focus(cb)
     end)
 end
 
