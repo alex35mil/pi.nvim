@@ -8,6 +8,50 @@ local Keys = require("pi.keys")
 local Notify = require("pi.notify")
 local Highlights = require("pi.ui.highlights")
 
+local DEFAULT_DIFF_CONTEXT = 6
+
+---@return string[]
+local function diffopt_items()
+    return vim.split(vim.go.diffopt, ",", { plain = true, trimempty = true })
+end
+
+---@return integer
+local function diff_context()
+    for _, item in ipairs(diffopt_items()) do
+        local value = item:match("^context:(%d+)$")
+        if value then
+            return tonumber(value) or DEFAULT_DIFF_CONTEXT
+        end
+    end
+    return DEFAULT_DIFF_CONTEXT
+end
+
+---@param context integer
+local function set_diff_context(context)
+    context = math.max(0, context)
+
+    local items = {}
+    for _, item in ipairs(diffopt_items()) do
+        if not item:match("^context:%d+$") then
+            items[#items + 1] = item
+        end
+    end
+    items[#items + 1] = "context:" .. context
+    vim.go.diffopt = table.concat(items, ",")
+end
+
+---@param left_win integer
+---@param right_win integer
+local function refresh_diff_windows(left_win, right_win)
+    for _, win in ipairs({ left_win, right_win }) do
+        if vim.api.nvim_win_is_valid(win) then
+            vim.api.nvim_win_call(win, function()
+                vim.cmd("diffupdate")
+            end)
+        end
+    end
+end
+
 ---@param path string
 ---@return string[]
 local function read_file(path)
@@ -221,6 +265,12 @@ function M.open(payload, callback, opts)
 
     local rel_path = vim.fn.fnamemodify(path, ":~:.")
     local after_name = "pi://review" .. path
+    local prev_diffopt = vim.go.diffopt
+    local diff_context_config = Config.options.diff.context
+    local initial_context = diff_context_config.base or diff_context()
+    local context_step = math.max(1, diff_context_config.step or 5)
+
+    set_diff_context(initial_context)
 
     local prev_tab = vim.api.nvim_get_current_tabpage()
     vim.cmd("tabnew")
@@ -303,8 +353,12 @@ function M.open(payload, callback, opts)
     local diff_keys = Config.options.diff.keys
     local accept_key = diff_keys.accept
     local reject_key = diff_keys.reject
+    local expand_context_key = diff_keys.expand_context
+    local shrink_context_key = diff_keys.shrink_context
     local accept_lhs = Keys.lhs(accept_key)
     local reject_lhs = Keys.lhs(reject_key)
+    local expand_context_lhs = Keys.lhs(expand_context_key)
+    local shrink_context_lhs = Keys.lhs(shrink_context_key)
     vim.wo[left_win].winbar = "%#PiDiffWinbar# %#PiDiffWinbarCurrent#CURRENT: " .. rel_path .. "%#PiDiffWinbar#"
     vim.wo[right_win].winbar = "%#PiDiffWinbar# %#PiDiffWinbarProposed# PROPOSED: "
         .. rel_path
@@ -312,10 +366,20 @@ function M.open(payload, callback, opts)
         .. accept_lhs
         .. "=accept  "
         .. reject_lhs
-        .. "=reject]%#PiDiffWinbar#"
+        .. "=reject  "
+        .. expand_context_lhs
+        .. "=expand  "
+        .. shrink_context_lhs
+        .. "=shrink]%#PiDiffWinbar#"
 
     local responded = false
     local timeout = nil ---@type integer?
+
+    local function update_context(delta)
+        local next_context = math.max(initial_context, diff_context() + delta)
+        set_diff_context(next_context)
+        refresh_diff_windows(left_win, right_win)
+    end
 
     local function close_review_tab()
         if timeout then
@@ -328,6 +392,7 @@ function M.open(payload, callback, opts)
                 vim.wo[w].winbar = ""
             end
         end
+        vim.go.diffopt = prev_diffopt
         local diff_win = first_valid_review_win()
         if diff_win then
             vim.api.nvim_win_call(diff_win, function()
@@ -434,6 +499,12 @@ function M.open(payload, callback, opts)
     for _, b in ipairs({ before_buf, after_buf }) do
         Keys.bind(b, accept_key, accept, { desc = "Accept edit" })
         Keys.bind(b, reject_key, reject, { desc = "Reject edit" })
+        Keys.bind(b, expand_context_key, function()
+            update_context(context_step)
+        end, { desc = "Expand diff context" })
+        Keys.bind(b, shrink_context_key, function()
+            update_context(-context_step)
+        end, { desc = "Shrink diff context" })
     end
 
     -- :w on the proposed buffer accepts the diff

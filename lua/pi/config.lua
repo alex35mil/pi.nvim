@@ -47,8 +47,15 @@
 ---@class pi.DiffKeys
 ---@field accept pi.KeySpec
 ---@field reject pi.KeySpec
+---@field expand_context pi.KeySpec
+---@field shrink_context pi.KeySpec
+
+---@class pi.DiffContextConfig
+---@field base? integer
+---@field step integer
 
 ---@class pi.DiffConfig
+---@field context pi.DiffContextConfig
 ---@field keys pi.DiffKeys
 
 ---@alias pi.SpinnerPreset "classic"|"robot"
@@ -242,9 +249,15 @@ local defaults = {
         },
     },
     diff = {
+        context = {
+            base = nil,
+            step = 5,
+        },
         keys = {
             accept = "<Leader>da",
             reject = "<Leader>dr",
+            expand_context = "<Leader>de",
+            shrink_context = "<Leader>ds",
         },
     },
     attention = {
