@@ -1,11 +1,17 @@
 --- Slash-command cache — fetches available /commands from the pi RPC process.
 
+---@class pi.SourceInfo
+---@field path string absolute file path to the command source
+---@field source string source identifier
+---@field scope? "user"|"project"|"temporary"
+---@field origin? string
+---@field baseDir? string
+
 ---@class pi.SlashCommand
 ---@field name string command name (invoke with /name)
 ---@field description? string human-readable description
 ---@field source "extension"|"prompt"|"skill"
----@field location? "user"|"project"|"path"
----@field path? string absolute file path to the command source
+---@field sourceInfo? pi.SourceInfo structured source metadata from pi RPC
 
 local M = {}
 

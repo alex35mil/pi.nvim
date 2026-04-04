@@ -582,34 +582,96 @@ local renderers = {
             end
         end,
         on_end = function(history, args, _, _, insert_at)
-            if args and args.oldText and args.newText then
-                -- NOTE: This renders the *proposed* diff (oldText→newText). When a
-                -- permission extension lets the user accept-with-modifications, the
-                -- actual applied content may differ. We can't distinguish accept from
-                -- accept-with-modifications here — both arrive as [accepted] with
-                -- isError flipped to false, and the modified content lives only in
-                -- the extension's free-form reason text. Fixing this would require
-                -- structured result metadata (e.g. a details field), not available today.
-                --
-                -- Find the starting line number of oldText in the file
-                local offset = 0
-                local path = args.path or args.file_path
-                if path then
-                    local abs = vim.fn.fnamemodify(path, ":p")
-                    for _, b in ipairs(vim.api.nvim_list_bufs()) do
-                        if vim.api.nvim_buf_is_loaded(b) and vim.api.nvim_buf_get_name(b) == abs then
-                            local content = table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), "\n")
-                            local pos = content:find(args.oldText, 1, true)
-                            if pos then
-                                local _, count = content:sub(1, pos - 1):gsub("\n", "\n")
-                                offset = count
+            if not args then
+                return insert_at
+            end
+
+            -- NOTE: This renders the *proposed* diff (oldText→newText). When a
+            -- permission extension lets the user accept-with-modifications, the
+            -- actual applied content may differ. We can't distinguish accept from
+            -- accept-with-modifications here — both arrive as [accepted] with
+            -- isError flipped to false, and the modified content lives only in
+            -- the extension's free-form reason text. Fixing this would require
+            -- structured result metadata (e.g. a details field), not available today.
+
+            local path = args.path or args.file_path
+            local edits = args.edits
+            if type(edits) ~= "table" or #edits == 0 then
+                return insert_at
+            end
+
+            local content = nil
+            if path then
+                local abs = vim.fn.fnamemodify(path, ":p")
+                for _, b in ipairs(vim.api.nvim_list_bufs()) do
+                    if vim.api.nvim_buf_is_loaded(b) and vim.api.nvim_buf_get_name(b) == abs then
+                        content = table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), "\n")
+                        break
+                    end
+                end
+                if not content then
+                    local f = io.open(abs, "r")
+                    if f then
+                        content = f:read("*a")
+                        f:close()
+                    end
+                end
+            end
+
+            local replacements = {}
+            if content then
+                for _, edit in ipairs(edits) do
+                    local old_text = edit.oldText
+                    if type(old_text) == "string" and old_text ~= "" then
+                        local search_from = 1
+                        while true do
+                            local s, e = content:find(old_text, search_from, true)
+                            if not s then
+                                break
                             end
-                            break
+
+                            local overlaps = false
+                            for _, existing in ipairs(replacements) do
+                                if not (e < existing.start_pos or s > existing.end_pos) then
+                                    overlaps = true
+                                    break
+                                end
+                            end
+
+                            if not overlaps then
+                                replacements[#replacements + 1] = {
+                                    start_pos = s,
+                                    end_pos = e,
+                                    old_text = old_text,
+                                    new_text = edit.newText or "",
+                                }
+                                break
+                            end
+
+                            search_from = s + 1
                         end
                     end
                 end
-                insert_at = render_diff(history, args.oldText, args.newText, offset, path, insert_at)
+
+                table.sort(replacements, function(a, b)
+                    return a.start_pos < b.start_pos
+                end)
             end
+
+            if #replacements > 0 then
+                for _, replacement in ipairs(replacements) do
+                    local _, count = content:sub(1, replacement.start_pos - 1):gsub("\n", "\n")
+                    insert_at = render_diff(history, replacement.old_text, replacement.new_text, count, path, insert_at)
+                end
+                return insert_at
+            end
+
+            for _, edit in ipairs(edits) do
+                local old_text = type(edit.oldText) == "string" and edit.oldText or ""
+                local new_text = type(edit.newText) == "string" and edit.newText or ""
+                insert_at = render_diff(history, old_text, new_text, 0, path, insert_at)
+            end
+
             return insert_at
         end,
     },

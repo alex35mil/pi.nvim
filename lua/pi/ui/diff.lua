@@ -155,53 +155,88 @@ local function find_lines_fuzzy(content_lines, old_lines)
     return nil
 end
 
---- Apply an edit to lines in memory.
+--- Apply multiple edits against the original content.
+--- All matches are resolved against the original string, not incrementally.
 ---@param lines string[]
----@param old_str string
----@param new_str string
+---@param edits table[]
 ---@return string[]
-local function apply_edit(lines, old_str, new_str)
-    -- Fast path: exact byte match.
+local function apply_edits(lines, edits)
     local content = table.concat(lines, "\n")
-    local start, finish = content:find(old_str, 1, true)
-    if start then
-        local result = content:sub(1, start - 1) .. new_str .. content:sub(finish + 1)
-        return vim.split(result, "\n", { plain = true })
+    local replacements = {}
+
+    for _, edit in ipairs(edits) do
+        local old_str = edit.oldText or ""
+        local new_str = edit.newText or ""
+
+        if old_str == "" then
+            Notify.error("diff: Empty oldText is not supported in multi-edit review")
+            return lines
+        end
+
+        local search_from = 1
+        local start_pos, end_pos = nil, nil
+
+        while true do
+            local s, e = content:find(old_str, search_from, true)
+            if not s then
+                break
+            end
+
+            local overlaps = false
+            for _, existing in ipairs(replacements) do
+                if not (e < existing.start_pos or s > existing.end_pos) then
+                    overlaps = true
+                    break
+                end
+            end
+
+            if not overlaps then
+                start_pos, end_pos = s, e
+                break
+            end
+
+            search_from = s + 1
+        end
+
+        if not start_pos then
+            Notify.error(
+                "diff: The original content not found in file. The agent likely used stale content — add 'Always re-read files before editing' to your AGENTS.md"
+            )
+            return lines
+        end
+
+        replacements[#replacements + 1] = {
+            start_pos = start_pos,
+            end_pos = end_pos,
+            new_str = new_str,
+        }
     end
 
-    -- Slow path: line-by-line ASCII-fingerprint match (see comment above).
-    local old_lines = vim.split(old_str, "\n", { plain = true })
-    local new_lines = vim.split(new_str, "\n", { plain = true })
-    local match_start = find_lines_fuzzy(lines, old_lines)
-    if not match_start then
-        Notify.error(
-            "diff: The original content not found in file. The agent likely used stale content — add 'Always re-read files before editing' to your AGENTS.md"
-        )
-        return lines
-    end
+    table.sort(replacements, function(a, b)
+        return a.start_pos < b.start_pos
+    end)
 
-    -- Build a lookup so unchanged lines keep their original encoding.
-    local orig_by_fp = {}
-    for i = match_start, match_start + #old_lines - 1 do
-        local fp = ascii_fingerprint(lines[i])
-        if not orig_by_fp[fp] then
-            orig_by_fp[fp] = lines[i]
+    for i = 2, #replacements do
+        local prev = replacements[i - 1]
+        local curr = replacements[i]
+        if curr.start_pos <= prev.end_pos then
+            Notify.error("diff: Overlapping edits are not supported")
+            return lines
         end
     end
 
-    local result = {}
-    for i = 1, match_start - 1 do
-        result[#result + 1] = lines[i]
+    local parts = {}
+    local last_pos = 1
+
+    for _, replacement in ipairs(replacements) do
+        parts[#parts + 1] = content:sub(last_pos, replacement.start_pos - 1)
+        parts[#parts + 1] = replacement.new_str
+        last_pos = replacement.end_pos + 1
     end
-    for _, nl in ipairs(new_lines) do
-        local fp = ascii_fingerprint(nl)
-        -- Preserve original bytes for lines the edit didn't change.
-        result[#result + 1] = orig_by_fp[fp] or nl
-    end
-    for i = match_start + #old_lines, #lines do
-        result[#result + 1] = lines[i]
-    end
-    return result
+
+    parts[#parts + 1] = content:sub(last_pos)
+
+    return vim.split(table.concat(parts), "\n", { plain = true })
 end
 
 --- Open a diff review for a tool call.
@@ -241,9 +276,13 @@ function M.open(payload, callback, opts)
     local proposed_lines
 
     if payload.toolName == "edit" then
-        local old_str = input.oldText or ""
-        local new_str = input.newText or ""
-        proposed_lines = apply_edit(before_lines, old_str, new_str)
+        if type(input.edits) == "table" and #input.edits > 0 then
+            proposed_lines = apply_edits(before_lines, input.edits)
+        else
+            Notify.error("diff: edit tool input missing edits[]")
+            callback("Reject")
+            return
+        end
     elseif payload.toolName == "write" then
         local content = input.content or ""
         proposed_lines = vim.split(content, "\n", { plain = true })

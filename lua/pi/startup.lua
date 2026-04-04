@@ -30,6 +30,34 @@ local function strip_skill_prefix(name)
     return stripped
 end
 
+---@param cmd pi.SlashCommand
+---@return string?
+local function command_path(cmd)
+    local source_info = cmd.sourceInfo
+    if type(source_info) ~= "table" then
+        return nil
+    end
+    local path = source_info.path
+    if type(path) == "string" and path ~= "" then
+        return path
+    end
+    return nil
+end
+
+---@param cmd pi.SlashCommand
+---@return "user"|"project"|"path"?
+local function command_location(cmd)
+    local source_info = cmd.sourceInfo
+    if type(source_info) ~= "table" then
+        return nil
+    end
+    local scope = source_info.scope
+    if scope == "user" or scope == "project" then
+        return scope --[[@as "user"|"project"]]
+    end
+    return "path"
+end
+
 ---@param item pi.SystemCommandItem
 ---@return string
 local function location_prefix(item)
@@ -65,7 +93,8 @@ end
 ---@param cmd pi.SlashCommand
 ---@param opts? pi.AddCommandItemOpts
 local function add_command_item(map, list, cmd, opts)
-    local path = type(cmd.path) == "string" and cmd.path ~= "" and cmd.path or nil
+    local path = command_path(cmd)
+    local location = command_location(cmd)
     local name = type(cmd.name) == "string" and cmd.name ~= "" and cmd.name or nil
     if opts and opts.name and name then
         name = opts.name(name)
@@ -78,7 +107,7 @@ local function add_command_item(map, list, cmd, opts)
     if path and (not opts or opts.dedupe_by_path ~= false) then
         key = "path:" .. path
     else
-        key = (cmd.location or "") .. ":" .. (name or path or "")
+        key = (location or "") .. ":" .. (name or path or "")
     end
 
     local item = map[key]
@@ -87,7 +116,7 @@ local function add_command_item(map, list, cmd, opts)
             item.path = path
         end
         if item.location == nil then
-            item.location = cmd.location
+            item.location = location
         end
         if item.name == nil then
             item.name = name
@@ -97,7 +126,7 @@ local function add_command_item(map, list, cmd, opts)
 
     item = {
         name = name,
-        location = cmd.location,
+        location = location,
         path = path,
     }
     map[key] = item
@@ -195,12 +224,7 @@ local function announcement_sections(session)
     local announcements = session.startup_announcements or {}
     local keys = {} ---@type string[]
     for key, entry in pairs(announcements) do
-        if
-            type(key) == "string"
-            and type(entry) == "table"
-            and type(entry.lines) == "table"
-            and #entry.lines > 0
-        then
+        if type(key) == "string" and type(entry) == "table" and type(entry.lines) == "table" and #entry.lines > 0 then
             keys[#keys + 1] = key
         end
     end
