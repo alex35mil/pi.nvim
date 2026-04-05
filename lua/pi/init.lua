@@ -443,4 +443,15 @@ function M.invoke(command)
     session.rpc:send({ type = "prompt", message = command })
 end
 
+--- Return the list of file paths modified by edit/write tools during the current session.
+--- Returns an empty table if no session is active or no files have been changed.
+---@return string[]
+function M.changed_files()
+    local session = require("pi.sessions.manager").get()
+    if not session then
+        return {}
+    end
+    return vim.tbl_keys(session.changed_files)
+end
+
 return M

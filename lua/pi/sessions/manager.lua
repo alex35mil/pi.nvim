@@ -18,6 +18,8 @@
 ---@field attention pi.SessionAttention
 ---@field startup_announcements table<string, pi.StartupAnnouncement> Extension startup data (keys ending with `:startup`) shown in the system preamble. Process-level: persists across session switches.
 ---@field system_errors pi.SystemErrorEntry[]
+---@field changed_files table<string, true> Set of file paths modified by edit/write tools during the current session.
+---@field _pending_file_change_args? table<string, table> Pending tool args by tool call id for file-changing tools.
 
 ---@class pi.SessionCreateOpts
 ---@field layout? pi.LayoutMode
@@ -71,6 +73,60 @@ local ignored_events = {
     turn_end = true,
 }
 
+---@param args any
+---@return table?
+local function normalize_tool_args(args)
+    if type(args) == "table" then
+        return args
+    end
+    if type(args) ~= "string" or args == "" then
+        return nil
+    end
+    local ok, decoded = pcall(vim.json.decode, args)
+    if ok and type(decoded) == "table" then
+        return decoded
+    end
+    return nil
+end
+
+---@param args table?
+---@return string?
+local function get_changed_file_path(args)
+    if type(args) ~= "table" then
+        return nil
+    end
+    local path = args.path or args.file_path or args.filePath
+    if type(path) == "string" and path ~= "" then
+        return path
+    end
+    return nil
+end
+
+---@param session pi.Session
+---@param args table?
+local function track_changed_file(session, args)
+    local path = get_changed_file_path(args)
+    if path then
+        session.changed_files[path] = true
+    end
+end
+
+---@param session pi.Session
+---@param tool_name string?
+---@param tool_call_id string?
+---@param args any
+local function stash_file_tool_args(session, tool_name, tool_call_id, args)
+    if (tool_name ~= "edit" and tool_name ~= "write") or type(tool_call_id) ~= "string" or tool_call_id == "" then
+        return
+    end
+    local decoded = normalize_tool_args(args)
+    if not decoded then
+        return
+    end
+    session._pending_file_change_args = session._pending_file_change_args or {}
+    session._pending_file_change_args[tool_call_id] = decoded
+end
+
 --- Fetch current state and update the status line.
 ---@param session pi.Session
 function M.refresh_state(session)
@@ -109,19 +165,29 @@ local function handle_event(session, msg)
             elseif event.type == "text_delta" then
                 chat:on_thinking_end() -- no-op if not thinking
                 chat:on_text_delta(event.delta or "")
-                -- NOTE: Ignored sub-events (safe, low priority):
-                --   toolcall_start/delta/end — TUI uses these to show tool blocks
-                --     during LLM streaming (before execution). We use
-                --     tool_execution_start instead; negligible difference since
-                --     tool blocks are collapsed anyway.
+            elseif event.type == "toolcall_end" then
+                local tool_call = event.toolCall
+                if type(tool_call) == "table" then
+                    stash_file_tool_args(session, tool_call.name, tool_call.id, tool_call.arguments)
+                end
+                -- NOTE: Other sub-events stay intentionally ignored:
+                --   toolcall_start/delta — we render on tool_execution_start.
                 --   start, done — redundant with message_start/end.
                 --   text_start, text_end — text_delta suffices.
             end
         end
     elseif t == "tool_execution_start" then
-        chat:on_tool_start(msg.toolName or "tool", msg.toolCallId, msg.args)
+        local args = normalize_tool_args(msg.args) or msg.args
+        chat:on_tool_start(msg.toolName or "tool", msg.toolCallId, args)
+        -- Stash args for file-changing tools; tool_execution_end doesn't carry args.
+        stash_file_tool_args(session, msg.toolName, msg.toolCallId, args)
     elseif t == "tool_execution_end" then
         chat:on_tool_end(msg.toolName or "tool", msg.toolCallId, msg.result, msg.isError)
+        if session._pending_file_change_args and not msg.isError then
+            local args = session._pending_file_change_args[msg.toolCallId]
+            track_changed_file(session, args)
+            session._pending_file_change_args[msg.toolCallId] = nil
+        end
     elseif t == "auto_compaction_start" then
         chat:set_status({ type = "compaction" })
     elseif t == "auto_compaction_end" then
@@ -192,6 +258,17 @@ local function handle_event(session, msg)
         chat:on_message_start(msg)
     elseif t == "message_end" then
         chat:on_message_end(msg)
+        local message = msg.message
+        if type(message) == "table" and message.role == "toolResult" and session._pending_file_change_args then
+            local tool_call_id = message.toolCallId or message.toolUseId
+            if type(tool_call_id) == "string" and tool_call_id ~= "" then
+                if message.isError ~= true then
+                    local args = session._pending_file_change_args[tool_call_id]
+                    track_changed_file(session, args)
+                end
+                session._pending_file_change_args[tool_call_id] = nil
+            end
+        end
     elseif t == "tool_execution_update" then
         chat:on_tool_update(msg.toolName or "tool", msg.toolCallId, msg)
     elseif ignored_events[t] then
@@ -264,6 +341,7 @@ function M.get_or_create(opts)
         attention = { pending = {} },
         startup_announcements = {},
         system_errors = {},
+        changed_files = {},
     }
 
     rpc:set_handler(function(msg)
@@ -328,6 +406,8 @@ local function start_new_session(session)
                 Attention.end_session_transition(session, true)
                 session.startup_announcements = {}
                 session.system_errors = {}
+                session.changed_files = {}
+                session._pending_file_change_args = nil
                 session.chat:clear()
                 fetch_commands_and_show_startup_block(session)
             end)
@@ -372,6 +452,7 @@ end
 local function replay_messages(session, messages)
     session.chat:set_replaying(true)
     local pending_agent_end = false
+    local tool_call_args = {} ---@type table<string, table>
     for _, msg in ipairs(messages) do
         local role = msg.role
         -- Flush pending agent_end before a user message
@@ -413,7 +494,7 @@ local function replay_messages(session, messages)
                         tool_calls[#tool_calls + 1] = {
                             id = part.toolCallId or part.id or "",
                             name = part.toolName or part.name or "tool",
-                            args = part.arguments or part.args or part.input,
+                            args = normalize_tool_args(part.arguments or part.args or part.input),
                         }
                     end
                 end
@@ -437,6 +518,9 @@ local function replay_messages(session, messages)
                 -- Store pending tool calls so on_tool_end can fire before on_agent_end.
                 for _, tc in ipairs(tool_calls) do
                     session.chat:on_tool_start(tc.name, tc.id, tc.args)
+                    if tc.args then
+                        tool_call_args[tc.id] = tc.args
+                    end
                 end
                 if #tool_calls == 0 then
                     session.chat:on_agent_end()
@@ -454,6 +538,11 @@ local function replay_messages(session, messages)
             local is_error = msg.isError == true
             -- msg itself has .content, matching what on_tool_end expects as result
             session.chat:on_tool_end(tool_name, tool_call_id, msg, is_error)
+            -- Track files changed by edit/write tools during replay.
+            local tc_args = not is_error and tool_call_args[tool_call_id]
+            if tc_args then
+                track_changed_file(session, tc_args)
+            end
         end
     end
     -- Flush any remaining pending agent_end
@@ -490,6 +579,8 @@ local function load_session(session, session_path)
         M.refresh_state(session)
 
         vim.schedule(function()
+            session.changed_files = {}
+            session._pending_file_change_args = nil
             session.chat:clear()
             session.chat:show_loading()
         end)
