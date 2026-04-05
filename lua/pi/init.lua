@@ -119,6 +119,13 @@ function M.toggle_layout(cb)
     end
 end
 
+--- Check whether the chat is currently visible.
+---@return boolean
+function M.is_visible()
+    local session = require("pi.sessions.manager").get()
+    return session ~= nil and session.chat:is_visible()
+end
+
 --- Return the current chat layout mode.
 --- Returns nil if no session is active.
 ---@return pi.LayoutMode?
