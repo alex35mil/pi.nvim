@@ -21,8 +21,8 @@ local Chat = {}
 Chat.__index = Chat
 
 local Config = require("pi.config")
-
 local Layout = require("pi.ui.chat.layout")
+local Attention = require("pi.attention")
 local History = require("pi.ui.chat.history")
 local Prompt = require("pi.ui.chat.prompt")
 local Attachments = require("pi.ui.chat.attachments")
@@ -107,6 +107,7 @@ function Chat:_set_keymaps()
                 if buf ~= pbuf then
                     return
                 end
+                Attention.dismiss_notification(self._tab)
                 self:_auto_dispatch_attention_on_prompt_focus()
                 if vim.api.nvim_get_current_buf() ~= pbuf then
                     return
@@ -239,12 +240,7 @@ function Chat:toggle_layout(cb)
     local pwin = self._layout:prompt_win()
     if pwin then
         local cur = vim.api.nvim_win_get_cursor(pwin)
-        local line = vim.api.nvim_buf_get_lines(
-            vim.api.nvim_win_get_buf(pwin),
-            cur[1] - 1,
-            cur[1],
-            false
-        )[1] or ""
+        local line = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(pwin), cur[1] - 1, cur[1], false)[1] or ""
         local last_col = math.max(0, #line - 1)
         if cur[2] >= last_col then
             self._prompt._resume_insert = "eol"
@@ -515,6 +511,13 @@ function Chat:on_agent_end()
 
     self._history:on_agent_end(completion_text, { force_completion = force_completion })
     self:set_status(nil)
+
+    if not self:has_prompt_focus() then
+        local attention_config = Config.options.attention
+        if attention_config and attention_config.notify_on_completion then
+            Attention.notify(self._tab, "Agent finished - waiting for your input", vim.log.levels.INFO)
+        end
+    end
 end
 
 --- Handle message_start events. When a user message arrives and matches

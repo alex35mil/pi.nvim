@@ -129,6 +129,7 @@
 
 ---@class pi.UiAttentionConfig
 ---@field auto_open_on_prompt_focus boolean Automatically open the next pending attention request for the current tab when the prompt gains focus and has no draft.
+---@field notify_on_completion boolean Show an info notification when the agent finishes a turn and the prompt does not have focus.
 
 ---@class pi.DialogKeys
 ---@field confirm? pi.KeySpec[]
@@ -262,6 +263,7 @@ local defaults = {
     },
     attention = {
         auto_open_on_prompt_focus = true,
+        notify_on_completion = true,
     },
     dialog = {
         border = "rounded",

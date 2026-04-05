@@ -216,11 +216,39 @@ local function kind_label(kind)
     return "input"
 end
 
+--- Build the persistent notification id for a tab.
+---@param tab pi.TabId
+---@return string
+local function attention_notification_id(tab)
+    return "pi-attention-" .. tostring(tab)
+end
+
+--- Show a persistent attention notification for a tab.
+---@param tab pi.TabId
+---@param msg string
+---@param level integer vim.log.levels.*
+function M.notify(tab, msg, level)
+    Notify.dispatch(msg, level, { id = attention_notification_id(tab), timeout = 0 })
+end
+
+--- Dismiss the persistent attention notification for a tab.
+---@param tab pi.TabId
+function M.dismiss_notification(tab)
+    local ok, snacks = pcall(require, "snacks")
+    if ok and snacks and snacks.notifier and snacks.notifier.hide then
+        snacks.notifier.hide(attention_notification_id(tab))
+    end
+end
+
 ---@param session pi.Session
 ---@param entry pi.AttentionEntry
 local function notify_pending(session, entry)
     local suffix = session.tab == vim.api.nvim_get_current_tabpage() and "" or " in another tab"
-    Notify.warn("Agent needs " .. kind_label(entry.kind) .. suffix .. " — run :PiAttention")
+    M.notify(
+        session.tab,
+        "Agent needs " .. kind_label(entry.kind) .. suffix .. " — run :PiAttention",
+        vim.log.levels.WARN
+    )
 end
 
 ---@param kind pi.AttentionKind
@@ -567,6 +595,7 @@ end
 ---@return boolean opened
 function M.open_next_for_tab(tab)
     local target_tab = resolve_tab(tab)
+    M.dismiss_notification(target_tab)
     prune_stale_queue()
 
     while true do
@@ -585,6 +614,7 @@ end
 --- Open the oldest queued attention request, switching to its tab if needed.
 ---@return boolean opened
 function M.open_next()
+    M.dismiss_notification(resolve_tab(nil))
     prune_stale_queue()
 
     local expired = false

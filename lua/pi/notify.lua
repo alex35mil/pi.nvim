@@ -2,24 +2,32 @@ local M = {}
 
 local PREFIX = "π │ "
 
+--- Notify with explicit level and extra options.
+---@param msg string
+---@param level integer vim.log.levels.*
+---@param opts? table Extra options passed to vim.notify (e.g. id, timeout)
+function M.dispatch(msg, level, opts)
+    vim.notify(PREFIX .. msg, level, opts or {})
+end
+
 ---@param msg string
 function M.debug(msg)
-    vim.notify(PREFIX .. msg, vim.log.levels.DEBUG)
+    M.dispatch(msg, vim.log.levels.DEBUG)
 end
 
 ---@param msg string
 function M.info(msg)
-    vim.notify(PREFIX .. msg, vim.log.levels.INFO)
+    M.dispatch(msg, vim.log.levels.INFO)
 end
 
 ---@param msg string
 function M.warn(msg)
-    vim.notify(PREFIX .. msg, vim.log.levels.WARN)
+    M.dispatch(msg, vim.log.levels.WARN)
 end
 
 ---@param msg string
 function M.error(msg)
-    vim.notify(PREFIX .. msg, vim.log.levels.ERROR)
+    M.dispatch(msg, vim.log.levels.ERROR)
 end
 
 return M
