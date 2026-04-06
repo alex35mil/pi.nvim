@@ -30,6 +30,21 @@ function M.resolve_entries(entries, all_models)
                 Notify.warn("Configured model not found: " .. entry)
             end
         elseif type(entry) == "table" and entry.match then
+            if entry.exact then
+                -- Exact ID match: take the first hit and stop. `latest` is ignored.
+                for _, m in ipairs(all_models) do
+                    if m.id == entry.match and not seen[m.provider .. "/" .. m.id] then
+                        resolved[#resolved + 1] = m
+                        seen[m.provider .. "/" .. m.id] = true
+                        matched = true
+                        break
+                    end
+                end
+                if not matched then
+                    Notify.warn('No models matched "' .. entry.match .. '"')
+                end
+                goto continue
+            end
             local needle = entry.match:lower()
             ---@type table[]
             local matches = {}
@@ -60,6 +75,7 @@ function M.resolve_entries(entries, all_models)
                 Notify.warn('No models matched "' .. entry.match .. '"')
             end
         end
+        ::continue::
     end
     return resolved
 end
