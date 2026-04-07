@@ -167,7 +167,7 @@
 ---@class pi.Options
 ---@field bin string
 ---@field agent_dir? string Override the π agent directory (default: $PI_CODING_AGENT_DIR or ~/.pi/agent)
----@field debug boolean Enable RPC debug logging to stdpath("log")/pi-rpc.log
+---@field debug boolean Enable RPC debug logging to stdpath("log")/pi/<session>/rpc.log
 ---@field models? pi.ModelEntry[] Preferred models for cycling and :PiSelectModel
 ---@field spinner pi.SpinnerPreset|string[]|{ refresh_rate?: integer, frames: string[] } preset name or custom
 ---@field show_thinking boolean
@@ -192,7 +192,9 @@ math.randomseed(os.time())
 ---@type pi.Options
 local defaults = {
     bin = "pi",
+    agent_dir = nil,
     debug = false,
+    models = nil,
     spinner = "robot",
     show_thinking = false,
     expand_startup_details = true,
@@ -270,10 +272,10 @@ local defaults = {
         max_height = 0.8,
         indicator = "▸",
         keys = {
-            -- confirm
-            -- cancel
-            -- next
-            -- prev
+            confirm = nil,
+            cancel = nil,
+            next = nil,
+            prev = nil,
         },
     },
     zen = {
@@ -294,7 +296,7 @@ local defaults = {
             { "Mining bitcoins", "Mined ₿" },
             { "Stacking overflow", "Stacked overflow" },
             { "Opening kournikova.jpg", "Opened kournikova.jpg" },
-            { "Deploying on Friday", "Paniced" },
+            { "Deploying on Friday", "Deployed on Friday" },
             { "Jiggling wiggling", "Jiggled wiggled" },
             { "Rewriting in Rust", "Rewrote in Rust" },
             { "Git blaming", "Git blamed" },
@@ -305,6 +307,7 @@ local defaults = {
             { "Agently replacing you", "Agently replaced you" },
         },
     },
+    on_widget = nil,
 }
 
 ---@type pi.Options
