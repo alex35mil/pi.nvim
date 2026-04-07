@@ -390,14 +390,15 @@ function M.open(payload, callback, opts)
     end, 200)
 
     local diff_keys = Config.options.diff.keys
-    local accept_key = diff_keys.accept
-    local reject_key = diff_keys.reject
-    local expand_context_key = diff_keys.expand_context
-    local shrink_context_key = diff_keys.shrink_context
-    local accept_lhs = Keys.lhs(accept_key)
-    local reject_lhs = Keys.lhs(reject_key)
-    local expand_context_lhs = Keys.lhs(expand_context_key)
-    local shrink_context_lhs = Keys.lhs(shrink_context_key)
+    local accept_keys = Keys.resolve(diff_keys.accept)
+    local reject_keys = Keys.resolve(diff_keys.reject)
+    local expand_context_keys = Keys.resolve(diff_keys.expand_context)
+    local shrink_context_keys = Keys.resolve(diff_keys.shrink_context)
+    -- Winbar hint shows the first key of each action.
+    local accept_lhs = accept_keys[1] and Keys.lhs(accept_keys[1]) or ""
+    local reject_lhs = reject_keys[1] and Keys.lhs(reject_keys[1]) or ""
+    local expand_context_lhs = expand_context_keys[1] and Keys.lhs(expand_context_keys[1]) or ""
+    local shrink_context_lhs = shrink_context_keys[1] and Keys.lhs(shrink_context_keys[1]) or ""
     vim.wo[left_win].winbar = "%#PiDiffWinbar# %#PiDiffWinbarCurrent#CURRENT: " .. rel_path .. "%#PiDiffWinbar#"
     vim.wo[right_win].winbar = "%#PiDiffWinbar# %#PiDiffWinbarProposed# PROPOSED: "
         .. rel_path
@@ -536,14 +537,22 @@ function M.open(payload, callback, opts)
     end
 
     for _, b in ipairs({ before_buf, after_buf }) do
-        Keys.bind(b, accept_key, accept, { desc = "Accept edit" })
-        Keys.bind(b, reject_key, reject, { desc = "Reject edit" })
-        Keys.bind(b, expand_context_key, function()
-            update_context(context_step)
-        end, { desc = "Expand diff context" })
-        Keys.bind(b, shrink_context_key, function()
-            update_context(-context_step)
-        end, { desc = "Shrink diff context" })
+        for _, k in ipairs(accept_keys) do
+            Keys.bind(b, k, accept, { desc = "Accept edit" })
+        end
+        for _, k in ipairs(reject_keys) do
+            Keys.bind(b, k, reject, { desc = "Reject edit" })
+        end
+        for _, k in ipairs(expand_context_keys) do
+            Keys.bind(b, k, function()
+                update_context(context_step)
+            end, { desc = "Expand diff context" })
+        end
+        for _, k in ipairs(shrink_context_keys) do
+            Keys.bind(b, k, function()
+                update_context(-context_step)
+            end, { desc = "Shrink diff context" })
+        end
     end
 
     -- :w on the proposed buffer accepts the diff

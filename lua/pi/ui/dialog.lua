@@ -34,7 +34,7 @@ local function bind_keys(buf, action, handler)
     for _, key in ipairs(BASE_KEYS[action] or {}) do
         Keys.bind(buf, key, handler, { nowait = true })
     end
-    for _, key in ipairs(get_config().keys[action] or {}) do
+    for _, key in ipairs(Keys.resolve(get_config().keys[action])) do
         Keys.bind(buf, key, handler, { nowait = true })
     end
 end

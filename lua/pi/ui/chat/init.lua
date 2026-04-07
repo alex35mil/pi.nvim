@@ -174,9 +174,11 @@ function Chat:_set_keymaps()
     local zen_keys = zen_cfg and zen_cfg.keys or nil
     if zen_keys and zen_keys.toggle then
         local Keys = require("pi.keys")
-        Keys.bind(pbuf, zen_keys.toggle, function()
-            self:zen_toggle()
-        end, { modes = { "n", "i" }, nowait = true, desc = "Toggle π zen mode" })
+        for _, key in ipairs(Keys.resolve(zen_keys.toggle)) do
+            Keys.bind(pbuf, key, function()
+                self:zen_toggle()
+            end, { modes = { "n", "i" }, nowait = true, desc = "Toggle π zen mode" })
+        end
     end
 end
 

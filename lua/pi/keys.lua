@@ -1,6 +1,37 @@
 --- Shared key-binding utilities.
 
+--- A single key specification: plain string or table with modes override.
+---@alias pi.KeySpec string|{ [1]: string, modes: string|string[] }
+
+--- One or more key specifications.
+---@alias pi.KeySpecs pi.KeySpec|pi.KeySpec[]
+
 local M = {}
+
+--- Normalize a `pi.KeySpecs` value into a list of `pi.KeySpec`.
+---
+--- Accepts any of:
+---   - `"<Esc>"` (string)
+---   - `{ "<C-q>", modes = { "n", "i" } }` (single table spec with `.modes`)
+---   - `{ "<Esc>", { "<C-q>", modes = "i" } }` (list of specs)
+---   - `nil` → empty list
+---
+---@param keyspecs pi.KeySpecs|nil
+---@return pi.KeySpec[]
+function M.resolve(keyspecs)
+    if keyspecs == nil then
+        return {}
+    end
+    if type(keyspecs) == "string" then
+        return { keyspecs }
+    end
+    -- Table with .modes → single KeySpec.
+    if type(keyspecs) == "table" and keyspecs.modes then
+        return { keyspecs }
+    end
+    -- Table of KeySpecs.
+    return keyspecs --[[@as pi.KeySpec[] ]]
+end
 
 --- Bind a `pi.KeySpec` to a buffer.
 ---

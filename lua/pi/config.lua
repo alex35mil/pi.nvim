@@ -34,21 +34,19 @@
 ---@field side pi.SideLayout|fun(): pi.SideLayout
 ---@field float pi.FloatLayout|fun(): pi.FloatLayout
 
----@alias pi.KeySpec string|{ [1]: string, modes: string[] }
-
 ---@class pi.ZenKeys
----@field toggle? pi.KeySpec Key to enter/exit zen mode
----@field exit? pi.KeySpec[] Additional keys that only exit zen mode
+---@field toggle? pi.KeySpecs Key(s) to enter/exit zen mode
+---@field exit? pi.KeySpecs Additional key(s) that only exit zen mode
 
 ---@class pi.ZenConfig
 ---@field width? integer Prompt width in columns (default: textwidth if set, otherwise 80)
 ---@field keys pi.ZenKeys
 
 ---@class pi.DiffKeys
----@field accept pi.KeySpec
----@field reject pi.KeySpec
----@field expand_context pi.KeySpec
----@field shrink_context pi.KeySpec
+---@field accept pi.KeySpecs
+---@field reject pi.KeySpecs
+---@field expand_context pi.KeySpecs
+---@field shrink_context pi.KeySpecs
 
 ---@class pi.DiffContextConfig
 ---@field base? integer
@@ -132,10 +130,10 @@
 ---@field notify_on_completion boolean Show an info notification when the agent finishes a turn and the prompt does not have focus.
 
 ---@class pi.DialogKeys
----@field confirm? pi.KeySpec[]
----@field cancel? pi.KeySpec[]
----@field next? pi.KeySpec[]
----@field prev? pi.KeySpec[]
+---@field confirm? pi.KeySpecs
+---@field cancel? pi.KeySpecs
+---@field next? pi.KeySpecs
+---@field prev? pi.KeySpecs
 
 --- A preferred model entry for cycling/selection.
 --- String: exact model ID.

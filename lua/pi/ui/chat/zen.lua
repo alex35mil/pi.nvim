@@ -204,7 +204,7 @@ function Zen:_bind_keys()
     local buf = self._prompt:buf()
     self._bound_keys = {}
     local default_modes = { "n", "i" }
-    for _, key in ipairs(zen_keys.exit or {}) do
+    for _, key in ipairs(Keys.resolve(zen_keys.exit)) do
         local lhs = Keys.lhs(key)
         -- Resolve actual modes: table key specs may override default_modes
         local modes = (type(key) == "table" and key.modes) or default_modes
