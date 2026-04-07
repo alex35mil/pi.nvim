@@ -2,6 +2,13 @@
 
 Use the [pi coding agent](https://pi.dev) without leaving Neovim.
 
+<p align="center">
+    <img width="2884" height="1764" alt="π" src="https://github.com/user-attachments/assets/92ee94b2-8770-4b34-bc61-7f536362b341" />
+    <sub>
+        π
+    </sub>
+</p>
+
 `pi.nvim` runs `pi --mode rpc` in the background and gives you an in-editor workflow for project-aware prompts, reviewed edits, session resume, and extension prompts.
 
 ## Table of contents
