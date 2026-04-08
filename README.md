@@ -49,19 +49,19 @@ https://github.com/user-attachments/assets/55080963-3066-44c2-9017-a81828033ef7
 </p>
 
 <details>
-<summary>Chat with `pi` in a side panel or a floating window</summary>
+<summary>Chat with an agent in a side panel or a floating window</summary>
 
 https://github.com/user-attachments/assets/2ab6ea5c-7c52-4977-8a12-b5dee55affaa
 </details>
 
 <details>
-<summary>Point an agent at the exact code you mean with @-mentions</summary>
+<summary>Point an agent at the exact code with @-mentions</summary>
 
 https://github.com/user-attachments/assets/c94b0099-f2d3-403a-962b-69bc23b78fb1
 </details>
 
 <details>
-<summary>Run commands and skills</summary>
+<summary>Run skills and commands</summary>
 
 https://github.com/user-attachments/assets/eec9d926-724c-426d-a6ac-03c8a11530dc
 </details>
