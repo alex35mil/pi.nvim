@@ -71,6 +71,7 @@ end
 local ignored_events = {
     turn_start = true,
     turn_end = true,
+    queue_update = true,
 }
 
 ---@param args any
