@@ -1409,6 +1409,10 @@ When something misbehaves — the agent doesn't respond, a tool doesn't render c
 The health check verifies the basics:
 
 - The `pi` executable (from the `bin` config option, defaults to `"pi"`) exists and is in `$PATH`.
+- pi backend compatibility against the plugin's tracked versions:
+    - minimum supported: `0.65.2`
+    - last validated: `0.65.2`
+    - newer versions are reported as unvalidated (warning), not hard-failed.
 - Neovim is at version 0.10 or newer.
 
 Run it any time you suspect something is off with the install:
