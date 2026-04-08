@@ -48,17 +48,84 @@ https://github.com/user-attachments/assets/55080963-3066-44c2-9017-a81828033ef7
     <sub> Workflow demo </sub>
 </p>
 
-- Chat with `pi` in a side panel or floating window
-- Point `pi` at the exact code you mean with `@file` and `@file#L10-20` mentions
-- Review agent-proposed edits in a two-way diff before they are applied, and tweak the proposed result if needed
-- Keep separate conversations per tab and continue or resume past sessions for the current working directory
-- Switch to zen mode for composing larger prompts comfortably
-- Attach screenshots and other images from disk, clipboard, or drag-and-drop
-- Queue follow-up instructions while the agent is still working
-- Switch models and thinking levels mid-session
-- See tool activity, diffs, and agent status inline, with collapsible tool blocks and a prompt status line
-- Handle confirmations, selections, and other extension UI requests inside Neovim
-- Use `/commands`, `@mentions`, and prompt completion out of the box, with optional `blink.cmp` integration
+<details>
+<summary>Chat with `pi` in a side panel or a floating window</summary>
+
+https://github.com/user-attachments/assets/2ab6ea5c-7c52-4977-8a12-b5dee55affaa
+</details>
+
+<details>
+<summary>Point an agent at the exact code you mean with @-mentions</summary>
+
+https://github.com/user-attachments/assets/c94b0099-f2d3-403a-962b-69bc23b78fb1
+</details>
+
+<details>
+<summary>Run commands and skills</summary>
+
+https://github.com/user-attachments/assets/eec9d926-724c-426d-a6ac-03c8a11530dc
+</details>
+
+<details>
+<summary>Review agent-proposed edits in a two-way diff before they are applied, and tweak the proposed result if needed</summary>
+
+https://github.com/user-attachments/assets/c20dfa72-79e4-4160-b7f0-6817b0793fda
+</details>
+
+<details>
+<summary>Be notified when an agent needs your attention without interrupting your flow</summary>
+
+https://github.com/user-attachments/assets/7b83bff0-b747-4232-9921-10a0955d58f7
+</details>
+
+<details>
+<summary>Scroll chat history without leaving the prompt</summary>
+
+https://github.com/user-attachments/assets/5f1b22a2-c682-4be1-8713-4155eca54437
+</details>
+
+<details>
+<summary>See tool activity, diffs, and agent status inline, with collapsible tool blocks</summary>
+
+https://github.com/user-attachments/assets/6df13dd4-2c1e-41c1-8be0-9ac71432e31d
+</details>
+
+<details>
+<summary>Switch to zen mode for composing larger prompts comfortably</summary>
+
+https://github.com/user-attachments/assets/b1074303-1f16-40d8-8413-55a7cb88a687
+</details>
+
+<details>
+<summary>Queue follow-up instructions while the agent is still working</summary>
+
+https://github.com/user-attachments/assets/c4a7b6e6-cf13-454e-b073-f3205ac3eda6
+</details>
+
+<details>
+<summary>Switch models and thinking levels mid-session</summary>
+
+https://github.com/user-attachments/assets/c8535554-ea69-4ea9-8098-6b63185bd410
+</details>
+
+<details>
+<summary>Continue or resume past sessions for the current working directory</summary>
+
+https://github.com/user-attachments/assets/d2d595db-e11d-40b7-87b0-5124867e160e
+</details>
+
+<details>
+<summary>Keep separate conversations per tab</summary>
+
+https://github.com/user-attachments/assets/4d087f23-c459-496d-92b9-7540be7340ce
+</details>
+
+<details>
+<summary>Attach screenshots and other images from disk, clipboard, or drag-and-drop</summary>
+
+https://github.com/user-attachments/assets/f210246a-2427-4fdb-b679-eeb6ceae4538
+</details>
+
 
 ## Requirements
 
