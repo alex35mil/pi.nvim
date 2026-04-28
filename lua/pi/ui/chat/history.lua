@@ -613,6 +613,20 @@ function History:_append_text(text)
     self:_maybe_scroll()
 end
 
+---@param from_row integer
+---@param to_row integer
+---@return boolean
+function History:_agent_text_has_open_fence(from_row, to_row)
+    local lines = vim.api.nvim_buf_get_lines(self._buf, from_row, to_row + 1, false)
+    local open = false
+    for _, line in ipairs(lines) do
+        if line:match("^%s*```") then
+            open = not open
+        end
+    end
+    return open
+end
+
 ---@param lines_list string[]
 ---@return integer start_row 0-indexed row where the first line was placed
 function History:_append_lines(lines_list)
@@ -1016,9 +1030,6 @@ function History:on_text_delta(delta)
             self:_append_lines({ "", "" })
         end
         self._last_was_inline = false
-        for _ in delta:gmatch("```") do
-            self._fence_open = not self._fence_open
-        end
         self:_append_text(delta)
     end)
 end
@@ -1030,12 +1041,17 @@ function History:on_agent_end(done_verb, opts)
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
         end
-        -- Agent may stop mid-stream with an open fence (see _fence_open tracking
-        -- in on_agent_delta). Close it so highlighting doesn't bleed.
-        if self._fence_open then
-            self:_append_text("\n```")
-            self._fence_open = false
+        -- Agent may stop mid-stream with an open fence. Recompute from the
+        -- rendered buffer because streaming chunks can split the ``` marker.
+        local fence_open = false
+        if self._agent_text_start_row then
+            local scan_end = vim.api.nvim_buf_line_count(self._buf) - 1
+            fence_open = self:_agent_text_has_open_fence(self._agent_text_start_row, scan_end)
         end
+        if fence_open then
+            self:_append_text("\n```")
+        end
+        self._fence_open = false
         -- Render markdown tables in the agent response text.
         if self._agent_text_start_row then
             local scan_end = vim.api.nvim_buf_line_count(self._buf) - 1
