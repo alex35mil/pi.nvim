@@ -164,8 +164,12 @@
 ---@field block "custom" Block type.
 ---@field content pi.CustomBlockLine[] Lines of styled chunks to render.
 
+---@class pi.CliConfig
+---@field bin string Path to the `pi` executable.
+---@field args string[] Extra startup args for every RPC process. pi.nvim filters args that conflict with RPC mode.
+
 ---@class pi.Options
----@field bin string
+---@field cli pi.CliConfig
 ---@field agent_dir? string Override the π agent directory (default: $PI_CODING_AGENT_DIR or ~/.pi/agent)
 ---@field debug boolean Enable RPC debug logging to stdpath("log")/pi/<session>/rpc.log
 ---@field models? pi.ModelEntry[] Preferred models for cycling and :PiSelectModel
@@ -191,7 +195,10 @@ math.randomseed(os.time())
 
 ---@type pi.Options
 local defaults = {
-    bin = "pi",
+    cli = {
+        bin = "pi",
+        args = {},
+    },
     agent_dir = nil,
     debug = false,
     models = nil,
@@ -315,6 +322,10 @@ M.options = vim.deepcopy(defaults)
 
 ---@param opts? pi.Options
 function M.setup(opts)
+    if opts and opts.bin ~= nil then
+        error("pi.nvim: `bin` was removed; use `cli = { bin = ... }`", 2)
+    end
+
     -- Stash user verbs before deep-extend mangles the list.
     local user_verbs = opts and opts.verbs or nil
     if opts then

@@ -192,8 +192,12 @@ All options are optional. These are the defaults:
 ```lua
 ---@type pi.Options
 require("pi").setup({
-    -- Path to the `pi` executable.
-    bin = "pi",
+    -- pi CLI invocation. Extra args are inserted before `--mode rpc`.
+    -- Args that conflict with RPC mode (`--mode`, `--print`, `--help`, etc.) are ignored.
+    cli = {
+        bin = "pi",
+        args = {},
+    },
     -- Enable RPC debug logging to `stdpath("log")/pi/<session>/rpc.log`.
     debug = false,
     -- Override the π agent directory used for session lookup.
@@ -1492,7 +1496,7 @@ Run it any time you suspect something is off with the install:
 :checkhealth pi
 ```
 
-If the executable isn't found, either install pi or set `bin = "/absolute/path/to/pi"` in `setup()`.
+If the executable isn't found, either install pi or set `cli = { bin = "/absolute/path/to/pi" }` in `setup()`.
 
 #### RPC debug logging
 

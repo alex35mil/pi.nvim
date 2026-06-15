@@ -112,6 +112,7 @@ local Rpc = {}
 Rpc.__index = Rpc
 
 local Config = require("pi.config")
+local Cli = require("pi.cli")
 local Notify = require("pi.notify")
 
 local DEBUG_OVERRIDE = nil ---@type boolean?
@@ -226,8 +227,7 @@ function Rpc:start()
         return true
     end
     self._stdout_buf = ""
-    ---@type string[]
-    local cmd = { Config.options.bin, "--mode", "rpc" }
+    local cmd = Cli.command()
     self._job_id = vim.fn.jobstart(cmd, {
         on_stdout = function(_, data)
             self:_on_stdout(data)

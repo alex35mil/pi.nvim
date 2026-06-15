@@ -1,4 +1,5 @@
 local Compat = require("pi.compat")
+local Cli = require("pi.cli")
 
 local M = {}
 
@@ -22,7 +23,7 @@ end
 M.check = function()
     vim.health.start("pi.nvim")
 
-    local bin = require("pi.config").options.bin
+    local bin = Cli.bin()
     local bin_found = vim.fn.executable(bin) == 1
     if bin_found then
         vim.health.ok("`" .. bin .. "` executable found")
@@ -46,11 +47,7 @@ M.check = function()
                 )
             elseif cmp_min < 0 then
                 vim.health.error(
-                    "pi version `"
-                        .. version
-                        .. "` is older than minimum supported `"
-                        .. Compat.min_supported
-                        .. "`"
+                    "pi version `" .. version .. "` is older than minimum supported `" .. Compat.min_supported .. "`"
                 )
             elseif cmp_validated > 0 then
                 vim.health.warn(
