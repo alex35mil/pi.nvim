@@ -76,10 +76,10 @@ local ignored_events = {
     queue_update = true,
 }
 
----@type fun(session: pi.Session, result: table)?
+---@type fun(session: pi.Session, result: table, will_retry: boolean)?
 local rebuild_after_compaction
 
----@type fun(session: pi.Session)?
+---@type fun(session: pi.Session, flush_queue?: boolean, will_retry?: boolean)?
 local finish_compaction_rebuild
 
 ---@param chat pi.Chat
@@ -171,7 +171,7 @@ local function handle_event(session, msg)
     -- transaction helper if other session rebuild flows need event buffering.
     if session._compaction_rebuilding and t ~= "response" then
         if t == "_process_exit" and finish_compaction_rebuild then
-            finish_compaction_rebuild(session)
+            finish_compaction_rebuild(session, false)
         else
             session._compaction_event_queue = session._compaction_event_queue or {}
             session._compaction_event_queue[#session._compaction_event_queue + 1] = msg
@@ -228,15 +228,18 @@ local function handle_event(session, msg)
             chat:set_compacting(false)
             restore_status_after_compaction(chat)
             chat:on_error("Compaction cancelled", { pad_top = true, pad_bottom = true })
+            chat:flush_compaction_queue(msg.willRetry == true)
         elseif type(msg.errorMessage) == "string" and msg.errorMessage ~= "" then
             chat:set_compacting(false)
             restore_status_after_compaction(chat)
             chat:on_error(msg.errorMessage, { pad_top = true, pad_bottom = true })
+            chat:flush_compaction_queue(msg.willRetry == true)
         elseif type(msg.result) == "table" and rebuild_after_compaction then
-            rebuild_after_compaction(session, msg.result)
+            rebuild_after_compaction(session, msg.result, msg.willRetry == true)
         else
             chat:set_compacting(false)
             restore_status_after_compaction(chat)
+            chat:flush_compaction_queue(msg.willRetry == true)
         end
     elseif t == "auto_retry_start" then
         chat:set_status({ type = "agent", text = "Retrying…" })
@@ -321,12 +324,17 @@ local function handle_event(session, msg)
 end
 
 ---@param session pi.Session
-finish_compaction_rebuild = function(session)
+---@param flush_queue? boolean default true
+---@param will_retry? boolean
+finish_compaction_rebuild = function(session, flush_queue, will_retry)
     local queued = session._compaction_event_queue or {}
     session._compaction_event_queue = {}
     session._compaction_rebuilding = false
     session.chat:set_compacting(false)
     restore_status_after_compaction(session.chat)
+    if flush_queue ~= false then
+        session.chat:flush_compaction_queue(will_retry == true)
+    end
 
     for i, queued_msg in ipairs(queued) do
         if session._compaction_rebuilding then
@@ -387,7 +395,7 @@ function M.get_or_create(opts)
     ---@type pi.ChatAgent
     local agent = {
         send = function(msg)
-            rpc:send(msg)
+            return rpc:send(msg)
         end,
     }
 
@@ -620,9 +628,13 @@ end
 
 ---@param session pi.Session
 ---@param _result table
-rebuild_after_compaction = function(session, _result)
+---@param will_retry boolean
+rebuild_after_compaction = function(session, _result, will_retry)
     session._compaction_rebuilding = true
     session._compaction_event_queue = {}
+    if will_retry then
+        session.chat:flush_compaction_queue(true)
+    end
 
     local sent = session.rpc:send({ type = "get_messages" }, function(res)
         vim.schedule(function()
@@ -630,7 +642,7 @@ rebuild_after_compaction = function(session, _result)
                 local err = res.error or "Failed to load compacted session messages"
                 Notify.error(err)
                 session.chat:on_error(err, { pad_top = true, pad_bottom = true })
-                finish_compaction_rebuild(session)
+                finish_compaction_rebuild(session, not will_retry, will_retry)
                 return
             end
 
@@ -642,12 +654,12 @@ rebuild_after_compaction = function(session, _result)
             replay_messages(session, messages)
             M.refresh_state(session)
             vim.schedule(function()
-                finish_compaction_rebuild(session)
+                finish_compaction_rebuild(session, not will_retry, will_retry)
             end)
         end)
     end)
     if not sent then
-        finish_compaction_rebuild(session)
+        finish_compaction_rebuild(session, false)
     end
 end
 

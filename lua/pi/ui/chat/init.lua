@@ -1,7 +1,7 @@
 --- Chat UI orchestration — layout, window management, and wiring.
 
 ---@class pi.ChatAgent
----@field send fun(msg: pi.RpcCommand)
+---@field send fun(msg: pi.RpcCommand): boolean?
 
 ---@class pi.Chat
 ---@field _tab pi.TabId
@@ -15,6 +15,7 @@
 ---@field _steer_delivered boolean
 ---@field _flushed_queue_entries pi.PendingQueueEntry[]
 ---@field _replay_flushed_queue_entries pi.PendingQueueEntry[]
+---@field _compaction_queue pi.CompactionQueuedMessage[]
 ---@field _active_verb string?
 ---@field _done_verb string?
 ---@field _last_turn_stop_reason "aborted"|"error"|nil
@@ -25,6 +26,7 @@ Chat.__index = Chat
 
 local Config = require("pi.config")
 local Notify = require("pi.notify")
+local CommandsCache = require("pi.cache.commands")
 local Layout = require("pi.ui.chat.layout")
 local Attention = require("pi.attention")
 local History = require("pi.ui.chat.history")
@@ -32,6 +34,13 @@ local Prompt = require("pi.ui.chat.prompt")
 local Attachments = require("pi.ui.chat.attachments")
 local Mentions = require("pi.ui.chat.mentions")
 local Zen = require("pi.ui.chat.zen")
+
+---@class pi.CompactionQueuedMessage
+---@field text string
+---@field expanded string
+---@field mode "steer"|"follow_up"
+---@field images? table[]
+---@field image_count? integer
 
 ---@param tab pi.TabId
 ---@param mode pi.LayoutMode
@@ -51,6 +60,7 @@ function Chat.new(tab, mode, agent)
     self._steer_delivered = false
     self._flushed_queue_entries = {}
     self._replay_flushed_queue_entries = {}
+    self._compaction_queue = {}
     self._active_verb = nil
     self._done_verb = nil
     self._last_turn_stop_reason = nil
@@ -396,7 +406,7 @@ end
 --- Submit the prompt. When streaming, sends as a steer (interrupt); otherwise regular prompt.
 function Chat:submit()
     if self._compacting then
-        Notify.warn("Cannot send message while compaction is running")
+        self:_queue_compaction_message("steer")
         return
     end
     self:_send_message(self._streaming and "steer" or nil)
@@ -406,7 +416,7 @@ end
 --- otherwise sends as a regular prompt.
 function Chat:submit_follow_up()
     if self._compacting then
-        Notify.warn("Cannot send message while compaction is running")
+        self:_queue_compaction_message("follow_up")
         return
     end
     self:_send_message(self._streaming and "follow_up" or nil)
@@ -425,6 +435,118 @@ end
 ---@param compacting boolean
 function Chat:set_compacting(compacting)
     self._compacting = compacting
+end
+
+---@param text string
+---@return boolean
+function Chat:_is_extension_command(text)
+    if not text:match("^%s*/") then
+        return false
+    end
+    local name = text:match("^%s*/([^%s]+)")
+    if not name then
+        return false
+    end
+    for _, command in ipairs(CommandsCache.list()) do
+        if command.name == name and command.source == "extension" then
+            return true
+        end
+    end
+    return false
+end
+
+---@param entry pi.CompactionQueuedMessage
+---@param command_type "prompt"|"steer"|"follow_up"
+---@return boolean
+function Chat:_send_compaction_entry(entry, command_type)
+    ---@type pi.RpcCommand
+    local cmd = { type = command_type, message = entry.expanded }
+    if entry.images and #entry.images > 0 then
+        cmd.images = entry.images
+    end
+    return self._agent.send(cmd) ~= false
+end
+
+---@param entry pi.PendingQueueEntry|pi.CompactionQueuedMessage
+function Chat:_remember_flushed_queue_entry(entry)
+    self._flushed_queue_entries[#self._flushed_queue_entries + 1] = {
+        queue_type = entry.queue_type or entry.mode,
+        text = entry.text,
+        expanded_text = entry.expanded_text or entry.expanded,
+        image_count = entry.image_count,
+    }
+end
+
+---@param entry pi.CompactionQueuedMessage
+function Chat:_ensure_pending_compaction_entry(entry)
+    self._history:remove_pending_queue_entry(entry.expanded)
+    self._history:add_pending_queue_entry(entry.mode, entry.text, entry.expanded, entry.image_count)
+end
+
+---@param mode "steer"|"follow_up"
+function Chat:_queue_compaction_message(mode)
+    local text = self._prompt:text()
+    local image_count = self._attachments:count()
+    if text == "" and image_count == 0 then
+        return
+    end
+
+    if self._zen:is_active() then
+        self._zen:exit()
+    end
+
+    self._prompt:clear_text()
+    local attachments = image_count > 0 and self._attachments:get() or nil
+    self._attachments:clear()
+    local expanded = Mentions.expand(text)
+
+    if self:_is_extension_command(text) then
+        self._history:add_user_message(text, nil, attachments and #attachments or nil)
+        self:_send_compaction_entry({ text = text, expanded = expanded, mode = mode, images = attachments }, "prompt")
+        return
+    end
+
+    local entry = {
+        text = text,
+        expanded = expanded,
+        mode = mode,
+        images = attachments,
+        image_count = attachments and #attachments or nil,
+    }
+    self._compaction_queue[#self._compaction_queue + 1] = entry
+    self._history:add_pending_queue_entry(mode, text, expanded, entry.image_count)
+    Notify.info("Queued message for after compaction")
+end
+
+---@param will_retry boolean
+function Chat:flush_compaction_queue(will_retry)
+    if #self._compaction_queue == 0 then
+        return
+    end
+
+    local queued = self._compaction_queue
+    self._compaction_queue = {}
+
+    if will_retry then
+        for _, entry in ipairs(queued) do
+            self:_ensure_pending_compaction_entry(entry)
+            self:_remember_flushed_queue_entry(entry)
+            self:_send_compaction_entry(entry, entry.mode)
+        end
+        return
+    end
+
+    local first = table.remove(queued, 1)
+    if first then
+        self._history:remove_pending_queue_entry(first.expanded)
+        self._history:add_user_message(first.text, nil, first.image_count)
+        self:_send_compaction_entry(first, "prompt")
+    end
+
+    for _, entry in ipairs(queued) do
+        self:_ensure_pending_compaction_entry(entry)
+        self:_send_compaction_entry(entry, entry.mode)
+    end
 end
 
 --- Send the current prompt contents as a message.
@@ -543,9 +665,11 @@ end
 function Chat:clear_for_compaction_rebuild()
     self:preserve_flushed_queue_for_rebuild()
     local replay_flushed_queue_entries = self._replay_flushed_queue_entries
+    local compaction_queue = self._compaction_queue
     self:clear()
     self._compacting = true
     self._replay_flushed_queue_entries = replay_flushed_queue_entries
+    self._compaction_queue = compaction_queue
 end
 
 function Chat:on_agent_end()
@@ -557,7 +681,7 @@ function Chat:on_agent_end()
     -- don't silently vanish.
     local pending_queue = self._history:get_pending_queue()
     for _, entry in ipairs(pending_queue) do
-        self._flushed_queue_entries[#self._flushed_queue_entries + 1] = entry
+        self:_remember_flushed_queue_entry(entry)
         self._history:add_user_message(entry.text, nil, entry.image_count, entry.queue_type)
     end
     self._history:clear_pending_queue()
@@ -799,6 +923,7 @@ function Chat:clear()
     self._steer_delivered = false
     self._flushed_queue_entries = {}
     self._replay_flushed_queue_entries = {}
+    self._compaction_queue = {}
     self._active_verb = nil
     self._done_verb = nil
     self._last_turn_stop_reason = nil

@@ -1371,7 +1371,7 @@ Long sessions eventually run into the model's context window limit. pi delegates
 :PiCompact focus on architectural decisions and the reasoning behind them; drop intermediate tool outputs
 ```
 
-Compaction can't run while the agent is streaming — wait for the current turn to finish (or abort it) first. Message submits are blocked while compaction is running.
+Compaction can't run while the agent is streaming — wait for the current turn to finish (or abort it) first. Message submits during compaction are queued and sent after compaction finishes.
 
 After successful compaction, pi.nvim renders a collapsed summary block in chat history. Focus the block and press `<Tab>` to expand the backend-generated summary.
 
