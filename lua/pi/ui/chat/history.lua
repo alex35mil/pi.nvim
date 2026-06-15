@@ -12,7 +12,7 @@
 ---@field _spinner_rate integer
 ---@field _spinner_index integer
 ---@field _spinner_timer uv.uv_timer_t?
----@field _fence_open boolean
+---@field _agent_text_chunks string[]?
 ---@field _first_delta boolean
 ---@field _agent_start_time number?
 ---@field _show_thinking boolean
@@ -387,7 +387,7 @@ function History.new(tab)
     self._spinner_index = 1
     self._spinner_timer = nil
     self:_pick_spinner()
-    self._fence_open = false
+    self._agent_text_chunks = nil
     self._first_delta = false
     self._agent_start_time = nil
     self._show_thinking = Config.options.show_thinking
@@ -613,13 +613,11 @@ function History:_append_text(text)
     self:_maybe_scroll()
 end
 
----@param from_row integer
----@param to_row integer
+---@param text string
 ---@return boolean
-function History:_agent_text_has_open_fence(from_row, to_row)
-    local lines = vim.api.nvim_buf_get_lines(self._buf, from_row, to_row + 1, false)
+function History:_agent_text_has_open_fence(text)
     local open = false
-    for _, line in ipairs(lines) do
+    for _, line in ipairs(vim.split(text, "\n", { plain = true })) do
         if line:match("^%s*```") then
             open = not open
         end
@@ -990,6 +988,7 @@ function History:on_agent_start(timestamp)
         self:_begin_conversation_content()
         self._agent_start_time = vim.uv.hrtime() / 1e9
         self._first_delta = true
+        self._agent_text_chunks = {}
         self._needs_separator = false
         self._last_was_inline = false
         self:_pick_spinner()
@@ -1030,6 +1029,9 @@ function History:on_text_delta(delta)
             self:_append_lines({ "", "" })
         end
         self._last_was_inline = false
+        if self._agent_text_chunks then
+            self._agent_text_chunks[#self._agent_text_chunks + 1] = delta
+        end
         self:_append_text(delta)
     end)
 end
@@ -1042,16 +1044,12 @@ function History:on_agent_end(done_verb, opts)
             return
         end
         -- Agent may stop mid-stream with an open fence. Recompute from the
-        -- rendered buffer because streaming chunks can split the ``` marker.
-        local fence_open = false
-        if self._agent_text_start_row then
-            local scan_end = vim.api.nvim_buf_line_count(self._buf) - 1
-            fence_open = self:_agent_text_has_open_fence(self._agent_text_start_row, scan_end)
-        end
-        if fence_open then
+        -- streamed agent text because chunks can split the ``` marker.
+        local agent_text = table.concat(self._agent_text_chunks or {})
+        if self:_agent_text_has_open_fence(agent_text) then
             self:_append_text("\n```")
         end
-        self._fence_open = false
+        self._agent_text_chunks = nil
         -- Render markdown tables in the agent response text.
         if self._agent_text_start_row then
             local scan_end = vim.api.nvim_buf_line_count(self._buf) - 1
@@ -2169,6 +2167,7 @@ function History:clear()
     self:clear_placeholder()
     self._placeholder_mode = nil
     self._agent_text_start_row = nil
+    self._agent_text_chunks = nil
     self._last_agent_response_extmark_id = nil
     vim.api.nvim_buf_clear_namespace(self._buf, ns, 0, -1)
     self:_with_modifiable(function()
