@@ -314,7 +314,12 @@ function M.compact(custom_instructions)
         Notify.warn("Cannot compact while streaming")
         return
     end
+    if session.chat:is_compacting() then
+        Notify.warn("Compaction is already running")
+        return
+    end
 
+    session.chat:set_compacting(true)
     session.chat:set_status({ type = "compaction" })
 
     ---@type table
@@ -323,16 +328,19 @@ function M.compact(custom_instructions)
         cmd.customInstructions = custom_instructions
     end
 
-    session.rpc:send(cmd, function(res)
+    local sent = session.rpc:send(cmd, function(res)
         vim.schedule(function()
-            session.chat:set_status(nil)
-            if res.success then
-                session.chat:reset_usage()
-            else
+            if not res.success then
+                session.chat:set_compacting(false)
+                session.chat:set_status(nil)
                 Notify.error("Compaction failed: " .. (res.error or "unknown error"))
             end
         end)
     end)
+    if not sent then
+        session.chat:set_compacting(false)
+        session.chat:set_status(nil)
+    end
 end
 
 --- Set or show the session display name.

@@ -10,6 +10,8 @@
 ---| "tool_execution_start"
 ---| "tool_execution_update"
 ---| "tool_execution_end"
+---| "compaction_start"
+---| "compaction_end"
 ---| "auto_compaction_start"
 ---| "auto_compaction_end"
 ---| "auto_retry_start"

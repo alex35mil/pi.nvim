@@ -39,6 +39,13 @@ local function set_defaults()
     )
     vim.api.nvim_set_hl(0, "PiStartupDetail", { default = true, fg = comment.fg, nocombine = true })
     vim.api.nvim_set_hl(0, "PiStartupError", { default = true, fg = diagnostic_error.fg, nocombine = true })
+    vim.api.nvim_set_hl(
+        0,
+        "PiCompactionLabel",
+        { default = true, fg = normal.bg, bg = comment.fg, bold = true, nocombine = true }
+    )
+    vim.api.nvim_set_hl(0, "PiCompactionText", { default = true, fg = comment.fg, nocombine = true })
+    vim.api.nvim_set_hl(0, "PiCompactionHint", { default = true, fg = comment.fg, italic = true, nocombine = true })
     vim.api.nvim_set_hl(0, "PiMessageDateTime", { default = true, fg = comment.fg })
     vim.api.nvim_set_hl(0, "PiMessageQueueTag", { default = true, fg = comment.fg, italic = true })
     vim.api.nvim_set_hl(0, "PiPendingQueueLabel", { default = true, fg = warning.fg, italic = true })

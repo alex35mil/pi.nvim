@@ -237,6 +237,7 @@ require("pi").setup({
         steer_message = "󰾘",
         follow_up_message = "󱇼",
         thinking = "󰟶",
+        compaction = "󰏗",
         attachment = "",
         attachments = "",
         error = "󰘨 󱚟 󱔁 ",
@@ -1370,7 +1371,9 @@ Long sessions eventually run into the model's context window limit. pi delegates
 :PiCompact focus on architectural decisions and the reasoning behind them; drop intermediate tool outputs
 ```
 
-Compaction can't run while the agent is streaming — wait for the current turn to finish (or abort it) first.
+Compaction can't run while the agent is streaming — wait for the current turn to finish (or abort it) first. Message submits are blocked while compaction is running.
+
+After successful compaction, pi.nvim renders a collapsed summary block in chat history. Focus the block and press `<Tab>` to expand the backend-generated summary.
 
 ### Extensions & custom rendering
 
@@ -1659,6 +1662,9 @@ All highlight groups are defined with `default = true`, so they can be overridde
 | `PiStartupHint` | Hint text inside the startup block |
 | `PiStartupDetail` | Detail lines inside the startup block |
 | `PiStartupError` | Error lines inside the startup block |
+| `PiCompactionLabel` | Icon label for compaction summaries |
+| `PiCompactionText` | Body text inside compaction summaries |
+| `PiCompactionHint` | Expand/collapse hint inside collapsed compaction summaries |
 | `PiMessageDateTime` | Timestamp next to messages |
 | `PiMessageQueueTag` | Queue tag (steer / follow-up) next to queued messages |
 | `PiMessageAttachments` | Attachment summary under a message |

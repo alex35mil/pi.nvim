@@ -74,6 +74,7 @@
 ---@field steer_message string
 ---@field follow_up_message string
 ---@field thinking string
+---@field compaction string
 ---@field attachment string
 ---@field attachments string
 ---@field error string
@@ -220,6 +221,7 @@ local defaults = {
         steer_message = "󰾘",
         follow_up_message = "󱇼",
         thinking = "󰟶",
+        compaction = "󰏗",
         attachment = "",
         attachments = "",
         error = "󰘨 󱚟 󱔁 ",

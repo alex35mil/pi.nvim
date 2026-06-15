@@ -11,7 +11,10 @@
 ---@field _prompt pi.ChatPrompt
 ---@field _keymaps_set boolean
 ---@field _streaming boolean
+---@field _compacting boolean
 ---@field _steer_delivered boolean
+---@field _flushed_queue_entries pi.PendingQueueEntry[]
+---@field _replay_flushed_queue_entries pi.PendingQueueEntry[]
 ---@field _active_verb string?
 ---@field _done_verb string?
 ---@field _last_turn_stop_reason "aborted"|"error"|nil
@@ -21,6 +24,7 @@ local Chat = {}
 Chat.__index = Chat
 
 local Config = require("pi.config")
+local Notify = require("pi.notify")
 local Layout = require("pi.ui.chat.layout")
 local Attention = require("pi.attention")
 local History = require("pi.ui.chat.history")
@@ -43,7 +47,10 @@ function Chat.new(tab, mode, agent)
     self._layout = Layout.new(mode, self._history, self._prompt, self._attachments)
     self._keymaps_set = false
     self._streaming = false
+    self._compacting = false
     self._steer_delivered = false
+    self._flushed_queue_entries = {}
+    self._replay_flushed_queue_entries = {}
     self._active_verb = nil
     self._done_verb = nil
     self._last_turn_stop_reason = nil
@@ -159,9 +166,11 @@ function Chat:_set_keymaps()
         vim.api.nvim_put({ "", "" }, "c", false, true)
     end, { buffer = pbuf, desc = "New line" })
 
-    -- Toggle collapsible blocks (system preamble, tool blocks)
+    -- Toggle collapsible blocks (system preamble, compaction summaries, tool blocks)
     vim.keymap.set("n", "<Tab>", function()
         if self._history:toggle_startup_block() then
+            return
+        elseif self._history:toggle_compaction_block() then
             return
         elseif self._history:toggle_tool_block() then
             return
@@ -386,18 +395,36 @@ end
 
 --- Submit the prompt. When streaming, sends as a steer (interrupt); otherwise regular prompt.
 function Chat:submit()
+    if self._compacting then
+        Notify.warn("Cannot send message while compaction is running")
+        return
+    end
     self:_send_message(self._streaming and "steer" or nil)
 end
 
 --- Submit the prompt as a follow-up. When streaming, queued until agent finishes;
 --- otherwise sends as a regular prompt.
 function Chat:submit_follow_up()
+    if self._compacting then
+        Notify.warn("Cannot send message while compaction is running")
+        return
+    end
     self:_send_message(self._streaming and "follow_up" or nil)
 end
 
 ---@return boolean
 function Chat:is_streaming()
     return self._streaming
+end
+
+---@return boolean
+function Chat:is_compacting()
+    return self._compacting
+end
+
+---@param compacting boolean
+function Chat:set_compacting(compacting)
+    self._compacting = compacting
 end
 
 --- Send the current prompt contents as a message.
@@ -485,6 +512,42 @@ function Chat:on_text_delta(delta)
     self._history:on_text_delta(delta)
 end
 
+---@param entries pi.PendingQueueEntry[]
+---@param text string
+---@return pi.PendingQueueEntry?
+function Chat:_remove_queue_entry(entries, text)
+    for i, entry in ipairs(entries) do
+        if entry.expanded_text == text then
+            return table.remove(entries, i)
+        end
+    end
+    return nil
+end
+
+---@param text string
+---@return pi.PendingQueueEntry?
+function Chat:_remove_flushed_queue_entry(text)
+    return self:_remove_queue_entry(self._flushed_queue_entries, text)
+end
+
+---@param text string
+---@return pi.PendingQueueEntry?
+function Chat:_remove_replay_flushed_queue_entry(text)
+    return self:_remove_queue_entry(self._replay_flushed_queue_entries, text)
+end
+
+function Chat:preserve_flushed_queue_for_rebuild()
+    self._replay_flushed_queue_entries = { unpack(self._flushed_queue_entries) }
+end
+
+function Chat:clear_for_compaction_rebuild()
+    self:preserve_flushed_queue_for_rebuild()
+    local replay_flushed_queue_entries = self._replay_flushed_queue_entries
+    self:clear()
+    self._compacting = true
+    self._replay_flushed_queue_entries = replay_flushed_queue_entries
+end
+
 function Chat:on_agent_end()
     self._streaming = false
     self._steer_delivered = false
@@ -492,7 +555,9 @@ function Chat:on_agent_end()
     -- Normally they are moved on message_start, but if the agent ends
     -- without delivering them (e.g. abort), render them now so they
     -- don't silently vanish.
-    for _, entry in ipairs(self._history:get_pending_queue()) do
+    local pending_queue = self._history:get_pending_queue()
+    for _, entry in ipairs(pending_queue) do
+        self._flushed_queue_entries[#self._flushed_queue_entries + 1] = entry
         self._history:add_user_message(entry.text, nil, entry.image_count, entry.queue_type)
     end
     self._history:clear_pending_queue()
@@ -548,7 +613,7 @@ function Chat:on_message_start(msg)
                 end
             end
         end
-        local entry = self._history:remove_pending_queue_entry(text)
+        local entry = self._history:remove_pending_queue_entry(text) or self:_remove_replay_flushed_queue_entry(text)
         if entry then
             self._steer_delivered = true
             self._history:add_user_message(
@@ -557,6 +622,9 @@ function Chat:on_message_start(msg)
                 image_count > 0 and image_count or entry.image_count,
                 entry.queue_type
             )
+            self:_remove_flushed_queue_entry(text)
+        else
+            self:_remove_flushed_queue_entry(text)
         end
     elseif message.role == "assistant" and self._steer_delivered then
         -- After a steered user message is delivered, the agent starts a new
@@ -635,6 +703,12 @@ end
 ---@param block pi.CustomBlock
 function Chat:append_custom_block(block)
     self._history:append_custom_block(block)
+end
+
+---@param summary string
+---@param tokens_before integer
+function Chat:append_compaction_summary(summary, tokens_before)
+    self._history:append_compaction_summary(summary, tokens_before)
 end
 
 --- Re-render the prompt status line.
@@ -721,7 +795,10 @@ end
 
 function Chat:clear()
     self._streaming = false
+    self._compacting = false
     self._steer_delivered = false
+    self._flushed_queue_entries = {}
+    self._replay_flushed_queue_entries = {}
     self._active_verb = nil
     self._done_verb = nil
     self._last_turn_stop_reason = nil

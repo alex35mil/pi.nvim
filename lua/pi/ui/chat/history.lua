@@ -21,6 +21,7 @@
 ---@field _thinking_accum pi.ThinkingAccum?
 ---@field _thinking_blocks pi.ThinkingBlock[]
 ---@field _tool_blocks table<string, pi.ToolBlock>
+---@field _compaction_blocks pi.CompactionBlock[]
 ---@field _placeholder_extmark integer?
 ---@field _placeholder_mode? "loading"
 ---@field _has_conversation_content boolean
@@ -78,6 +79,13 @@ History.__index = History
 ---@field line_count integer
 ---@field visible boolean
 
+---@class pi.CompactionBlock
+---@field summary string
+---@field tokens_before integer
+---@field anchor integer
+---@field line_count integer
+---@field expanded boolean
+
 ---@class pi.PendingQueueEntry
 ---@field queue_type "steer"|"follow_up"
 ---@field text string
@@ -113,6 +121,19 @@ end
 local function format_attachment_info(image_count)
     local icon = Config.options.labels.attachments
     return image_count == 1 and (icon .. " 1 image attached") or (icon .. " %d images attached"):format(image_count)
+end
+
+---@param value integer
+---@return string
+local function format_number(value)
+    local formatted = tostring(value)
+    while true do
+        local next_value, count = formatted:gsub("^(-?%d+)(%d%d%d)", "%1,%2")
+        formatted = next_value
+        if count == 0 then
+            return formatted
+        end
+    end
 end
 
 --- Capture extmarks in a row range (positions saved relative to start_row).
@@ -396,6 +417,7 @@ function History.new(tab)
     self._thinking_accum = nil
     self._thinking_blocks = {}
     self._tool_blocks = {}
+    self._compaction_blocks = {}
     self._placeholder_extmark = nil
     self._placeholder_mode = nil
     self._has_conversation_content = false
@@ -1459,6 +1481,115 @@ function History:toggle_startup_block(check_cursor)
     return true
 end
 
+---@param block pi.CompactionBlock
+---@return string[], pi.HighlightMark[]
+function History:_build_compaction_lines(block)
+    local tokens = format_number(block.tokens_before)
+    local label = " " .. Config.options.labels.compaction .. " "
+    local header = label .. "  Compacted from " .. tokens .. " tokens"
+    local lines = { "", header } ---@type string[]
+    local marks = {
+        { row = 1, col_start = 0, col_end = #label, hl = "PiCompactionLabel" },
+        { row = 1, col_start = #label, col_end = #header, hl = "PiCompactionText" },
+    } ---@type pi.HighlightMark[]
+
+    if block.expanded then
+        local summary_lines = vim.split(block.summary or "", "\n", { plain = true })
+        for _, line in ipairs(summary_lines) do
+            lines[#lines + 1] = "     " .. line
+            marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #lines[#lines], hl = "PiCompactionText" }
+        end
+    else
+        local hint = "     To expand, focus this block and hit Tab"
+        lines[#lines + 1] = hint
+        marks[#marks + 1] = { row = #lines - 1, col_start = 0, col_end = #hint, hl = "PiCompactionHint" }
+    end
+
+    return lines, marks
+end
+
+---@param start_row integer
+---@param marks pi.HighlightMark[]
+function History:_apply_compaction_marks(start_row, marks)
+    for _, mark in ipairs(marks) do
+        vim.api.nvim_buf_set_extmark(self._buf, ns, start_row + mark.row, mark.col_start, {
+            end_col = mark.col_end,
+            hl_group = mark.hl,
+            priority = STARTUP_HL_PRIORITY,
+        })
+    end
+end
+
+---@param block pi.CompactionBlock
+function History:_replace_compaction_block(block)
+    local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.anchor, {})
+    local start_row = pos[1]
+    if not start_row then
+        return
+    end
+
+    local lines, marks = self:_build_compaction_lines(block)
+    vim.api.nvim_buf_clear_namespace(self._buf, ns, start_row, start_row + block.line_count)
+    self:_with_modifiable(function()
+        vim.api.nvim_buf_set_lines(self._buf, start_row, start_row + block.line_count, false, lines)
+    end)
+    block.line_count = #lines
+    block.anchor = vim.api.nvim_buf_set_extmark(self._buf, ns, start_row, 0, {})
+    self:_apply_compaction_marks(start_row, marks)
+    self:_update_status_extmark()
+    self:_maybe_scroll()
+end
+
+---@param summary string
+---@param tokens_before integer
+function History:_append_compaction_summary(summary, tokens_before)
+    if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
+        return
+    end
+    self:_begin_conversation_content()
+    local block = {
+        summary = summary,
+        tokens_before = tokens_before,
+        anchor = 0,
+        line_count = 0,
+        expanded = false,
+    }
+    local lines, marks = self:_build_compaction_lines(block)
+    local start = self:_append_lines(lines)
+    block.anchor = vim.api.nvim_buf_set_extmark(self._buf, ns, start, 0, {})
+    block.line_count = #lines
+    self._compaction_blocks[#self._compaction_blocks + 1] = block
+    self:_apply_compaction_marks(start, marks)
+    self:_scroll_to_bottom()
+end
+
+---@param summary string
+---@param tokens_before integer
+function History:append_compaction_summary(summary, tokens_before)
+    vim.schedule(function()
+        self:_append_compaction_summary(summary, tokens_before)
+    end)
+end
+
+---@return boolean toggled
+function History:toggle_compaction_block()
+    local win = self:win()
+    if not win then
+        return false
+    end
+    local cursor_row = vim.api.nvim_win_get_cursor(win)[1] - 1
+    for _, block in ipairs(self._compaction_blocks) do
+        local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.anchor, {})
+        local start_row = pos[1]
+        if start_row and cursor_row >= start_row and cursor_row < start_row + block.line_count then
+            block.expanded = not block.expanded
+            self:_replace_compaction_block(block)
+            return true
+        end
+    end
+    return false
+end
+
 ---@param error_message string
 ---@param opts? pi.ChatErrorOpts
 function History:on_system_error(error_message, opts)
@@ -2153,6 +2284,7 @@ function History:clear()
     self._thinking_accum = nil
     self._thinking_blocks = {}
     self._tool_blocks = {}
+    self._compaction_blocks = {}
     self._has_conversation_content = false
     self._startup_block_line_count = 0
     self._startup_block_expanded = Config.options.expand_startup_details

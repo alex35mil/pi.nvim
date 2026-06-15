@@ -20,6 +20,8 @@
 ---@field system_errors pi.SystemErrorEntry[]
 ---@field changed_files table<string, true> Set of file paths modified by edit/write tools during the current session.
 ---@field _pending_file_change_args? table<string, table> Pending tool args by tool call id for file-changing tools.
+---@field _compaction_rebuilding? boolean True while compacted messages are being fetched/replayed.
+---@field _compaction_event_queue? pi.RpcEvent[] Events received while compacted messages are being fetched/replayed.
 
 ---@class pi.SessionCreateOpts
 ---@field layout? pi.LayoutMode
@@ -73,6 +75,23 @@ local ignored_events = {
     turn_end = true,
     queue_update = true,
 }
+
+---@type fun(session: pi.Session, result: table)?
+local rebuild_after_compaction
+
+---@type fun(session: pi.Session)?
+local finish_compaction_rebuild
+
+---@param chat pi.Chat
+local function restore_status_after_compaction(chat)
+    -- Compaction can fire after agent_end (between turns).
+    -- Only restore the spinner if an agent loop is still active.
+    if chat:active_verb() then
+        chat:set_status({ type = "agent", text = chat:active_verb() .. "…" })
+    else
+        chat:set_status(nil)
+    end
+end
 
 ---@param args any
 ---@return table?
@@ -148,6 +167,18 @@ local function handle_event(session, msg)
     local t = msg.type
     local chat = session.chat
 
+    -- NOTE: This compaction-specific rebuild gate should become a small
+    -- transaction helper if other session rebuild flows need event buffering.
+    if session._compaction_rebuilding and t ~= "response" then
+        if t == "_process_exit" and finish_compaction_rebuild then
+            finish_compaction_rebuild(session)
+        else
+            session._compaction_event_queue = session._compaction_event_queue or {}
+            session._compaction_event_queue[#session._compaction_event_queue + 1] = msg
+            return true
+        end
+    end
+
     if t == "agent_start" then
         chat:on_agent_start()
     elseif t == "agent_end" then
@@ -189,16 +220,23 @@ local function handle_event(session, msg)
             track_changed_file(session, args)
             session._pending_file_change_args[msg.toolCallId] = nil
         end
-    elseif t == "auto_compaction_start" then
+    elseif t == "compaction_start" or t == "auto_compaction_start" then
+        chat:set_compacting(true)
         chat:set_status({ type = "compaction" })
-    elseif t == "auto_compaction_end" then
-        chat:reset_usage()
-        -- Compaction can fire after agent_end (between turns).
-        -- Only restore the spinner if an agent loop is still active.
-        if chat:active_verb() then
-            chat:set_status({ type = "agent", text = chat:active_verb() .. "…" })
+    elseif t == "compaction_end" or t == "auto_compaction_end" then
+        if msg.aborted then
+            chat:set_compacting(false)
+            restore_status_after_compaction(chat)
+            chat:on_error("Compaction cancelled", { pad_top = true, pad_bottom = true })
+        elseif type(msg.errorMessage) == "string" and msg.errorMessage ~= "" then
+            chat:set_compacting(false)
+            restore_status_after_compaction(chat)
+            chat:on_error(msg.errorMessage, { pad_top = true, pad_bottom = true })
+        elseif type(msg.result) == "table" and rebuild_after_compaction then
+            rebuild_after_compaction(session, msg.result)
         else
-            chat:set_status(nil)
+            chat:set_compacting(false)
+            restore_status_after_compaction(chat)
         end
     elseif t == "auto_retry_start" then
         chat:set_status({ type = "agent", text = "Retrying…" })
@@ -280,6 +318,27 @@ local function handle_event(session, msg)
     end
 
     return true
+end
+
+---@param session pi.Session
+finish_compaction_rebuild = function(session)
+    local queued = session._compaction_event_queue or {}
+    session._compaction_event_queue = {}
+    session._compaction_rebuilding = false
+    session.chat:set_compacting(false)
+    restore_status_after_compaction(session.chat)
+
+    for i, queued_msg in ipairs(queued) do
+        if session._compaction_rebuilding then
+            local active_queue = session._compaction_event_queue or {}
+            for j = i, #queued do
+                active_queue[#active_queue + 1] = queued[j]
+            end
+            session._compaction_event_queue = active_queue
+            return
+        end
+        handle_event(session, queued_msg)
+    end
 end
 
 --- Get the session for the current tab. Returns nil if none exists.
@@ -544,6 +603,12 @@ local function replay_messages(session, messages)
             if tc_args then
                 track_changed_file(session, tc_args)
             end
+        elseif role == "compactionSummary" then
+            if pending_agent_end then
+                session.chat:on_agent_end()
+                pending_agent_end = false
+            end
+            session.chat:append_compaction_summary(msg.summary or "", tonumber(msg.tokensBefore) or 0)
         end
     end
     -- Flush any remaining pending agent_end
@@ -551,6 +616,39 @@ local function replay_messages(session, messages)
         session.chat:on_agent_end()
     end
     session.chat:set_replaying(false)
+end
+
+---@param session pi.Session
+---@param _result table
+rebuild_after_compaction = function(session, _result)
+    session._compaction_rebuilding = true
+    session._compaction_event_queue = {}
+
+    local sent = session.rpc:send({ type = "get_messages" }, function(res)
+        vim.schedule(function()
+            if not res.success then
+                local err = res.error or "Failed to load compacted session messages"
+                Notify.error(err)
+                session.chat:on_error(err, { pad_top = true, pad_bottom = true })
+                finish_compaction_rebuild(session)
+                return
+            end
+
+            local messages = (res.data or {}).messages or {}
+            session.changed_files = {}
+            session._pending_file_change_args = nil
+            session.chat:clear_for_compaction_rebuild()
+            show_startup_block(session, CommandsCache.list())
+            replay_messages(session, messages)
+            M.refresh_state(session)
+            vim.schedule(function()
+                finish_compaction_rebuild(session)
+            end)
+        end)
+    end)
+    if not sent then
+        finish_compaction_rebuild(session)
+    end
 end
 
 --- Load a session by path: switch_session -> clear chat -> get_messages -> replay.
