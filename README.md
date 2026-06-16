@@ -1516,7 +1516,7 @@ The health check verifies the basics:
 - The `pi` executable (from the `bin` config option, defaults to `"pi"`) exists and is in `$PATH`.
 - pi backend compatibility against the plugin's tracked versions:
     - minimum supported: `0.65.2`
-    - last validated: `0.65.2`
+    - last validated: `0.79.3`
     - newer versions are reported as unvalidated (warning), not hard-failed.
 - Neovim is at version 0.10 or newer.
 

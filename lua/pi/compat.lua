@@ -4,7 +4,7 @@
 local M = {
     -- Keep these in sync with release validation notes.
     min_supported = "0.65.2",
-    validated = "0.65.2",
+    validated = "0.79.3",
 }
 
 ---@param version string
