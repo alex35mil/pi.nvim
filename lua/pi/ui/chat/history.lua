@@ -56,6 +56,8 @@ History.__index = History
 ---@field tool_name string
 ---@field icon_extmark integer
 ---@field tail_extmark? integer marks last row of block after on_start; used for positional insertion in on_tool_end
+---@field live_update_extmark? integer marks first row of live partial output
+---@field live_update_line_count? integer number of live partial output rows
 ---@field output_extmark? integer
 ---@field end_extmark? integer
 ---@field tool_input? table
@@ -1820,6 +1822,7 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
         end
         if block then
             block.finished = true
+            self:_delete_tool_live_update(block)
         end
 
         -- Inline tools: append status indicator to the existing line
@@ -2101,10 +2104,157 @@ function History:toggle_blocks_expanded()
     return self:set_blocks_expanded(not self:_all_blocks_expanded())
 end
 
+---@param msg table?
+---@return string?
+local function extract_tool_update_text(msg)
+    local partial = msg and msg.partialResult
+    local content = partial and partial.content
+    if type(content) == "string" then
+        local trimmed = vim.trim(Tools.sanitize_text(content))
+        return trimmed ~= "" and trimmed or nil
+    end
+    if type(content) ~= "table" then
+        return nil
+    end
+    local parts = {}
+    for _, item in ipairs(content) do
+        if type(item) == "table" and item.type == "text" and type(item.text) == "string" then
+            parts[#parts + 1] = Tools.sanitize_text(item.text)
+        elseif type(item) == "string" then
+            parts[#parts + 1] = Tools.sanitize_text(item)
+        end
+    end
+    if #parts == 0 then
+        return nil
+    end
+    local trimmed = vim.trim(table.concat(parts, "\n"))
+    return trimmed ~= "" and trimmed or nil
+end
+
+---@param text string
+---@return string[]
+local function build_tool_live_update_lines(text)
+    local output_lines = vim.split(Tools.sanitize_text(text), "\n", { plain = true })
+    local fences = 0
+    for _, line in ipairs(output_lines) do
+        if line:match("^```") then
+            fences = fences + 1
+        end
+    end
+    if fences % 2 == 1 then
+        output_lines[#output_lines + 1] = "```"
+    end
+
+    local lines = { "" }
+    vim.list_extend(lines, output_lines)
+    return lines
+end
+
+---@param start_row integer
+---@param lines string[]
+function History:_apply_tool_live_update_extmarks(start_row, lines)
+    Tools.set_border(self, start_row, Tools.GLYPHS.SEP)
+    for i = 2, #lines do
+        local row = start_row + i - 1
+        local line = lines[i] or ""
+        Tools.set_border(self, row, Tools.GLYPHS.MID)
+        if #line > 0 then
+            vim.api.nvim_buf_set_extmark(self._buf, ns, row, 0, {
+                end_col = #line,
+                hl_group = "PiToolOutput",
+                priority = 200,
+            })
+        end
+    end
+end
+
+---@param block pi.ToolBlock
+function History:_delete_tool_live_update(block)
+    if not block.live_update_extmark or not block.live_update_line_count then
+        return
+    end
+    local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.live_update_extmark, {})
+    block.live_update_extmark = nil
+    local line_count = block.live_update_line_count
+    block.live_update_line_count = nil
+    local start_row = pos[1]
+    if not start_row then
+        return
+    end
+    local end_row = start_row + line_count
+    if end_row > vim.api.nvim_buf_line_count(self._buf) then
+        return
+    end
+    vim.api.nvim_buf_clear_namespace(self._buf, ns, start_row, end_row)
+    self:_with_modifiable(function()
+        vim.api.nvim_buf_set_lines(self._buf, start_row, end_row, false, {})
+    end)
+end
+
 ---@param tool_name string
 ---@param tool_call_id string
 ---@param msg table
-function History:on_tool_update(tool_name, tool_call_id, msg) end
+function History:on_tool_update(tool_name, tool_call_id, msg)
+    vim.schedule(function()
+        if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
+            return
+        end
+
+        local block = tool_call_id and self._tool_blocks[tool_call_id]
+        if not block or block.finished or block.inline then
+            return
+        end
+
+        local text = extract_tool_update_text(msg)
+        if not text then
+            return
+        end
+
+        local should_scroll = self:_should_auto_scroll()
+        local lines = build_tool_live_update_lines(text)
+        local start_row
+        local old_line_count = block.live_update_line_count
+        if block.live_update_extmark and old_line_count then
+            local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.live_update_extmark, {})
+            start_row = pos[1]
+            if start_row then
+                local end_row = start_row + old_line_count
+                if end_row > vim.api.nvim_buf_line_count(self._buf) then
+                    return
+                end
+                vim.api.nvim_buf_clear_namespace(self._buf, ns, start_row, end_row)
+                self:_with_modifiable(function()
+                    vim.api.nvim_buf_set_lines(self._buf, start_row, end_row, false, lines)
+                end)
+            else
+                block.live_update_extmark = nil
+                block.live_update_line_count = nil
+            end
+        end
+
+        if not start_row then
+            if not block.tail_extmark then
+                return
+            end
+            local tail_pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.tail_extmark, {})
+            if not tail_pos[1] then
+                return
+            end
+            start_row = tail_pos[1] + 1
+            self:_with_modifiable(function()
+                vim.api.nvim_buf_set_lines(self._buf, start_row, start_row, false, lines)
+            end)
+        end
+
+        block.live_update_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, start_row, 0, {})
+        block.live_update_line_count = #lines
+        self:_apply_tool_live_update_extmarks(start_row, lines)
+        self:_update_status_extmark()
+        if should_scroll then
+            self:_scroll_to_bottom()
+        end
+    end)
+end
 
 --- Mark all pending (unfinished) tool blocks as errored.
 --- Called on message_end when the assistant message was aborted or errored,

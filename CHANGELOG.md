@@ -2,6 +2,7 @@
 
 ## 2026-06-17
 
+- **ADDED:** Render live tool progress updates inside chat history tool blocks.
 - **FIXED:** Prevent tool output containing NUL bytes from crashing collapsed history rendering.
 
 ## 2026-06-16

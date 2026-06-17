@@ -6,7 +6,7 @@ M.GLYPHS = { TOP = "╭─ ", MID = "│  ", SEP = "├──── ", BOT = "�
 
 ---@param text string?
 ---@return string
-local function sanitize_text(text)
+function M.sanitize_text(text)
     local sanitized = (text or ""):gsub("%z", "␀")
     return sanitized
 end
@@ -21,7 +21,7 @@ local function extract_result_text_raw(result)
     -- Replay toolResult: msg.content may be a string or array of strings
     local content = result.content
     if type(content) == "string" then
-        local trimmed = vim.trim(sanitize_text(content))
+        local trimmed = vim.trim(M.sanitize_text(content))
         return trimmed ~= "" and trimmed or nil
     end
     if type(content) ~= "table" then
@@ -30,9 +30,9 @@ local function extract_result_text_raw(result)
     local parts = {}
     for _, block in ipairs(content) do
         if type(block) == "table" and block.type == "text" and type(block.text) == "string" then
-            parts[#parts + 1] = sanitize_text(block.text)
+            parts[#parts + 1] = M.sanitize_text(block.text)
         elseif type(block) == "string" then
-            parts[#parts + 1] = sanitize_text(block)
+            parts[#parts + 1] = M.sanitize_text(block)
         end
     end
     if #parts > 0 then
@@ -118,7 +118,7 @@ end
 ---@param insert_at? integer  when set, insert at this row instead of appending
 ---@return integer? next_insert_at  advanced insertion cursor (nil when appending)
 local function render_body_line(history, text, hl_group, insert_at)
-    text = sanitize_text(text)
+    text = M.sanitize_text(text)
     local start
     if insert_at then
         start, insert_at = history:_insert_lines(insert_at, { text })
@@ -140,7 +140,7 @@ end
 ---@param insert_at? integer  when set, insert at this row instead of appending
 ---@return integer? next_insert_at  advanced insertion cursor (nil when appending)
 local function render_output(history, text, insert_at)
-    text = sanitize_text(text)
+    text = M.sanitize_text(text)
     local sep_row
     if insert_at then
         sep_row, insert_at = history:_insert_lines(insert_at, { "" })
@@ -259,8 +259,8 @@ end
 ---@param insert_at? integer  when set, insert at this row instead of appending
 ---@return integer? next_insert_at  advanced insertion cursor (nil when appending)
 local function render_diff(history, old_text, new_text, line_offset, path, insert_at)
-    old_text = sanitize_text(old_text)
-    new_text = sanitize_text(new_text)
+    old_text = M.sanitize_text(old_text)
+    new_text = M.sanitize_text(new_text)
     line_offset = line_offset or 0
     -- Ensure trailing newlines for vim.diff
     if not old_text:find("\n$") then
@@ -392,7 +392,7 @@ end
 ---@param max_width integer
 ---@return string
 local function truncate_line(line, max_width)
-    line = sanitize_text(line)
+    line = M.sanitize_text(line)
     if max_width <= 0 or vim.fn.strdisplaywidth(line) <= max_width then
         return line
     end
@@ -422,7 +422,7 @@ function M.build_collapsed_view(input_lines, output_lines, has_output, input_vis
     max_width = max_width or 0
 
     local function add(line, spec)
-        line = sanitize_text(line)
+        line = M.sanitize_text(line)
         lines[#lines + 1] = max_width > 0 and truncate_line(line, max_width) or line
         specs[#specs + 1] = spec
     end
@@ -528,12 +528,12 @@ function M.should_collapse(input_lines, output_lines, input_visible, output_visi
     end
     if max_width and max_width > 0 then
         for _, line in ipairs(input_lines) do
-            if vim.fn.strdisplaywidth(sanitize_text(line)) > max_width then
+            if vim.fn.strdisplaywidth(M.sanitize_text(line)) > max_width then
                 return true
             end
         end
         for _, line in ipairs(output_lines) do
-            if vim.fn.strdisplaywidth(sanitize_text(line)) > max_width then
+            if vim.fn.strdisplaywidth(M.sanitize_text(line)) > max_width then
                 return true
             end
         end
