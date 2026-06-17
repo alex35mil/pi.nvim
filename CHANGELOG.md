@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-17
+
+- **FIXED:** Prevent tool output containing NUL bytes from crashing collapsed history rendering.
+
 ## 2026-06-16
 
 - **ADDED:** Add line-level notes to diff review, including note keymaps, configurable note icon, and note-aware review responses.
