@@ -12,7 +12,8 @@
 ---@field _keymaps_set boolean
 ---@field _streaming boolean
 ---@field _compacting boolean
----@field _steer_delivered boolean
+---@field _assistant_block_open boolean
+---@field _assistant_message_timestamp number?
 ---@field _flushed_queue_entries pi.PendingQueueEntry[]
 ---@field _replay_flushed_queue_entries pi.PendingQueueEntry[]
 ---@field _compaction_queue pi.CompactionQueuedMessage[]
@@ -57,7 +58,8 @@ function Chat.new(tab, mode, agent)
     self._keymaps_set = false
     self._streaming = false
     self._compacting = false
-    self._steer_delivered = false
+    self._assistant_block_open = false
+    self._assistant_message_timestamp = nil
     self._flushed_queue_entries = {}
     self._replay_flushed_queue_entries = {}
     self._compaction_queue = {}
@@ -622,15 +624,28 @@ end
 function Chat:on_agent_start(timestamp)
     self._streaming = true
     self._last_turn_stop_reason = nil
+    self._assistant_block_open = false
+    self._assistant_message_timestamp = timestamp
     local verbs = Config.random_verbs()
     self._active_verb = verbs[1]
     self._done_verb = verbs[2]
-    self._history:on_agent_start(timestamp)
     self:set_status({ type = "agent", text = verbs[1] .. "…" })
+end
+
+function Chat:_ensure_assistant_block_open()
+    if self._assistant_block_open then
+        return
+    end
+    self._history:on_agent_start(self._assistant_message_timestamp)
+    self._assistant_block_open = true
 end
 
 ---@param delta string
 function Chat:on_text_delta(delta)
+    if not self._assistant_block_open and not delta:match("%S") then
+        return
+    end
+    self:_ensure_assistant_block_open()
     self._history:on_text_delta(delta)
 end
 
@@ -674,7 +689,8 @@ end
 
 function Chat:on_agent_end()
     self._streaming = false
-    self._steer_delivered = false
+    self._assistant_block_open = false
+    self._assistant_message_timestamp = nil
     -- Flush any remaining pending queue entries into the history.
     -- Normally they are moved on message_start, but if the agent ends
     -- without delivering them (e.g. abort), render them now so they
@@ -739,7 +755,6 @@ function Chat:on_message_start(msg)
         end
         local entry = self._history:remove_pending_queue_entry(text) or self:_remove_replay_flushed_queue_entry(text)
         if entry then
-            self._steer_delivered = true
             self._history:add_user_message(
                 entry.text,
                 nil,
@@ -750,12 +765,9 @@ function Chat:on_message_start(msg)
         else
             self:_remove_flushed_queue_entry(text)
         end
-    elseif message.role == "assistant" and self._steer_delivered then
-        -- After a steered user message is delivered, the agent starts a new
-        -- assistant turn.  Add a fresh assistant header so tool calls and
-        -- text don't look like they belong to the user.
-        self._steer_delivered = false
-        self._history:on_agent_start(message.timestamp)
+    elseif message.role == "assistant" then
+        self._assistant_block_open = false
+        self._assistant_message_timestamp = message.timestamp
     end
 end
 
@@ -802,6 +814,8 @@ function Chat:on_message_end(msg)
             self._history:on_error(error_message)
         end
     end
+    self._assistant_block_open = false
+    self._assistant_message_timestamp = nil
 end
 
 --- Update status line state (model, thinking level) from get_state response.
@@ -926,7 +940,8 @@ end
 function Chat:clear()
     self._streaming = false
     self._compacting = false
-    self._steer_delivered = false
+    self._assistant_block_open = false
+    self._assistant_message_timestamp = nil
     self._flushed_queue_entries = {}
     self._replay_flushed_queue_entries = {}
     self._compaction_queue = {}

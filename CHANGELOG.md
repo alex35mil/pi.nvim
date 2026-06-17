@@ -3,6 +3,7 @@
 ## 2026-06-17
 
 - **ADDED:** Render live tool progress updates inside chat history tool blocks.
+- **FIXED:** Give each assistant text message its own chat history response header while suppressing empty tool-only headers.
 - **FIXED:** Prevent tool output containing NUL bytes from crashing collapsed history rendering.
 
 ## 2026-06-16
