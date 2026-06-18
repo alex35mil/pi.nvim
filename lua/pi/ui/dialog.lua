@@ -277,7 +277,7 @@ function M.confirm(opts, callback)
 end
 
 --- Input dialog with editable line.
----@param opts { title: string, default?: string, timeout?: integer, on_timeout?: fun() }
+---@param opts { title: string, default?: string, timeout?: integer, on_timeout?: fun(), multiline?: boolean }
 ---@param callback fun(value: string?)
 function M.input(opts, callback)
     local default = opts.default or ""
@@ -361,6 +361,11 @@ function M.input(opts, callback)
     Keys.bind_wrapped_line_navigation(buf)
 
     bind_keys(buf, "confirm", submit)
+    if opts.multiline then
+        vim.keymap.set("i", "<S-CR>", function()
+            vim.api.nvim_put({ "", "" }, "c", false, true)
+        end, { buffer = buf, desc = "New line" })
+    end
     bind_keys(buf, "cancel", function()
         resolve(nil)
     end)

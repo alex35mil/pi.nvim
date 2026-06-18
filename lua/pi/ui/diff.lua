@@ -243,9 +243,24 @@ end
 
 ---@class pi.DiffReviewNote
 ---@field buf integer
----@field mark_id integer
+---@field mark_ids integer[]
 ---@field side "current"|"proposed"
+---@field start_row integer 0-indexed inclusive
+---@field end_row integer 0-indexed inclusive
 ---@field note string
+---@field seq integer
+
+local NOTE_TEXT_PREFIX = "  │ "
+local NOTE_SEPARATOR_PREFIX = "  "
+local NOTE_SEPARATOR_CHAR = "─"
+
+---@param value integer
+---@param min integer
+---@param max integer
+---@return integer
+local function clamp(value, min, max)
+    return math.max(min, math.min(max, value))
+end
 
 ---@param note string
 ---@return string
@@ -257,33 +272,76 @@ local function note_preview(note)
     return first
 end
 
----@param note string
----@return pi.CustomBlockLine[]
-local function note_virt_lines(note)
+---@param text string
+---@param width integer
+---@return string[]
+local function wrap_note_line(text, width)
+    width = math.max(1, width)
+    if text == "" then
+        return { "" }
+    end
+
     local lines = {}
+    local rest = text
+    while rest ~= "" do
+        local chunk = vim.fn.strcharpart(rest, 0, width)
+        if chunk == "" then
+            break
+        end
+        lines[#lines + 1] = chunk
+        rest = vim.fn.strcharpart(rest, vim.fn.strchars(chunk))
+    end
+    return lines
+end
+
+---@param width integer
+---@return pi.CustomBlockLine
+local function note_separator_virt_line(width)
+    local sep_width = math.max(1, width - vim.fn.strdisplaywidth(NOTE_SEPARATOR_PREFIX))
+    return { { NOTE_SEPARATOR_PREFIX .. string.rep(NOTE_SEPARATOR_CHAR, sep_width), "PiDiffReviewNote" } }
+end
+
+---@param note string
+---@param width integer
+---@param separator_before boolean
+---@return pi.CustomBlockLine[]
+local function note_virt_lines(note, width, separator_before)
+    local lines = {}
+    local text_width = math.max(1, width - vim.fn.strdisplaywidth(NOTE_TEXT_PREFIX))
+    if separator_before then
+        lines[#lines + 1] = note_separator_virt_line(width)
+    end
     for _, line in ipairs(vim.split(note, "\n", { plain = true })) do
-        lines[#lines + 1] = { { "  │ " .. line, "PiDiffReviewNote" } }
+        for _, wrapped in ipairs(wrap_note_line(line, text_width)) do
+            lines[#lines + 1] = { { NOTE_TEXT_PREFIX .. wrapped, "PiDiffReviewNote" } }
+        end
     end
     return lines
 end
 
 ---@param buf integer
 ---@param row integer
----@param note string
----@param id? integer
+---@param virt_lines pi.CustomBlockLine[]
+---@param priority integer
 ---@return integer
-local function set_note_mark(buf, row, note, id)
-    local icon = Config.options.diff.icons.note
-    local opts = {
-        id = id,
-        virt_lines = note_virt_lines(note),
-        priority = 200,
-    }
-    if icon then
-        opts.sign_text = icon
-        opts.sign_hl_group = "PiDiffReviewNote"
-    end
-    return vim.api.nvim_buf_set_extmark(buf, note_ns, row, 0, opts)
+local function set_note_group_text_mark(buf, row, virt_lines, priority)
+    return vim.api.nvim_buf_set_extmark(buf, note_ns, row, 0, {
+        virt_lines = virt_lines,
+        priority = priority,
+    })
+end
+
+---@param buf integer
+---@param row integer
+---@param text string
+---@param priority integer
+---@return integer
+local function set_note_sign_mark(buf, row, text, priority)
+    return vim.api.nvim_buf_set_extmark(buf, note_ns, row, 0, {
+        sign_text = text,
+        sign_hl_group = "PiDiffReviewNote",
+        priority = priority,
+    })
 end
 
 --- Open a diff review for a tool call.
@@ -444,7 +502,9 @@ function M.open(payload, callback, opts)
         end
         if vim.api.nvim_win_is_valid(right_win) then
             vim.api.nvim_set_current_win(right_win)
-            pcall(vim.cmd, "normal! gg]c")
+            pcall(function()
+                vim.cmd("normal! gg]c")
+            end)
             vim.cmd("syncbind")
         end
         apply_wrap_options()
@@ -494,6 +554,12 @@ function M.open(payload, callback, opts)
         refresh_diff_windows(left_win, right_win)
     end
 
+    local note_refresh_group =
+        vim.api.nvim_create_augroup("pi-diff-review-notes-" .. tostring(after_buf), { clear = true })
+    local on_key_ns = vim.api.nvim_create_namespace("pi-diff-review-keys-" .. tostring(after_buf))
+    local pending_line_key = nil ---@type { buf: integer, key: string, row: integer }?
+    local next_note_seq = 0
+
     ---@param buf integer
     ---@return "current"|"proposed"?
     local function note_side(buf)
@@ -506,32 +572,53 @@ function M.open(payload, callback, opts)
     end
 
     ---@param entry pi.DiffReviewNote
-    ---@return integer?
-    local function note_row(entry)
-        if not vim.api.nvim_buf_is_valid(entry.buf) then
-            return nil
-        end
-        local pos = vim.api.nvim_buf_get_extmark_by_id(entry.buf, note_ns, entry.mark_id, {})
-        return pos and pos[1] or nil
+    ---@return integer
+    local function note_start(entry)
+        return entry.start_row
     end
 
-    ---@param buf integer
-    ---@param row integer
-    ---@return pi.DiffReviewNote?
-    local function find_note_at(buf, row)
-        for _, entry in ipairs(notes) do
-            if entry.buf == buf and note_row(entry) == row then
-                return entry
-            end
+    ---@param entry pi.DiffReviewNote
+    ---@return integer
+    local function note_end(entry)
+        return entry.end_row
+    end
+
+    ---@param entry pi.DiffReviewNote
+    ---@return integer?
+    local function note_win(entry)
+        if entry.buf == before_buf then
+            return left_win
+        elseif entry.buf == after_buf then
+            return right_win
         end
         return nil
     end
 
     ---@param entry pi.DiffReviewNote
-    local function delete_note(entry)
-        if vim.api.nvim_buf_is_valid(entry.buf) then
-            pcall(vim.api.nvim_buf_del_extmark, entry.buf, note_ns, entry.mark_id)
+    ---@return integer
+    local function note_width(entry)
+        local win = note_win(entry)
+        if win and vim.api.nvim_win_is_valid(win) then
+            return math.max(20, vim.api.nvim_win_get_width(win) - 8)
         end
+        return 80
+    end
+
+    ---@param entry pi.DiffReviewNote
+    local function clear_note_marks(entry)
+        if not vim.api.nvim_buf_is_valid(entry.buf) then
+            entry.mark_ids = {}
+            return
+        end
+        for _, mark_id in ipairs(entry.mark_ids or {}) do
+            pcall(vim.api.nvim_buf_del_extmark, entry.buf, note_ns, mark_id)
+        end
+        entry.mark_ids = {}
+    end
+
+    ---@param entry pi.DiffReviewNote
+    local function delete_note(entry)
+        clear_note_marks(entry)
         for i, existing in ipairs(notes) do
             if existing == entry then
                 table.remove(notes, i)
@@ -540,30 +627,220 @@ function M.open(payload, callback, opts)
         end
     end
 
-    ---@param entry pi.DiffReviewNote
-    local function refresh_note(entry)
-        local row = note_row(entry)
-        if row then
-            entry.mark_id = set_note_mark(entry.buf, row, entry.note, entry.mark_id)
+    local function refresh_all_notes()
+        for i = #notes, 1, -1 do
+            local entry = notes[i]
+            clear_note_marks(entry)
+            if not vim.api.nvim_buf_is_valid(entry.buf) then
+                table.remove(notes, i)
+            else
+                local line_count = vim.api.nvim_buf_line_count(entry.buf)
+                if line_count <= 0 then
+                    table.remove(notes, i)
+                else
+                    entry.start_row = clamp(entry.start_row, 0, line_count - 1)
+                    entry.end_row = clamp(entry.end_row, entry.start_row, line_count - 1)
+                    if not entry.seq then
+                        next_note_seq = next_note_seq + 1
+                        entry.seq = next_note_seq
+                    end
+                end
+            end
+        end
+
+        table.sort(notes, function(a, b)
+            if a.buf == b.buf then
+                if a.end_row == b.end_row then
+                    if a.start_row == b.start_row then
+                        return a.seq < b.seq
+                    end
+                    return a.start_row < b.start_row
+                end
+                return a.end_row < b.end_row
+            end
+            return a.buf < b.buf
+        end)
+
+        local i = 1
+        while i <= #notes do
+            local first = notes[i]
+            local group = {}
+            local j = i
+            while j <= #notes and notes[j].buf == first.buf and notes[j].end_row == first.end_row do
+                group[#group + 1] = notes[j]
+                j = j + 1
+            end
+
+            table.sort(group, function(a, b)
+                if a.start_row == b.start_row then
+                    return a.seq < b.seq
+                end
+                return a.start_row > b.start_row
+            end)
+
+            local width = note_width(first)
+            local virt_lines = {}
+            for group_index, entry in ipairs(group) do
+                if group_index > 1 then
+                    virt_lines[#virt_lines + 1] = note_separator_virt_line(width)
+                end
+                for _, line in ipairs(note_virt_lines(entry.note, width, false)) do
+                    virt_lines[#virt_lines + 1] = line
+                end
+            end
+            first.mark_ids[#first.mark_ids + 1] = set_note_group_text_mark(first.buf, first.end_row, virt_lines, 200)
+
+            local icon = Config.options.diff.icons.note
+            if icon then
+                for note_index, entry in ipairs(group) do
+                    local priority = 200 + note_index
+                    entry.mark_ids[#entry.mark_ids + 1] = set_note_sign_mark(entry.buf, entry.start_row, icon, priority)
+                    for row = entry.start_row + 1, entry.end_row do
+                        entry.mark_ids[#entry.mark_ids + 1] = set_note_sign_mark(entry.buf, row, "·", priority)
+                    end
+                end
+            end
+
+            i = j
         end
     end
 
-    local function edit_note()
-        local win = vim.api.nvim_get_current_win()
-        local buf = vim.api.nvim_win_get_buf(win)
-        local side = note_side(buf)
-        if not side then
-            Notify.warn("Move cursor to the current or proposed diff pane to add a review note")
+    ---@param entry pi.DiffReviewNote
+    ---@return string
+    local function note_range_label(entry)
+        local start_line = note_start(entry) + 1
+        local end_line = note_end(entry) + 1
+        if start_line == end_line then
+            return tostring(start_line)
+        end
+        return tostring(start_line) .. "-" .. tostring(end_line)
+    end
+
+    ---@param buf integer
+    ---@param row integer
+    ---@return pi.DiffReviewNote[]
+    local function find_notes_at(buf, row)
+        local found = {}
+        for _, entry in ipairs(notes) do
+            if entry.buf == buf and row >= note_start(entry) and row <= note_end(entry) then
+                found[#found + 1] = entry
+            end
+        end
+        return found
+    end
+
+    ---@param win integer
+    ---@param buf integer
+    ---@param forced_start? integer
+    ---@param forced_end? integer
+    ---@return integer, integer, boolean
+    local function selected_range(win, buf, forced_start, forced_end)
+        if vim.api.nvim_win_get_buf(win) ~= buf then
+            local row = vim.api.nvim_win_get_cursor(win)[1] - 1
+            return row, row, false
+        end
+
+        if forced_start and forced_end then
+            local line_count = vim.api.nvim_buf_line_count(buf)
+            return clamp(math.min(forced_start, forced_end), 0, line_count - 1),
+                clamp(math.max(forced_start, forced_end), 0, line_count - 1),
+                true
+        end
+
+        if vim.fn.mode() ~= "V" then
+            local row = vim.api.nvim_win_get_cursor(win)[1] - 1
+            return row, row, false
+        end
+
+        local cursor_row = vim.api.nvim_win_get_cursor(win)[1] - 1
+        local visual_pos = vim.fn.getpos("v")
+        local visual_row = (visual_pos[2] or cursor_row + 1) - 1
+        local line_count = vim.api.nvim_buf_line_count(buf)
+        local start_row = clamp(math.min(cursor_row, visual_row), 0, line_count - 1)
+        local end_row = clamp(math.max(cursor_row, visual_row), 0, line_count - 1)
+        return start_row, end_row, true
+    end
+
+    ---@param entries pi.DiffReviewNote[]
+    ---@param title string
+    ---@param callback fun(entry: pi.DiffReviewNote?)
+    local function choose_note(entries, title, callback)
+        if #entries == 0 then
+            callback(nil)
+            return
+        end
+        if #entries == 1 then
+            callback(entries[1])
             return
         end
 
-        local row = vim.api.nvim_win_get_cursor(win)[1] - 1
-        local existing = find_note_at(buf, row)
-        local title = (existing and "Edit" or "Add") .. " review note for " .. side .. " line " .. tostring(row + 1)
+        local options = {}
+        local option_entries = {}
+        for _, entry in ipairs(entries) do
+            local label = tostring(#options + 1)
+                .. ". "
+                .. entry.side
+                .. ":"
+                .. note_range_label(entry)
+                .. " "
+                .. note_preview(entry.note)
+            options[#options + 1] = label
+            option_entries[label] = entry
+        end
+        Dialog.select({ title = title, options = options }, function(choice)
+            callback(choice and option_entries[choice] or nil)
+        end)
+    end
+
+    ---@param entries pi.DiffReviewNote[]
+    ---@param row integer
+    ---@param callback fun(entry: pi.DiffReviewNote|false?) false means create new; nil means cancelled
+    local function choose_note_to_edit(entries, row, callback)
+        if #entries == 0 then
+            callback(false)
+            return
+        end
+        if #entries == 1 then
+            callback(entries[1])
+            return
+        end
+
+        local options = { "Create new note on line " .. tostring(row + 1) }
+        local option_entries = { [options[1]] = false }
+        for _, entry in ipairs(entries) do
+            local label = tostring(#options + 1)
+                .. ". Edit "
+                .. entry.side
+                .. ":"
+                .. note_range_label(entry)
+                .. " "
+                .. note_preview(entry.note)
+            options[#options + 1] = label
+            option_entries[label] = entry
+        end
+        Dialog.select({ title = "Review notes", options = options }, function(choice)
+            if choice == nil then
+                callback(nil)
+            else
+                callback(option_entries[choice])
+            end
+        end)
+    end
+
+    ---@param existing pi.DiffReviewNote?
+    ---@param buf integer
+    ---@param side "current"|"proposed"
+    ---@param start_row integer
+    ---@param end_row integer
+    local function prompt_note(existing, buf, side, start_row, end_row)
+        local range = start_row == end_row and tostring(start_row + 1)
+            or (tostring(start_row + 1) .. "-" .. tostring(end_row + 1))
+        local title = (existing and "Edit" or "Add") .. " review note for " .. side .. " line " .. range
 
         Dialog.input({
             title = title,
             default = existing and existing.note or "",
+            multiline = true,
         }, function(value)
             if value == nil then
                 return
@@ -575,7 +852,7 @@ function M.open(payload, callback, opts)
                     delete_note(existing)
                 else
                     existing.note = value
-                    refresh_note(existing)
+                    refresh_all_notes()
                 end
                 return
             end
@@ -583,13 +860,47 @@ function M.open(payload, callback, opts)
             if value == "" then
                 return
             end
-            local mark_id = set_note_mark(buf, row, value)
+            next_note_seq = next_note_seq + 1
             notes[#notes + 1] = {
                 buf = buf,
-                mark_id = mark_id,
+                mark_ids = {},
                 side = side,
+                start_row = start_row,
+                end_row = end_row,
                 note = value,
+                seq = next_note_seq,
             }
+            refresh_all_notes()
+        end)
+    end
+
+    ---@param forced_start? integer
+    ---@param forced_end? integer
+    local function edit_note(forced_start, forced_end)
+        local win = vim.api.nvim_get_current_win()
+        local buf = vim.api.nvim_win_get_buf(win)
+        local side = note_side(buf)
+        if not side then
+            Notify.warn("Move cursor to the current or proposed diff pane to add a review note")
+            return
+        end
+
+        local start_row, end_row, is_visual = selected_range(win, buf, forced_start, forced_end)
+        if is_visual then
+            prompt_note(nil, buf, side, start_row, end_row)
+            return
+        end
+
+        local matches = find_notes_at(buf, start_row)
+        choose_note_to_edit(matches, start_row, function(existing)
+            if existing == nil then
+                return
+            end
+            if existing == false then
+                prompt_note(nil, buf, side, start_row, end_row)
+            else
+                prompt_note(existing, buf, side, start_row, end_row)
+            end
         end)
     end
 
@@ -603,30 +914,32 @@ function M.open(payload, callback, opts)
         end
 
         local row = vim.api.nvim_win_get_cursor(win)[1] - 1
-        local existing = find_note_at(buf, row)
-        if not existing then
+        local matches = find_notes_at(buf, row)
+        if #matches == 0 then
             Notify.warn("No review note on this line")
             return
         end
-        delete_note(existing)
+        choose_note(matches, "Choose review note to delete", function(entry)
+            if entry then
+                delete_note(entry)
+                refresh_all_notes()
+            end
+        end)
     end
 
     local function list_notes()
         local options = {}
         local option_entries = {}
         for _, entry in ipairs(notes) do
-            local row = note_row(entry)
-            if row then
-                local label = tostring(#options + 1)
-                    .. ". "
-                    .. entry.side
-                    .. ":"
-                    .. tostring(row + 1)
-                    .. " "
-                    .. note_preview(entry.note)
-                options[#options + 1] = label
-                option_entries[label] = entry
-            end
+            local label = tostring(#options + 1)
+                .. ". "
+                .. entry.side
+                .. ":"
+                .. note_range_label(entry)
+                .. " "
+                .. note_preview(entry.note)
+            options[#options + 1] = label
+            option_entries[label] = entry
         end
 
         if #options == 0 then
@@ -639,11 +952,10 @@ function M.open(payload, callback, opts)
             if not entry then
                 return
             end
-            local row = note_row(entry)
-            local win = entry.buf == before_buf and left_win or right_win
-            if row and vim.api.nvim_win_is_valid(win) then
+            local win = note_win(entry)
+            if win and vim.api.nvim_win_is_valid(win) then
                 vim.api.nvim_set_current_win(win)
-                vim.api.nvim_win_set_cursor(win, { row + 1, 0 })
+                vim.api.nvim_win_set_cursor(win, { note_start(entry) + 1, 0 })
             end
         end)
     end
@@ -652,26 +964,135 @@ function M.open(payload, callback, opts)
     local function collect_notes()
         local collected = {}
         for _, entry in ipairs(notes) do
-            local row = note_row(entry)
-            if row and vim.api.nvim_buf_is_valid(entry.buf) then
-                local line = vim.api.nvim_buf_get_lines(entry.buf, row, row + 1, false)[1] or ""
-                collected[#collected + 1] = {
-                    path = path,
-                    side = entry.side,
-                    line = row + 1,
-                    lineText = line,
-                    note = entry.note,
-                }
+            if vim.api.nvim_buf_is_valid(entry.buf) then
+                local start_row = note_start(entry)
+                local end_row = note_end(entry)
+                local lines = vim.api.nvim_buf_get_lines(entry.buf, start_row, end_row + 1, false)
+                if #lines > 0 then
+                    collected[#collected + 1] = {
+                        path = path,
+                        side = entry.side,
+                        lineStart = start_row + 1,
+                        lineEnd = end_row + 1,
+                        lines = lines,
+                        note = entry.note,
+                    }
+                end
             end
         end
         table.sort(collected, function(a, b)
             if a.side == b.side then
-                return a.line < b.line
+                return a.lineStart < b.lineStart
             end
             return a.side < b.side
         end)
         return collected
     end
+
+    ---@param entry pi.DiffReviewNote
+    ---@param firstline integer
+    ---@param lastline integer
+    ---@param new_lastline integer
+    ---@return boolean delete
+    local function update_note_for_lines(entry, firstline, lastline, new_lastline)
+        local old_count = lastline - firstline
+        local new_count = new_lastline - firstline
+        local delta = new_count - old_count
+        local start_row = entry.start_row
+        local end_row = entry.end_row
+
+        if old_count == 0 then
+            if delta <= 0 then
+                return false
+            end
+            local insert_at = firstline
+            local key = pending_line_key
+            if insert_at < start_row then
+                entry.start_row = start_row + delta
+                entry.end_row = end_row + delta
+            elseif insert_at == start_row then
+                if key and key.buf == entry.buf and key.key == "o" and key.row == start_row - 1 then
+                    entry.start_row = start_row + delta
+                    entry.end_row = end_row + delta
+                else
+                    entry.end_row = end_row + delta
+                end
+            elseif insert_at > start_row and insert_at <= end_row then
+                entry.end_row = end_row + delta
+            elseif insert_at == end_row + 1 then
+                if key and key.buf == entry.buf and key.key == "o" and key.row == end_row then
+                    entry.end_row = end_row + delta
+                end
+            end
+            return false
+        end
+
+        local old_end = lastline - 1
+        if old_end < start_row then
+            entry.start_row = start_row + delta
+            entry.end_row = end_row + delta
+            return false
+        end
+        if firstline > end_row then
+            return false
+        end
+
+        local before_count = math.max(0, firstline - start_row)
+        local after_count = math.max(0, end_row - old_end)
+        local new_len = before_count + new_count + after_count
+        if new_len <= 0 then
+            return true
+        end
+
+        local new_start = firstline <= start_row and firstline or start_row
+        entry.start_row = new_start
+        entry.end_row = new_start + new_len - 1
+        return false
+    end
+
+    vim.on_key(function(key)
+        if vim.fn.mode() ~= "n" then
+            return
+        end
+        local translated = vim.fn.keytrans(key)
+        if translated ~= "o" and translated ~= "O" then
+            return
+        end
+        local win = vim.api.nvim_get_current_win()
+        if not vim.api.nvim_win_is_valid(win) or vim.api.nvim_win_get_buf(win) ~= after_buf then
+            return
+        end
+        pending_line_key = {
+            buf = after_buf,
+            key = translated,
+            row = vim.api.nvim_win_get_cursor(win)[1] - 1,
+        }
+    end, on_key_ns)
+
+    vim.api.nvim_buf_attach(after_buf, false, {
+        on_lines = function(_, buf, _, firstline, lastline, new_lastline)
+            if buf ~= after_buf then
+                return
+            end
+            for i = #notes, 1, -1 do
+                local entry = notes[i]
+                if entry.buf == buf and update_note_for_lines(entry, firstline, lastline, new_lastline) then
+                    delete_note(entry)
+                end
+            end
+            pending_line_key = nil
+            refresh_all_notes()
+        end,
+    })
+
+    vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
+        group = note_refresh_group,
+        callback = function()
+            if review_tab and vim.api.nvim_tabpage_is_valid(review_tab) then
+                refresh_all_notes()
+            end
+        end,
+    })
 
     ---@param result string
     ---@param extra? table
@@ -689,6 +1110,11 @@ function M.open(payload, callback, opts)
     local function close_review_tab()
         if timeout then
             pcall(vim.fn.timer_stop, timeout)
+        end
+        vim.on_key(nil, on_key_ns)
+        pcall(vim.api.nvim_del_augroup_by_id, note_refresh_group)
+        for _, entry in ipairs(notes) do
+            clear_note_marks(entry)
         end
         -- Clear winbar and drop all diff state in the review tab, including
         -- any hidden buffers that may still be remembered by the diff engine.
@@ -806,6 +1232,63 @@ function M.open(payload, callback, opts)
         end)
     end
 
+    local function edit_note_visual()
+        local win = vim.api.nvim_get_current_win()
+        local buf = vim.api.nvim_win_get_buf(win)
+        if vim.fn.mode() ~= "V" then
+            vim.schedule(edit_note)
+            return
+        end
+        local cursor_row = vim.api.nvim_win_get_cursor(win)[1] - 1
+        local visual_pos = vim.fn.getpos("v")
+        local visual_row = (visual_pos[2] or cursor_row + 1) - 1
+        vim.schedule(function()
+            if vim.api.nvim_win_is_valid(win) then
+                vim.api.nvim_set_current_win(win)
+            end
+            if vim.api.nvim_buf_is_valid(buf) then
+                edit_note(cursor_row, visual_row)
+            end
+        end)
+    end
+
+    ---@param buf integer
+    ---@param key pi.KeySpec
+    local function bind_edit_note_key(buf, key)
+        if type(key) == "string" then
+            Keys.bind(buf, key, edit_note, { desc = "Add/edit review note" })
+            Keys.bind(buf, key, edit_note_visual, { modes = "x", desc = "Add review note for selected lines" })
+            return
+        end
+
+        if type(key) ~= "table" then
+            return
+        end
+
+        local raw_modes = key.modes or "n"
+        local modes = type(raw_modes) == "table" and raw_modes or { raw_modes }
+        local normal_modes = {}
+        local visual_modes = {}
+        for _, mode in ipairs(modes) do
+            if mode == "x" or mode == "v" then
+                visual_modes[#visual_modes + 1] = mode
+            else
+                normal_modes[#normal_modes + 1] = mode
+            end
+        end
+        if #normal_modes > 0 then
+            Keys.bind(buf, { key[1], modes = normal_modes }, edit_note, { desc = "Add/edit review note" })
+        end
+        if #visual_modes > 0 then
+            Keys.bind(
+                buf,
+                { key[1], modes = visual_modes },
+                edit_note_visual,
+                { desc = "Add review note for selected lines" }
+            )
+        end
+    end
+
     for _, b in ipairs({ before_buf, after_buf }) do
         for _, k in ipairs(accept_keys) do
             Keys.bind(b, k, accept, { desc = "Accept edit" })
@@ -814,7 +1297,7 @@ function M.open(payload, callback, opts)
             Keys.bind(b, k, reject, { desc = "Reject edit" })
         end
         for _, k in ipairs(edit_note_keys) do
-            Keys.bind(b, k, edit_note, { desc = "Add/edit review note" })
+            bind_edit_note_key(b, k)
         end
         for _, k in ipairs(delete_note_keys) do
             Keys.bind(b, k, delete_note_at_cursor, { desc = "Delete review note" })

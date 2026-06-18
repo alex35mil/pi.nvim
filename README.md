@@ -895,9 +895,9 @@ Once the diff is open:
 - **Right pane** — the content the agent is proposing. You can modify the _right_ pane before accepting — anything you change there becomes the new content and pi.nvim will write your edited version instead of the agent's original proposal.
 - **Accept** with `<Leader>da` (default) — or just `:w` the right pane.
 - **Reject** with `<Leader>dr`.
-- **Add/edit a review note** on the current line with `<Leader>dn`. Notes are review metadata: they show below the target line as virtual text with a vertical border, plus a configurable sign/icon on the target line. They are not inserted into the file. Set `diff.icons.note = false` to omit the icon/sign. Submitting an empty note deletes it.
-- **Delete a review note** on the current line with `<Leader>dx`.
-- **List review notes** with `<Leader>dN`; selecting an entry jumps to that noted line.
+- **Add/edit a review note** on the current line with `<Leader>dn`, or select multiple lines with `V` first to attach one note to the selected range. In the note dialog, `<CR>` submits and `<S-CR>` inserts a newline. Notes are review metadata: they show below the last target line as wrapped virtual text with a vertical border, plus a configurable sign/icon on the first line. Range notes use small dots on following lines. Multiple note blocks ending on the same line are separated by a horizontal separator. They are not inserted into the file. Set `diff.icons.note = false` to omit gutter signs. Submitting an empty note deletes it.
+- **Delete a review note** on the current line with `<Leader>dx`. If multiple notes cover the cursor line, choose one from a picker.
+- **List review notes** with `<Leader>dN`; selecting an entry jumps to the first noted line.
 - **Expand / shrink** the surrounding diff context with `<Leader>de` / `<Leader>ds`. The initial context comes from `diff.context.base` (or `'diffopt'` when unset), and the step size from `diff.context.step`.
 
 All keys are configurable under `diff.keys` using the [Key specs](#key-specs) format, so you can bind multiple keys, pin modes, or replace them entirely. The winbar of the proposed pane always shows the currently-bound keys for all review actions so you don't have to remember them.
@@ -932,16 +932,19 @@ const approvedToolCalls = new Set<string>()
 type ReviewNote = {
     path: string
     side: "current" | "proposed"
-    line: number
-    lineText: string
+    /** 1-indexed inclusive range. */
+    lineStart: number
+    lineEnd: number
+    lines: string[]
     note: string
 }
 
 function formatNotes(notes?: ReviewNote[]) {
     if (!notes?.length) return ""
-    return "\n\nReview notes:\n" + notes.map((n) =>
-        `- ${n.side}:${n.line} ${JSON.stringify(n.lineText)}\n  ${n.note}`
-    ).join("\n")
+    return "\n\nReview notes:\n" + notes.map((n) => {
+        const range = n.lineStart === n.lineEnd ? `${n.lineStart}` : `${n.lineStart}-${n.lineEnd}`
+        return `- ${n.side}:${range} ${JSON.stringify(n.lines)}\n  ${n.note}`
+    }).join("\n")
 }
 
 export default function (pi: ExtensionAPI) {
@@ -1070,14 +1073,19 @@ For `write`, replace `edits` with `"content": "<full file text>"`.
 | `'{"result":"Rejected","notes":[...]}'` | User rejected with review notes. File unchanged. | Return `{ block: true, reason: "[rejected] ..." }` with the notes. Do **not** call `ctx.abort()` if you want the agent to continue and address the notes. |
 | Anything else (`"Reject"`, `undefined`, cancellation) | User rejected without notes. | Return `{ block: true, reason: "[rejected] ..." }`; call `ctx.abort()` if rejection should stop the turn. |
 
-Review notes are attached to the selected side and line at review time:
+Review notes are attached to the selected side and line range at review time. `lineStart`/`lineEnd` are 1-indexed inclusive; `lines` contains the text for that range.
 
 ```json
 {
   "path": "/abs/path/to/file.ts",
   "side": "current",
-  "line": 42,
-  "lineText": "const value = oldName()",
+  "lineStart": 42,
+  "lineEnd": 44,
+  "lines": [
+    "const value = oldName()",
+    "useValue(value)",
+    "return value"
+  ],
   "note": "Keep this name; it is part of the public API."
 }
 ```

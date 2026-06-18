@@ -2,6 +2,8 @@
 
 ## 2026-06-18
 
+- **BREAKING:** Change diff review note payloads to use `lineStart`, `lineEnd`, and `lines` instead of `line` and `lineText`.
+- **ADDED:** Add range-based diff review notes with visual-line selection, wrapped note text, overlap handling, and multiline note input.
 - **CHANGED:** Wrap markdown diff review panes for readability while preserving global wrapping defaults for other filetypes.
 - **FIXED:** Keep the chat spinner visible when an automatic retry resumes agent work.
 
