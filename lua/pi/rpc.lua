@@ -116,6 +116,7 @@ Rpc.__index = Rpc
 local Config = require("pi.config")
 local Cli = require("pi.cli")
 local Notify = require("pi.notify")
+local CommandsCache = require("pi.cache.commands")
 
 local DEBUG_OVERRIDE = nil ---@type boolean?
 
@@ -188,6 +189,79 @@ local function log(tag, msg)
     file:close()
 end
 
+---@return pi.RpcAdapterContext
+local function adapter_context()
+    return {
+        set_commands = function(commands)
+            if type(commands) ~= "table" then
+                vim.schedule(function()
+                    Notify.error("RPC ctx.set_commands expects a command list table")
+                end)
+                return
+            end
+            CommandsCache.set(commands)
+        end,
+    }
+end
+
+---@param mapper function
+---@param msg table
+---@return table?
+local function map_event(mapper, msg)
+    local ok, mapped = pcall(mapper, vim.deepcopy(msg), adapter_context())
+    if not ok then
+        vim.schedule(function()
+            Notify.error("RPC map_event error: " .. tostring(mapped))
+        end)
+        return msg
+    end
+    if mapped == nil then
+        return nil
+    end
+    if type(mapped) ~= "table" then
+        vim.schedule(function()
+            Notify.error("RPC map_event must return an event table or nil")
+        end)
+        return msg
+    end
+    if type(mapped.type) ~= "string" or mapped.type == "" then
+        vim.schedule(function()
+            Notify.error("RPC map_event returned an event without a string type")
+        end)
+        return msg
+    end
+    return mapped
+end
+
+---@param mapper function
+---@param cmd table
+---@return table?
+local function map_command(mapper, cmd)
+    local ok, mapped = pcall(mapper, cmd, adapter_context())
+    if not ok then
+        vim.schedule(function()
+            Notify.error("RPC map_command error: " .. tostring(mapped))
+        end)
+        return nil
+    end
+    if mapped == nil then
+        return nil
+    end
+    if type(mapped) ~= "table" then
+        vim.schedule(function()
+            Notify.error("RPC map_command must return a command table or nil")
+        end)
+        return nil
+    end
+    if type(mapped.id) ~= "string" or mapped.id == "" then
+        vim.schedule(function()
+            Notify.error("RPC map_command returned a command without a string id")
+        end)
+        return nil
+    end
+    return mapped
+end
+
 ---@type table<string, true>
 local warned = {}
 
@@ -206,7 +280,11 @@ end
 
 ---@param msg pi.RpcEvent
 function Rpc:_dispatch(msg)
-    if not msg.type then
+    local event_mapper = Config.options.rpc and Config.options.rpc.map_event
+    if type(event_mapper) == "function" then
+        msg = map_event(event_mapper, msg) --[[@as pi.RpcEvent]]
+    end
+    if not msg or not msg.type then
         return
     end
 
@@ -263,6 +341,15 @@ function Rpc:send(cmd, callback)
         cmd.id = self._tab .. ":" .. self._req_id
         self._req_id = self._req_id + 1
     end
+
+    local command_mapper = Config.options.rpc and Config.options.rpc.map_command
+    if type(command_mapper) == "function" then
+        cmd = map_command(command_mapper, cmd) --[[@as pi.RpcCommand]]
+    end
+    if not cmd then
+        return false
+    end
+
     if callback then
         self._pending[cmd.id] = callback
     end
