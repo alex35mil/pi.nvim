@@ -198,6 +198,11 @@ require("pi").setup({
         bin = "pi",
         args = {},
     },
+    -- Optional protocol adapter hooks for non-upstream-compatible RPC backends.
+    rpc = {
+        map_command = nil, -- fun(cmd, ctx): cmd|nil
+        map_event = nil, -- fun(msg, ctx): msg|nil
+    },
     -- Enable RPC debug logging to `stdpath("log")/pi/<session>/rpc.log`.
     debug = false,
     -- Override the π agent directory used for session lookup.
@@ -676,6 +681,62 @@ require("blink.cmp").setup({
 ```
 
 Other completion plugins (nvim-cmp, etc.) aren't shipped as first-class sources, but they can usually bridge the built-in `completefunc` via their `omni`/`completefunc` source adapters. If you'd like a native source for another plugin, please open an issue.
+
+#### Adapting non-upstream RPC backends
+
+pi.nvim targets upstream pi RPC. If you point `cli.bin` at a fork with a different protocol, use `rpc.map_command` / `rpc.map_event` to translate in user config instead of patching pi.nvim core.
+
+Example for `omp` command-list compatibility:
+
+```lua
+local function normalize_omp_commands(commands)
+    local result = {}
+    for _, command in ipairs(commands or {}) do
+        local cmd = vim.deepcopy(command)
+        if cmd.source == "file" or cmd.source == "custom" or cmd.source == "mcp_prompt" then
+            cmd.source = "prompt"
+        elseif cmd.source == "builtin" then
+            cmd.source = "extension"
+        end
+        result[#result + 1] = cmd
+    end
+    return result
+end
+
+require("pi").setup({
+    cli = { bin = "omp" },
+    rpc = {
+        map_command = function(cmd)
+            if cmd.type == "get_commands" then
+                local mapped = vim.deepcopy(cmd)
+                mapped.type = "get_available_commands"
+                return mapped
+            end
+            return cmd
+        end,
+        map_event = function(msg, ctx)
+            if msg.type == "ready" then
+                return nil
+            end
+            if msg.type == "response" and msg.command == "get_available_commands" then
+                local mapped = vim.deepcopy(msg)
+                mapped.command = "get_commands"
+                if mapped.data then
+                    mapped.data.commands = normalize_omp_commands(mapped.data.commands)
+                end
+                return mapped
+            end
+            if msg.type == "available_commands_update" then
+                ctx.set_commands(normalize_omp_commands(msg.commands))
+                return nil
+            end
+            return msg
+        end,
+    },
+})
+```
+
+`ctx.set_commands()` updates pi.nvim's shared slash-command cache, the same cache populated by upstream `get_commands` responses. It affects completion, prompt decorators, and command-aware chat behavior. It does not re-render the already-visible startup block.
 
 ### Attachments
 

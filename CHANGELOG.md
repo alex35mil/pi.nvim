@@ -6,6 +6,7 @@
 
 ## 2026-06-21
 
+- **ADDED:** Add RPC adapter hooks for user-land command/event mapping of non-upstream-compatible backends.
 - **ADDED:** Add configurable diff review keymap hints with `?` help, winbar hints, and disabled mode.
 - **FIXED:** Restore diff review buffer-local keymaps after accept, reject, timeout, or manual tab close.
 
