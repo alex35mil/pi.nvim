@@ -177,8 +177,16 @@
 ---@field bin string Path to the `pi` executable.
 ---@field args string[] Extra startup args for every RPC process. pi.nvim filters args that conflict with RPC mode.
 
+---@class pi.RpcAdapterContext
+---@field set_commands fun(commands: pi.SlashCommand[]) Replace the shared slash-command cache.
+
+---@class pi.RpcConfig
+---@field map_command? fun(cmd: table, ctx: pi.RpcAdapterContext): table? Map or drop outbound RPC commands.
+---@field map_event? fun(msg: table, ctx: pi.RpcAdapterContext): table? Map or drop inbound RPC events.
+
 ---@class pi.Options
 ---@field cli pi.CliConfig
+---@field rpc pi.RpcConfig
 ---@field agent_dir? string Override the π agent directory (default: $PI_CODING_AGENT_DIR or ~/.pi/agent)
 ---@field debug boolean Enable RPC debug logging to stdpath("log")/pi/<session>/rpc.log
 ---@field models? pi.ModelEntry[] Preferred models for cycling and :PiSelectModel
@@ -207,6 +215,10 @@ local defaults = {
     cli = {
         bin = "pi",
         args = {},
+    },
+    rpc = {
+        map_command = nil,
+        map_event = nil,
     },
     agent_dir = nil,
     debug = false,
