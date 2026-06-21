@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-06-21
+
+- **ADDED:** Add configurable diff review keymap hints with `?` help, winbar hints, and disabled mode.
+- **FIXED:** Restore diff review buffer-local keymaps after accept, reject, timeout, or manual tab close.
+
 ## 2026-06-18
 
 - **BREAKING:** Change diff review note payloads to use `lineStart`, `lineEnd`, and `lines` instead of `line` and `lineText`.

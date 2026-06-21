@@ -48,9 +48,9 @@ function M.bind(buf, key, handler, opts)
     local map_opts = { buffer = buf, desc = opts.desc, nowait = opts.nowait }
 
     if type(key) == "string" then
-        vim.keymap.set(default_modes, key, handler, map_opts)
+        vim.keymap.set(M.normalize_modes(default_modes), key, handler, map_opts)
     elseif type(key) == "table" then
-        vim.keymap.set(key.modes or default_modes, key[1], handler, map_opts)
+        vim.keymap.set(M.modes(key, default_modes), key[1], handler, map_opts)
     end
 end
 
@@ -62,6 +62,41 @@ function M.lhs(key)
         return key[1]
     end
     return key --[[@as string]]
+end
+
+--- Normalize an lhs for effective-key comparisons.
+---@param lhs string
+---@return string
+function M.normalize_lhs(lhs)
+    local normalized = lhs:gsub("<([^>]+)>", function(token)
+        return "<" .. token:lower() .. ">"
+    end)
+    return vim.api.nvim_replace_termcodes(normalized, true, true, true)
+end
+
+--- Normalize a mode string/table to a mode list.
+---@param modes string|string[]
+---@return string[]
+function M.normalize_modes(modes)
+    if type(modes) == "table" then
+        return modes
+    end
+    local result = {}
+    for i = 1, #modes do
+        result[#result + 1] = modes:sub(i, i)
+    end
+    return result
+end
+
+--- Resolve the modes for a `pi.KeySpec`, falling back to defaults.
+---@param key pi.KeySpec
+---@param default_modes string|string[]
+---@return string[]
+function M.modes(key, default_modes)
+    if type(key) == "table" and key.modes then
+        return M.normalize_modes(key.modes)
+    end
+    return M.normalize_modes(default_modes)
 end
 
 --- Bind arrow keys to move by display line, so wrapped text is navigable.

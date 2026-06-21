@@ -257,6 +257,70 @@ function M.select(opts, callback)
     })
 end
 
+--- Informational dialog with static content.
+---@param opts { title: string, lines: string[] }
+function M.info(opts)
+    local lines = vim.deepcopy(opts.lines or {})
+    local close_keys = {}
+    local seen = {}
+    for _, action in ipairs({ "cancel", "confirm" }) do
+        for _, key in ipairs(BASE_KEYS[action] or {}) do
+            local lhs = Keys.lhs(key)
+            if lhs ~= "" and not seen[lhs] then
+                seen[lhs] = true
+                close_keys[#close_keys + 1] = lhs
+            end
+        end
+        for _, key in ipairs(Keys.resolve(get_config().keys[action])) do
+            local lhs = Keys.lhs(key)
+            if lhs ~= "" and not seen[lhs] then
+                seen[lhs] = true
+                close_keys[#close_keys + 1] = lhs
+            end
+        end
+    end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "Close: " .. table.concat(close_keys, ", ")
+    local footer_row = #lines - 1
+
+    local was_insert = is_insert()
+    vim.cmd("stopinsert")
+    local float = open_float(lines, opts.title or "Info", { min_width = 40 })
+    local buf, win = float.buf, float.win
+    vim.api.nvim_buf_set_extmark(buf, ns, footer_row, 0, {
+        end_col = #lines[#lines],
+        hl_group = "Comment",
+    })
+    local closed = false
+
+    local function close()
+        if closed then
+            return
+        end
+        closed = true
+        if vim.api.nvim_win_is_valid(win) then
+            vim.api.nvim_win_close(win, true)
+        end
+        if vim.api.nvim_buf_is_valid(buf) then
+            vim.api.nvim_buf_delete(buf, { force = true })
+        end
+        if was_insert then
+            vim.schedule(function()
+                vim.cmd("startinsert")
+            end)
+        end
+    end
+
+    bind_keys(buf, "cancel", close)
+    bind_keys(buf, "confirm", close)
+
+    vim.api.nvim_create_autocmd("BufLeave", {
+        buffer = buf,
+        once = true,
+        callback = close,
+    })
+end
+
 --- Confirm dialog with picker UI.
 ---@param opts { title: string, message?: string, timeout?: integer, on_timeout?: fun() }
 ---@param callback fun(confirmed: boolean)

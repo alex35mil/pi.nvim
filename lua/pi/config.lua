@@ -61,6 +61,7 @@
 ---@class pi.DiffConfig
 ---@field icons pi.DiffIcons
 ---@field context pi.DiffContextConfig
+---@field keymap_hints? "dialog"|"winbar"|boolean
 ---@field keys pi.DiffKeys
 
 ---@alias pi.SpinnerPreset "classic"|"robot"
@@ -274,6 +275,7 @@ local defaults = {
             base = nil,
             step = 5,
         },
+        keymap_hints = "dialog",
         keys = {
             accept = "<Leader>da",
             reject = "<Leader>dr",

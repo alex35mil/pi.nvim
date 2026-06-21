@@ -302,6 +302,11 @@ require("pi").setup({
             -- Lines added/removed by expand/shrink actions.
             step = 5,
         },
+        -- How to show diff review keymap hints:
+        -- "dialog" or true (default): show compact "?=keymaps" and open an informational keymap dialog with ?.
+        -- "winbar": show full inline winbar hints.
+        -- false: hide hints and bind no help key.
+        keymap_hints = "dialog",
         -- Keymaps active inside the diff review tab.
         keys = {
             accept = "<Leader>da",
@@ -900,7 +905,7 @@ Once the diff is open:
 - **List review notes** with `<Leader>dN`; selecting an entry jumps to the first noted line.
 - **Expand / shrink** the surrounding diff context with `<Leader>de` / `<Leader>ds`. The initial context comes from `diff.context.base` (or `'diffopt'` when unset), and the step size from `diff.context.step`.
 
-All keys are configurable under `diff.keys` using the [Key specs](#key-specs) format, so you can bind multiple keys, pin modes, or replace them entirely. The winbar of the proposed pane always shows the currently-bound keys for all review actions so you don't have to remember them.
+All keys are configurable under `diff.keys` using the [Key specs](#key-specs) format, so you can bind multiple keys, pin modes, or replace them entirely. By default, the proposed-pane winbar shows `?=keymaps`; pressing `?` opens an informational dialog listing the configured diff review keymaps. Set `diff.keymap_hints = "winbar"` to show full inline winbar hints, or `false` to hide hints and bind no help key. `true` aliases the default dialog mode. If `?` conflicts with a diff action key, the action key wins and the help binding/hint is omitted.
 
 Markdown diffs enable wrapping and linebreak in the review panes for readability. Other filetypes keep your global `wrap` and `linebreak` defaults.
 

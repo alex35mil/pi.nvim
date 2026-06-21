@@ -518,35 +518,140 @@ function M.open(payload, callback, opts)
     local list_notes_keys = Keys.resolve(diff_keys.list_notes)
     local expand_context_keys = Keys.resolve(diff_keys.expand_context)
     local shrink_context_keys = Keys.resolve(diff_keys.shrink_context)
-    -- Winbar hint shows the first key of each action.
-    local accept_lhs = accept_keys[1] and Keys.lhs(accept_keys[1]) or ""
-    local reject_lhs = reject_keys[1] and Keys.lhs(reject_keys[1]) or ""
-    local edit_note_lhs = edit_note_keys[1] and Keys.lhs(edit_note_keys[1]) or ""
-    local delete_note_lhs = delete_note_keys[1] and Keys.lhs(delete_note_keys[1]) or ""
-    local list_notes_lhs = list_notes_keys[1] and Keys.lhs(list_notes_keys[1]) or ""
-    local expand_context_lhs = expand_context_keys[1] and Keys.lhs(expand_context_keys[1]) or ""
-    local shrink_context_lhs = shrink_context_keys[1] and Keys.lhs(shrink_context_keys[1]) or ""
+    local actions = {
+        { label = "Accept", hint = "accept", keys = accept_keys },
+        { label = "Reject", hint = "reject", keys = reject_keys },
+        { label = "Add/edit note", hint = "note", keys = edit_note_keys },
+        { label = "Delete note", hint = "del-note", keys = delete_note_keys },
+        { label = "List notes", hint = "notes", keys = list_notes_keys },
+        { label = "Expand context", hint = "expand", keys = expand_context_keys },
+        { label = "Shrink context", hint = "shrink", keys = shrink_context_keys },
+    }
+
+    local function lhs_values(keys)
+        local values = {}
+        for _, key in ipairs(keys) do
+            values[#values + 1] = Keys.lhs(key)
+        end
+        return values
+    end
+
+    local function lhs_collides(lhs)
+        if lhs == "" then
+            return false
+        end
+        local normalized = Keys.normalize_lhs(lhs)
+        for _, action in ipairs(actions) do
+            for _, action_lhs in ipairs(lhs_values(action.keys)) do
+                if Keys.normalize_lhs(action_lhs) == normalized then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+
+    local function resolve_keymap_hints()
+        local value = Config.options.diff.keymap_hints
+        if value == nil then
+            value = "dialog"
+        end
+        if value == false then
+            return { mode = "none" }
+        end
+        if value == "winbar" then
+            return { mode = "winbar" }
+        end
+        if value == true or value == "dialog" then
+            return { mode = "dialog", key = "?" }
+        end
+        Notify.warn("diff: unsupported diff.keymap_hints; falling back to dialog")
+        return { mode = "dialog", key = "?" }
+    end
+
+    local hint_config = resolve_keymap_hints()
+    local help_key = hint_config.mode == "dialog" and hint_config.key or nil
+    local help_lhs = help_key and Keys.lhs(help_key) or ""
+    local help_collides = help_lhs ~= "" and lhs_collides(help_lhs)
+
     vim.wo[left_win].winbar = "%#PiDiffWinbar# %#PiDiffWinbarCurrent#CURRENT: " .. rel_path .. "%#PiDiffWinbar#"
-    vim.wo[right_win].winbar = "%#PiDiffWinbar# %#PiDiffWinbarProposed# PROPOSED: "
-        .. rel_path
-        .. " %#PiDiffWinbar# %#PiDiffWinbarHint#["
-        .. accept_lhs
-        .. "=accept  "
-        .. reject_lhs
-        .. "=reject  "
-        .. edit_note_lhs
-        .. "=note  "
-        .. delete_note_lhs
-        .. "=del-note  "
-        .. list_notes_lhs
-        .. "=notes  "
-        .. expand_context_lhs
-        .. "=expand  "
-        .. shrink_context_lhs
-        .. "=shrink]%#PiDiffWinbar#"
+    local proposed_winbar = "%#PiDiffWinbar# %#PiDiffWinbarProposed# PROPOSED: " .. rel_path
+    if hint_config.mode == "winbar" then
+        proposed_winbar = proposed_winbar .. " %#PiDiffWinbar# %#PiDiffWinbarHint#["
+        for i, action in ipairs(actions) do
+            local first_lhs = action.keys[1] and Keys.lhs(action.keys[1]) or ""
+            if i > 1 then
+                proposed_winbar = proposed_winbar .. "  "
+            end
+            proposed_winbar = proposed_winbar .. first_lhs .. "=" .. action.hint
+        end
+        proposed_winbar = proposed_winbar .. "]%#PiDiffWinbar#"
+    elseif hint_config.mode == "dialog" and not help_collides then
+        proposed_winbar = proposed_winbar
+            .. " %#PiDiffWinbar# %#PiDiffWinbarHint#["
+            .. help_lhs
+            .. "=keymaps]%#PiDiffWinbar#"
+    end
+    vim.wo[right_win].winbar = proposed_winbar
+
+    local function show_keymap_dialog()
+        local lines = {}
+        for _, action in ipairs(actions) do
+            local values = lhs_values(action.keys)
+            local keys_text = #values > 0 and table.concat(values, ", ") or "(unbound)"
+            lines[#lines + 1] = action.label .. ": " .. keys_text
+        end
+        Dialog.info({ title = "Diff review keymaps", lines = lines })
+    end
 
     local responded = false
+    local cleaned_up = false
     local timeout = nil ---@type integer?
+    local tracked_keymaps = {} ---@type table<string, { buf: integer, mode: string, lhs: string, original: table|false }>
+
+    ---@param buf integer
+    ---@param mode string
+    ---@param lhs string
+    ---@return string
+    local function keymap_id(buf, mode, lhs)
+        return tostring(buf) .. ":" .. mode .. ":" .. Keys.normalize_lhs(lhs)
+    end
+
+    ---@param buf integer
+    ---@param mode string
+    ---@param lhs string
+    ---@return table|false
+    local function current_buf_keymap(buf, mode, lhs)
+        local ok, existing = pcall(vim.api.nvim_buf_call, buf, function()
+            return vim.fn.maparg(lhs, mode, false, true)
+        end)
+        if ok and existing and existing.buffer == 1 then
+            return existing
+        end
+        return false
+    end
+
+    ---@param buf integer
+    ---@param key pi.KeySpec
+    ---@param handler function
+    ---@param opts? { modes?: string|string[], desc?: string, nowait?: boolean }
+    local function bind_review_key(buf, key, handler, opts)
+        opts = opts or {}
+        local lhs = Keys.lhs(key)
+        local modes = Keys.modes(key, opts.modes or "n")
+        for _, mode in ipairs(modes) do
+            local id = keymap_id(buf, mode, lhs)
+            if tracked_keymaps[id] == nil then
+                tracked_keymaps[id] = {
+                    buf = buf,
+                    mode = mode,
+                    lhs = lhs,
+                    original = vim.api.nvim_buf_is_valid(buf) and current_buf_keymap(buf, mode, lhs) or false,
+                }
+            end
+        end
+        Keys.bind(buf, key, handler, opts)
+    end
 
     local function update_context(delta)
         local next_context = math.max(initial_context, diff_context() + delta)
@@ -1107,10 +1212,45 @@ function M.open(payload, callback, opts)
         return vim.json.encode(extra)
     end
 
-    local function close_review_tab()
+    local function truthy(value)
+        return value == true or value == 1
+    end
+
+    local function restore_tracked_keymaps()
+        for id, entry in pairs(tracked_keymaps) do
+            tracked_keymaps[id] = nil
+            if vim.api.nvim_buf_is_valid(entry.buf) then
+                pcall(vim.keymap.del, entry.mode, entry.lhs, { buffer = entry.buf })
+                local original = entry.original
+                if original then
+                    local rhs = original.callback or original.rhs
+                    if rhs then
+                        pcall(vim.keymap.set, entry.mode, entry.lhs, rhs, {
+                            buffer = entry.buf,
+                            silent = truthy(original.silent),
+                            nowait = truthy(original.nowait),
+                            expr = truthy(original.expr),
+                            remap = not truthy(original.noremap),
+                            script = truthy(original.script),
+                            replace_keycodes = truthy(original.replace_keycodes),
+                            desc = original.desc,
+                        })
+                    end
+                end
+            end
+        end
+    end
+
+    local function cleanup_review_resources()
+        if cleaned_up then
+            return
+        end
+        cleaned_up = true
         if timeout then
             pcall(vim.fn.timer_stop, timeout)
+            timeout = nil
         end
+        restore_tracked_keymaps()
         vim.on_key(nil, on_key_ns)
         pcall(vim.api.nvim_del_augroup_by_id, note_refresh_group)
         for _, entry in ipairs(notes) do
@@ -1135,6 +1275,10 @@ function M.open(payload, callback, opts)
             vim.bo[before_buf].modifiable = prev_modifiable
             vim.bo[before_buf].readonly = prev_readonly
         end
+    end
+
+    local function close_review_tab()
+        cleanup_review_resources()
         -- Close all windows except left_win — this handles right_win
         -- plus any plugin floats that landed in
         -- the review tab and can make tabclose fail with E445.
@@ -1160,6 +1304,28 @@ function M.open(payload, callback, opts)
             session.chat:ensure_shown_and_focus_prompt()
         end
     end
+
+    local review_tab_closed_autocmd
+    review_tab_closed_autocmd = vim.api.nvim_create_autocmd("TabClosed", {
+        group = note_refresh_group,
+        callback = function()
+            if vim.api.nvim_tabpage_is_valid(review_tab) then
+                return
+            end
+            pcall(vim.api.nvim_del_autocmd, review_tab_closed_autocmd)
+            cleanup_review_resources()
+            vim.schedule(function()
+                if vim.api.nvim_buf_is_valid(after_buf) then
+                    pcall(vim.api.nvim_buf_delete, after_buf, { force = true })
+                end
+            end)
+            if responded then
+                return
+            end
+            responded = true
+            callback("Reject")
+        end,
+    })
 
     local function accept()
         if responded then
@@ -1220,7 +1386,7 @@ function M.open(payload, callback, opts)
     if type(opts.timeout) == "number" and opts.timeout > 0 then
         timeout = vim.fn.timer_start(opts.timeout, function()
             vim.schedule(function()
-                if responded then
+                if responded or cleaned_up then
                     return
                 end
                 responded = true
@@ -1256,8 +1422,8 @@ function M.open(payload, callback, opts)
     ---@param key pi.KeySpec
     local function bind_edit_note_key(buf, key)
         if type(key) == "string" then
-            Keys.bind(buf, key, edit_note, { desc = "Add/edit review note" })
-            Keys.bind(buf, key, edit_note_visual, { modes = "x", desc = "Add review note for selected lines" })
+            bind_review_key(buf, key, edit_note, { desc = "Add/edit review note" })
+            bind_review_key(buf, key, edit_note_visual, { modes = "x", desc = "Add review note for selected lines" })
             return
         end
 
@@ -1265,8 +1431,7 @@ function M.open(payload, callback, opts)
             return
         end
 
-        local raw_modes = key.modes or "n"
-        local modes = type(raw_modes) == "table" and raw_modes or { raw_modes }
+        local modes = Keys.modes(key, "n")
         local normal_modes = {}
         local visual_modes = {}
         for _, mode in ipairs(modes) do
@@ -1277,10 +1442,10 @@ function M.open(payload, callback, opts)
             end
         end
         if #normal_modes > 0 then
-            Keys.bind(buf, { key[1], modes = normal_modes }, edit_note, { desc = "Add/edit review note" })
+            bind_review_key(buf, { key[1], modes = normal_modes }, edit_note, { desc = "Add/edit review note" })
         end
         if #visual_modes > 0 then
-            Keys.bind(
+            bind_review_key(
                 buf,
                 { key[1], modes = visual_modes },
                 edit_note_visual,
@@ -1291,29 +1456,32 @@ function M.open(payload, callback, opts)
 
     for _, b in ipairs({ before_buf, after_buf }) do
         for _, k in ipairs(accept_keys) do
-            Keys.bind(b, k, accept, { desc = "Accept edit" })
+            bind_review_key(b, k, accept, { desc = "Accept edit" })
         end
         for _, k in ipairs(reject_keys) do
-            Keys.bind(b, k, reject, { desc = "Reject edit" })
+            bind_review_key(b, k, reject, { desc = "Reject edit" })
         end
         for _, k in ipairs(edit_note_keys) do
             bind_edit_note_key(b, k)
         end
         for _, k in ipairs(delete_note_keys) do
-            Keys.bind(b, k, delete_note_at_cursor, { desc = "Delete review note" })
+            bind_review_key(b, k, delete_note_at_cursor, { desc = "Delete review note" })
         end
         for _, k in ipairs(list_notes_keys) do
-            Keys.bind(b, k, list_notes, { desc = "List review notes" })
+            bind_review_key(b, k, list_notes, { desc = "List review notes" })
         end
         for _, k in ipairs(expand_context_keys) do
-            Keys.bind(b, k, function()
+            bind_review_key(b, k, function()
                 update_context(context_step)
             end, { desc = "Expand diff context" })
         end
         for _, k in ipairs(shrink_context_keys) do
-            Keys.bind(b, k, function()
+            bind_review_key(b, k, function()
                 update_context(-context_step)
             end, { desc = "Shrink diff context" })
+        end
+        if help_key and not help_collides then
+            bind_review_key(b, help_key, show_keymap_dialog, { desc = "Show diff keymaps" })
         end
     end
 

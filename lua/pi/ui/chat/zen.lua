@@ -206,11 +206,7 @@ function Zen:_bind_keys()
     local default_modes = { "n", "i" }
     for _, key in ipairs(Keys.resolve(zen_keys.exit)) do
         local lhs = Keys.lhs(key)
-        -- Resolve actual modes: table key specs may override default_modes
-        local modes = (type(key) == "table" and key.modes) or default_modes
-        if type(modes) == "string" then
-            modes = { modes }
-        end
+        local modes = Keys.modes(key, default_modes)
         -- Save existing mappings before overriding
         local saved = {}
         for _, mode in ipairs(modes) do
