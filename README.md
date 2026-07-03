@@ -686,7 +686,8 @@ Other completion plugins (nvim-cmp, etc.) aren't shipped as first-class sources,
 
 pi.nvim targets upstream pi RPC. If you point `cli.bin` at a fork with a different protocol, use `rpc.map_command` / `rpc.map_event` to translate in user config instead of patching pi.nvim core.
 
-Example for `omp` command-list compatibility:
+<details>
+<summary>Example: adapt `omp` command-list compatibility</summary>
 
 ```lua
 local function normalize_omp_commands(commands)
@@ -703,6 +704,10 @@ local function normalize_omp_commands(commands)
     return result
 end
 
+local function strip_ansi(text)
+    return text:gsub("\27%[[0-9;]*m", "")
+end
+
 require("pi").setup({
     cli = { bin = "omp" },
     rpc = {
@@ -715,6 +720,15 @@ require("pi").setup({
             return cmd
         end,
         map_event = function(msg, ctx)
+            if msg.type == "command_output" then
+                local text = strip_ansi(msg.text or "")
+                if text ~= "" then
+                    vim.schedule(function()
+                        require("pi.notify").info(text)
+                    end)
+                end
+                return nil
+            end
             if msg.type == "ready" then
                 return nil
             end
@@ -737,6 +751,8 @@ require("pi").setup({
 ```
 
 `ctx.set_commands()` updates pi.nvim's shared slash-command cache, the same cache populated by upstream `get_commands` responses. It affects completion, prompt decorators, and command-aware chat behavior. It does not re-render the already-visible startup block.
+
+</details>
 
 ### Attachments
 
