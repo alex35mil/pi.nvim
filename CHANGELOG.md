@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-25
+
+- **FIXED:** Reject failed multi-edit diff reviews instead of opening an empty diff.
+
 ## 2026-06-21
 
 - **ADDED:** Add configurable diff review keymap hints with `?` help, winbar hints, and disabled mode.

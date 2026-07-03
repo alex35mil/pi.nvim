@@ -161,7 +161,7 @@ end
 --- All matches are resolved against the original string, not incrementally.
 ---@param lines string[]
 ---@param edits table[]
----@return string[]
+---@return string[]?
 local function apply_edits(lines, edits)
     local content = table.concat(lines, "\n")
     local replacements = {}
@@ -172,7 +172,7 @@ local function apply_edits(lines, edits)
 
         if old_str == "" then
             Notify.error("diff: Empty oldText is not supported in multi-edit review")
-            return lines
+            return nil
         end
 
         local search_from = 1
@@ -204,7 +204,7 @@ local function apply_edits(lines, edits)
             Notify.error(
                 "diff: The original content not found in file. The agent likely used stale content — add 'Always re-read files before editing' to your AGENTS.md"
             )
-            return lines
+            return nil
         end
 
         replacements[#replacements + 1] = {
@@ -223,7 +223,7 @@ local function apply_edits(lines, edits)
         local curr = replacements[i]
         if curr.start_pos <= prev.end_pos then
             Notify.error("diff: Overlapping edits are not supported")
-            return lines
+            return nil
         end
     end
 
@@ -238,7 +238,8 @@ local function apply_edits(lines, edits)
 
     parts[#parts + 1] = content:sub(last_pos)
 
-    return vim.split(table.concat(parts), "\n", { plain = true })
+    local result = table.concat(parts)
+    return vim.split(result, "\n", { plain = true })
 end
 
 ---@class pi.DiffReviewNote
@@ -383,6 +384,10 @@ function M.open(payload, callback, opts)
     if payload.toolName == "edit" then
         if type(input.edits) == "table" and #input.edits > 0 then
             proposed_lines = apply_edits(before_lines, input.edits)
+            if not proposed_lines then
+                callback("Reject")
+                return
+            end
         else
             Notify.error("diff: edit tool input missing edits[]")
             callback("Reject")
