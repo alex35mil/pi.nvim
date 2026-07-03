@@ -2,6 +2,7 @@
 
 ## 2026-06-25
 
+- **ADDED:** Add RPC adapter hooks for user-land command/event mapping of non-upstream-compatible backends.
 - **FIXED:** Reject failed multi-edit diff reviews instead of opening an empty diff.
 
 ## 2026-06-21
