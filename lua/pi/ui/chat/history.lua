@@ -234,7 +234,7 @@ local spinner = {
 ---@return string
 local function format_time(ts)
     local secs = math.floor(ts / 1000)
-    return os.date(" %b %-d %Y, %H:%M", secs) --[[@as string]]
+    return tostring(os.date(Config.options.timestamp_format, secs)) --[[@as string]]
 end
 
 ---@param name string

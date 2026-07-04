@@ -222,6 +222,8 @@ require("pi").setup({
     -- Default expand/collapse state for the startup block
     -- (skills, extensions, startup announcements).
     expand_startup_details = true,
+    -- Format string passed to os.date for chat message timestamps.
+    timestamp_format = " %b %-d %Y, %H:%M",
 
     -- Chat panels
     panels = {

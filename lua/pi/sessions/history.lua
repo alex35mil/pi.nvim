@@ -23,12 +23,28 @@ local function get_agent_dir()
     return vim.fn.expand("~/.pi/agent")
 end
 
+---@param ... string
+---@return string
+local function join_path(...)
+    local parts = { ... }
+    local path = parts[1] or ""
+    local sep = package.config:sub(1, 1)
+    for i = 2, #parts do
+        local part = parts[i] or ""
+        if part ~= "" then
+            path = path:gsub("[\\/]+$", "") .. sep .. part:gsub("^[\\/]+", "")
+        end
+    end
+    return path
+end
+
 --- Encode a cwd path into the directory name format pi uses.
 --- e.g. "/Users/Alex/Dev/project" → "--Users-Alex-Dev-project--"
+--- e.g. "C:\\Users\\Alex\\Dev\\project" → "--C--Users-Alex-Dev-project--"
 ---@param cwd string
 ---@return string
 local function encode_cwd(cwd)
-    local encoded = cwd:gsub("^/", ""):gsub("/", "-")
+    local encoded = cwd:gsub("^[\\/]", ""):gsub("[\\/:]", "-")
     return "--" .. encoded .. "--"
 end
 
@@ -37,7 +53,7 @@ end
 function M.get_sessions_dir()
     local agent_dir = get_agent_dir()
     local cwd = vim.fn.getcwd()
-    return agent_dir .. "/sessions/" .. encode_cwd(cwd)
+    return join_path(agent_dir, "sessions", encode_cwd(cwd))
 end
 
 --- Parse a .jsonl session file: read header + first user message.
@@ -107,7 +123,7 @@ end
 function M.list()
     local dir = M.get_sessions_dir()
     ---@type string[]
-    local files = vim.fn.glob(dir .. "/*.jsonl", false, true)
+    local files = vim.fn.glob(join_path(dir, "*.jsonl"), false, true)
     ---@type pi.SessionInfo[]
     local sessions = {}
     for _, file in ipairs(files) do
