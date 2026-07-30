@@ -56,9 +56,8 @@ function M.expand(text)
     return result
 end
 
---- Insert an @-mention at the cursor in the pi prompt buffer.
----@param loc { path: string, start_line?: integer, end_line?: integer }
----@param opts? { focus?: boolean } default: focus = true
+---@param loc { path: string, start_line?: integer, end_line?: integer, note?: string }
+---@param opts? { focus?: boolean, append?: boolean, newline?: boolean } default: focus = true
 function M.send(loc, opts)
     opts = opts or {}
     local rel = vim.fn.fnamemodify(loc.path, ":.")
@@ -67,6 +66,9 @@ function M.send(loc, opts)
         mention = mention .. "#L" .. loc.start_line .. "-" .. loc.end_line
     elseif loc.start_line then
         mention = mention .. "#L" .. loc.start_line
+    end
+    if loc.note and loc.note:match("%S") then
+        mention = mention .. ' - ' .. loc.note
     end
 
     local session = require("pi.sessions.manager").get_or_create()
@@ -84,26 +86,51 @@ function M.send(loc, opts)
         local win = session.chat:prompt_win()
 
         local row, col
-        if win and vim.api.nvim_win_is_valid(win) then
+        if opts.append then
+            row = vim.api.nvim_buf_line_count(buf)
+            local text = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
+            col = #text
+        elseif win and vim.api.nvim_win_is_valid(win) then
             row, col = unpack(vim.api.nvim_win_get_cursor(win))
         else
             row = vim.api.nvim_buf_line_count(buf)
-            local last_line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
-            col = #last_line
+            local text = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
+            col = #text
         end
 
-        local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
-        -- col is 0-indexed byte offset; insert at cursor position
-        local before = col > 0 and line:sub(col, col) or ""
-        local after = col < #line and line:sub(col + 1, col + 1) or ""
+        if opts.newline then
+            if opts.append then
+                -- Append as a new line at end of buffer
+                vim.api.nvim_buf_set_lines(buf, -1, -1, false, { mention })
+                if win and vim.api.nvim_win_is_valid(win) then
+                    vim.api.nvim_win_set_cursor(win, { vim.api.nvim_buf_line_count(buf), #mention })
+                end
+            else
+                -- Insert at cursor, push remaining text to next line
+                local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
+                local left = line:sub(1, col)
+                local right = line:sub(col + 1)
+                local space = (left ~= "" and left:sub(-1) ~= " ") and " " or ""
+                vim.api.nvim_buf_set_lines(buf, row - 1, row, false, { left .. space .. mention, right })
+                if win and vim.api.nvim_win_is_valid(win) then
+                    vim.api.nvim_win_set_cursor(win, { row + 1, 0 })
+                end
+            end
+        else
+            -- Insert mention inline at computed position
+            local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
+            local before_char = col > 0 and line:sub(col, col) or ""
+            local after_char = col < #line and line:sub(col + 1, col + 1) or ""
 
-        local prefix = (before ~= "" and before ~= " ") and " " or ""
-        local suffix = (after ~= " ") and " " or ""
-        local insert = prefix .. mention .. suffix
+            -- In append mode only add leading space gap; in cursor mode add smart spacing on both sides
+            local prefix = (before_char ~= "" and before_char ~= " ") and " " or ""
+            local suffix = (not opts.append and after_char ~= " ") and " " or ""
 
-        vim.api.nvim_buf_set_text(buf, row - 1, col, row - 1, col, { insert })
-        if win and vim.api.nvim_win_is_valid(win) then
-            vim.api.nvim_win_set_cursor(win, { row, col + #insert })
+            local insert = prefix .. mention .. suffix
+            vim.api.nvim_buf_set_text(buf, row - 1, col, row - 1, col, { insert })
+            if win and vim.api.nvim_win_is_valid(win) then
+                vim.api.nvim_win_set_cursor(win, { row, col + #insert })
+            end
         end
 
         Decorators.update(buf)
