@@ -271,7 +271,7 @@ end
 --- With no args or command args: mentions current buffer (with visual selection if any).
 --- With a loc table: mentions the given path and optional line range.
 ---@param args? table|{ path: string, start_line?: integer, end_line?: integer, note?: string }
----@param opts? { focus?: boolean } default: focus = true
+---@param opts? { focus?: boolean, append?: boolean, newline?: boolean } default: focus = true
 function M.send_mention(args, opts)
     local Mentions = require("pi.ui.chat.mentions")
     if args and args.path then
