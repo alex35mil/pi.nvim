@@ -57,7 +57,7 @@ function M.expand(text)
 end
 
 --- Insert an @-mention at the cursor in the pi prompt buffer.
----@param loc { path: string, start_line?: integer, end_line?: integer }
+---@param loc { path: string, start_line?: integer, end_line?: integer, note?: string }
 ---@param opts? { focus?: boolean } default: focus = true
 function M.send(loc, opts)
     opts = opts or {}
@@ -67,6 +67,9 @@ function M.send(loc, opts)
         mention = mention .. "#L" .. loc.start_line .. "-" .. loc.end_line
     elseif loc.start_line then
         mention = mention .. "#L" .. loc.start_line
+    end
+    if loc.note and loc.note:match("%S") then
+        mention = mention .. ' - ' .. loc.note
     end
 
     local session = require("pi.sessions.manager").get_or_create()
