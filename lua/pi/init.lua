@@ -33,6 +33,10 @@ function M.setup(opts)
     require("pi.attention").setup_autocmds()
     require("pi.sessions.manager").setup_autocmds()
     require("pi.commands").setup()
+    -- Temporary: register minimal scoped models and slash helpers
+    pcall(function()
+        require("pi.commands").setup_scoped_models_and_slash()
+    end)
     require("pi.ui.winfix").setup()
 end
 

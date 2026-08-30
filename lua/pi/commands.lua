@@ -127,4 +127,28 @@ function M.setup()
     end, { desc = "Toggle π RPC debug logging" })
 end
 
+-- Add minimal commands for scoped models and arbitrary slash
+function M.setup_scoped_models_and_slash()
+  local Pi = require("pi")
+  vim.api.nvim_create_user_command("PiScopedModels", function()
+    local Dialog = require("pi.ui.dialog")
+    Dialog.input({ title = "Scoped Models (/scoped-models)", default = "/scoped-models " }, function(val)
+      if not val or val == "" then return end
+      -- If user typed just pairs, convert code=a,b to JSON is non-trivial here; allow raw pass-through
+      if not vim.startswith(val, "/") then
+        val = "/scoped-models " .. val
+      end
+      Pi.invoke(val)
+    end)
+  end, {})
+
+  vim.api.nvim_create_user_command("PiSlash", function(opts)
+    local Dialog = require("pi.ui.dialog")
+    Dialog.input({ title = "Pi Slash Command", default = "/" }, function(val)
+      if not val or val == "" then return end
+      Pi.invoke(val)
+    end)
+  end, {})
+end
+
 return M

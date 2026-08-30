@@ -1,5 +1,13 @@
 # pi.nvim
 
+## Added (fork) minimal helpers
+
+This fork adds two minimal commands until upstream supports them directly:
+
+- :PiScopedModels — prompts for input and invokes `/scoped-models ...`. You can paste raw JSON or a simple `code=provider/model,general=provider/model2` string (passed through as-is).
+- :PiSlash — prompts for an arbitrary slash command and sends it (e.g. `/scoped-models { ... }`).
+
+
 Use the [pi coding agent](https://pi.dev) without leaving Neovim.
 
 <p align="center">
