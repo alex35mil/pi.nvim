@@ -7,6 +7,7 @@
 ## 2026-09-14
 
 - **ADDED:** Keep agent activity and steering, follow-up, and abort hints visible in the prompt statusline.
+- **ADDED:** Keep pending steering and follow-up counts visible until Pi consumes the queued messages.
 - **ADDED:** Bind `<C-c>` in the prompt to abort the active turn while preserving the session.
 - **ADDED:** Add `:PiClear`, `/clear`, and Neovim-native slash actions for common Pi TUI workflows.
 - **ADDED:** Add native `nvim-cmp` completion for `@` file mentions and `/` commands.

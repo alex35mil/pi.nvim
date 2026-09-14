@@ -569,7 +569,7 @@ When the agent is **streaming**, the two diverge. Both options queue your messag
 
 Both queued messages are rendered in the history with distinct labels (`labels.steer_message` and `labels.follow_up_message`) so you can tell them apart later.
 
-While the agent is running, the prompt statusline keeps the available controls visible: `<CR>` steers, `<A-CR>` queues a follow-up, and `<C-c>` aborts the active turn without closing the chat or discarding the session.
+While the agent is running, the prompt statusline keeps the available controls visible in plain language: `Enter` steers, `Alt-Enter` queues a follow-up, and `Ctrl-C` aborts the active turn without closing the chat or discarding the session. Submitted steering and follow-up messages are counted next to the activity until Pi consumes them.
 
 ### Mentions
 
@@ -874,8 +874,8 @@ require("pi").setup({
 
 | Name | Example output | When it's visible |
 | --- | --- | --- |
-| `activity` | `Working…` | The agent is starting or running, or context is compacting |
-| `controls` | `/ commands · @ files` or `<CR> steer · <A-CR> queue · <C-c> abort` | Always; its hints change with agent activity |
+| `activity` | `Working… · steer queued` | The agent is starting or running, context is compacting, or messages are queued |
+| `controls` | `/ commands · @ files` or `Enter steer · Alt-Enter queue · Ctrl-C abort` | Always; its hints change with agent activity |
 | `tokens` | `↑3.8k ↓58k` | Total input/output tokens used this session |
 | `cache` | `R7.2M W416k` | Total prompt-cache read/write |
 | `cost` | `$7.665` | Session cost is greater than zero |

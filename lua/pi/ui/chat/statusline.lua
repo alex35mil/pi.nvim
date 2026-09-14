@@ -11,6 +11,8 @@
 ---@class pi.StatusLineState
 ---@field activity string?
 ---@field can_steer boolean
+---@field pending_steer integer
+---@field pending_follow_up integer
 ---@field model_id string?
 ---@field model_context_window integer?
 ---@field model_reasoning boolean
@@ -113,26 +115,43 @@ local builtin = {}
 
 --- Working…
 function builtin.activity(state)
-    if not state.activity then
+    local total_pending = state.pending_steer + state.pending_follow_up
+    if not state.activity and total_pending == 0 then
         return nil
     end
-    return state.activity, "PiStatusLineActivity"
+    local chunks = {}
+    if state.activity then
+        chunks[#chunks + 1] = { state.activity, "PiStatusLineActivity" }
+    end
+    if total_pending > 0 then
+        local pending = {}
+        if state.pending_steer > 0 then
+            pending[#pending + 1] = state.pending_steer == 1 and "steer" or (state.pending_steer .. " steers")
+        end
+        if state.pending_follow_up > 0 then
+            pending[#pending + 1] = state.pending_follow_up == 1 and "follow-up"
+                or (state.pending_follow_up .. " follow-ups")
+        end
+        local prefix = #chunks > 0 and " · " or ""
+        chunks[#chunks + 1] = { prefix .. table.concat(pending, " + ") .. " queued", "PiStatusLine" }
+    end
+    return chunks
 end
 
 --- Context-sensitive prompt controls and discovery hints.
 function builtin.controls(state)
     if state.can_steer then
         return {
-            { "<CR>", "PiStatusLineKey" },
+            { "Enter", "PiStatusLineKey" },
             { " steer · ", "PiStatusLine" },
-            { "<A-CR>", "PiStatusLineKey" },
+            { "Alt-Enter", "PiStatusLineKey" },
             { " queue · ", "PiStatusLine" },
-            { "<C-c>", "PiStatusLineKey" },
+            { "Ctrl-C", "PiStatusLineKey" },
             { " abort", "PiStatusLine" },
         }
     elseif state.activity then
         return {
-            { "<C-c>", "PiStatusLineKey" },
+            { "Ctrl-C", "PiStatusLineKey" },
             { " abort", "PiStatusLine" },
         }
     end
@@ -266,6 +285,8 @@ local function new_state()
     return {
         activity = nil,
         can_steer = false,
+        pending_steer = 0,
+        pending_follow_up = 0,
         model_id = nil,
         model_context_window = nil,
         model_reasoning = false,
@@ -303,6 +324,23 @@ end
 function StatusLine:set_activity(text, can_steer)
     self._state.activity = text
     self._state.can_steer = can_steer == true
+    self:render()
+end
+
+--- Update the visible steering and follow-up queue counts.
+---@param entries pi.PendingQueueEntry[]
+function StatusLine:set_pending_queue(entries)
+    local steer = 0
+    local follow_up = 0
+    for _, entry in ipairs(entries) do
+        if entry.queue_type == "steer" then
+            steer = steer + 1
+        elseif entry.queue_type == "follow_up" then
+            follow_up = follow_up + 1
+        end
+    end
+    self._state.pending_steer = steer
+    self._state.pending_follow_up = follow_up
     self:render()
 end
 

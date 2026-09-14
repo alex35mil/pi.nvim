@@ -512,6 +512,11 @@ end
 function Chat:_ensure_pending_compaction_entry(entry)
     self._history:remove_pending_queue_entry(entry.expanded)
     self._history:add_pending_queue_entry(entry.mode, entry.text, entry.expanded, entry.image_count)
+    self:_refresh_pending_queue_status()
+end
+
+function Chat:_refresh_pending_queue_status()
+    self._prompt:statusline():set_pending_queue(self._history:get_pending_queue())
 end
 
 ---@param mode "steer"|"follow_up"
@@ -546,6 +551,7 @@ function Chat:_queue_compaction_message(mode)
     }
     self._compaction_queue[#self._compaction_queue + 1] = entry
     self._history:add_pending_queue_entry(mode, text, expanded, entry.image_count)
+    self:_refresh_pending_queue_status()
     Notify.info("Queued message for after compaction")
 end
 
@@ -570,6 +576,7 @@ function Chat:flush_compaction_queue(will_retry)
     local first = table.remove(queued, 1)
     if first then
         self._history:remove_pending_queue_entry(first.expanded)
+        self:_refresh_pending_queue_status()
         self._history:add_user_message(first.text, nil, first.image_count)
         self:_send_compaction_entry(first, "prompt")
     end
@@ -606,6 +613,7 @@ function Chat:_send_message(queue_type)
     if queue_type then
         -- Queued message: show in pending area, render in history on delivery
         self._history:add_pending_queue_entry(queue_type, text, expanded, attachments and #attachments or nil)
+        self:_refresh_pending_queue_status()
     else
         -- Immediate: render in history now
         self._history:add_user_message(text, nil, attachments and #attachments or nil)
@@ -753,6 +761,7 @@ function Chat:on_agent_end()
         self._history:add_user_message(entry.text, nil, entry.image_count, entry.queue_type)
     end
     self._history:clear_pending_queue()
+    self:_refresh_pending_queue_status()
 
     local completion_text = self._done_verb
     local force_completion = false
@@ -806,6 +815,7 @@ function Chat:on_message_start(msg)
             end
         end
         local entry = self._history:remove_pending_queue_entry(text) or self:_remove_replay_flushed_queue_entry(text)
+        self:_refresh_pending_queue_status()
         if entry then
             self._history:add_user_message(
                 entry.text,
