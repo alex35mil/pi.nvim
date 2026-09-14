@@ -1756,7 +1756,7 @@ function History:on_tool_start(tool_name, tool_call_id, tool_input)
             Tools.set_border(self, row, Tools.GLYPHS.MID)
             local icon_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, row, 0, {
                 end_col = #icon,
-                hl_group = "PiToolHeader",
+                hl_group = "PiToolIcon",
             })
             -- Tool name
             vim.api.nvim_buf_set_extmark(self._buf, ns, row, #icon, {
@@ -1801,7 +1801,7 @@ function History:on_tool_start(tool_name, tool_call_id, tool_input)
         Tools.set_border(self, header_row, Tools.GLYPHS.TOP)
         local icon_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, header_row, 0, {
             end_col = #icon,
-            hl_group = "PiToolHeader",
+            hl_group = "PiToolIcon",
         })
         vim.api.nvim_buf_set_extmark(self._buf, ns, header_row, #icon, {
             end_col = #header,
@@ -1857,7 +1857,7 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
             local labels = Config.options.labels
             local status = Tools.resolve_status(result, is_error)
             local is_success = status == "completed"
-            local icon_hl = is_success and "PiToolHeader" or "PiToolError"
+            local icon_hl = is_success and "PiToolSuccessIcon" or "PiToolError"
             local status_icon = is_success and labels.tool_success or labels.tool_failure
             local status_hl = is_success and "PiToolStatus" or "PiToolError"
 
@@ -1939,7 +1939,7 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
         })
 
         if block then
-            local icon_hl = is_success and "PiToolHeader" or "PiToolError"
+            local icon_hl = is_success and "PiToolSuccessIcon" or "PiToolError"
             local icon = Config.options.labels.tool
             local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
             if pos[1] then

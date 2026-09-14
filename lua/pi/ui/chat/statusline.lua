@@ -103,8 +103,13 @@ local function prepend_icon(name, chunks)
     if type(icon) ~= "string" or icon == "" or #chunks == 0 then
         return chunks
     end
-    local first = chunks[1][1]
-    chunks[1] = { first == "" and icon or (icon .. " " .. first), chunks[1][2] }
+    local first = chunks[1]
+    local icon_hl = first[2] or "PiStatusLineIcon"
+    if first[1] == "" then
+        chunks[1] = { icon, icon_hl }
+    else
+        table.insert(chunks, 1, { icon .. " ", icon_hl })
+    end
     return chunks
 end
 

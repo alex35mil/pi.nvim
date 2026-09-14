@@ -1895,6 +1895,8 @@ All highlight groups are defined with `default = true`, so they can be overridde
 | Group | Role |
 | --- | --- |
 | `PiToolBorder` | Tool block border glyphs (`╭─`, `│`, `├────`, `╰─`) |
+| `PiToolIcon` | Active tool icon |
+| `PiToolSuccessIcon` | Completed tool icon |
 | `PiToolHeader` | Tool block header row (tool name) |
 | `PiToolCall` | Tool input / call summary |
 | `PiToolOutput` | Tool output body |
@@ -1961,6 +1963,7 @@ All highlight groups are defined with `default = true`, so they can be overridde
 | Group | Role |
 | --- | --- |
 | `PiStatusLine` | Default highlight for statusline chunks |
+| `PiStatusLineIcon` | Icons prefixed to statusline components |
 | `PiStatusLineActivity` | Active agent status in the prompt statusline |
 | `PiStatusLineKey` | Active prompt key hints in the prompt statusline |
 | `PiStatusLineAttention` | Attention component highlight |
