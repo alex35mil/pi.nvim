@@ -1882,9 +1882,9 @@ All highlight groups are defined with `default = true`, so they can be overridde
 | `PiThinking` | Thinking block body |
 | `PiMention` | Highlighted `@mention` in the prompt and history |
 | `PiCommand` | Highlighted `/command` on the first line of the prompt |
-| `PiWelcome` | Welcome text on an empty chat |
+| `PiWelcome` | Warm yellow welcome text next to the agent glyph on an empty chat |
 | `PiWelcomeHint` | Hint text under the welcome |
-| `PiBusy` | "Agent is working" status text |
+| `PiBusy` | Warm yellow loading and "agent is working" status text |
 | `PiBusyTime` | Elapsed time counter next to the busy status |
 | `PiWarning` | Inline warning lines |
 | `PiError` | Inline error lines |

@@ -245,7 +245,7 @@ function Chat:show_loading()
     self._history:show_loading_placeholder({
         {
             { icon, "PiAgentResponseLabel" },
-            { "  Loading session…", "PiWelcomeHint" },
+            { "  Loading session…", "PiBusy" },
         },
     })
 end
