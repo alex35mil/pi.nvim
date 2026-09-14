@@ -18,6 +18,9 @@
 - **FIXED:** Reset activity and queue state on chat clear or process exit, with an actionable error when Pi exits unexpectedly.
 - **FIXED:** Reject multiline local slash actions without discarding the remaining prompt text.
 - **CHANGED:** Require Pi 0.80.4 or newer for the authoritative `agent_settled` lifecycle event; validated through Pi 0.85.1.
+- **CHANGED:** Use Pi's light/dark semantic colors for foreground accents while preserving the existing Neovim chat background.
+- **CHANGED:** Keep the animated agent verb in chat history only; the prompt statusline now shows controls and queued-message counts without repeating it.
+- **FIXED:** Apply highlight defaults immediately when pi.nvim is lazy-loaded and start Markdown Tree-sitter highlighting for chat history buffers.
 
 ## 2026-07-08
 

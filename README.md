@@ -876,7 +876,7 @@ require("pi").setup({
 
 | Name | Example output | When it's visible |
 | --- | --- | --- |
-| `activity` | `Working… · steer queued` | The agent is starting or running, context is compacting, or messages are queued |
+| `activity` | `steer queued` | A steering or follow-up message is waiting; animated agent activity stays in the chat history to avoid duplicate text |
 | `controls` | `/ commands · @ files` or `Enter steer · Alt-Enter queue · Ctrl-C abort` | Always; its hints change with agent activity |
 | `tokens` | `↑3.8k ↓58k` | Total input/output tokens used this session |
 | `cache` | `R7.2M W416k` | Total prompt-cache read/write |
@@ -1857,7 +1857,7 @@ pi.toggle_debug()             -- toggle RPC debug logging for the current Neovim
 
 ## Highlight groups
 
-All highlight groups are defined with `default = true`, so they can be overridden by your colorscheme or by a later `vim.api.nvim_set_hl` call. Most groups are computed from your base colorscheme at load time (pulling from `Normal`, `Title`, `Function`, `Comment`, `WarningMsg`, `DiagnosticError`), rather than linking directly to another group. Run `:hi PiGroupName` at any time to see the current value.
+All highlight groups are defined with `default = true`, so they can be overridden by your colorscheme or by a later `vim.api.nvim_set_hl` call. pi.nvim selects light or dark semantic foreground colors from Pi's built-in themes, while retaining the active Neovim background and using base colorscheme groups where appropriate. Markdown highlighting is started explicitly for chat history buffers, so headings, code, links, lists, and quoted text use your colorscheme's Tree-sitter captures even when pi.nvim is lazy-loaded. Run `:hi PiGroupName` at any time to see the current value.
 
 ### Chat history
 

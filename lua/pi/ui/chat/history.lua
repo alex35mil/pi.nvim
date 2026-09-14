@@ -454,6 +454,7 @@ function History.new(tab)
     vim.bo[self._buf].bufhidden = "hide"
     vim.bo[self._buf].modifiable = false
     vim.api.nvim_buf_set_name(self._buf, name)
+    pcall(vim.treesitter.start, self._buf, "markdown")
 
     return self
 end

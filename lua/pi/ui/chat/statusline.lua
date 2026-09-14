@@ -113,28 +113,23 @@ end
 ---@type table<string, pi.StatusLineComponentFn>
 local builtin = {}
 
---- Working…
+--- Queued steering and follow-up counts. Agent activity remains internal so
+--- controls can change without duplicating the history's animated status.
 function builtin.activity(state)
     local total_pending = state.pending_steer + state.pending_follow_up
-    if not state.activity and total_pending == 0 then
+    if total_pending == 0 then
         return nil
     end
     local chunks = {}
-    if state.activity then
-        chunks[#chunks + 1] = { state.activity, "PiStatusLineActivity" }
+    local pending = {}
+    if state.pending_steer > 0 then
+        pending[#pending + 1] = state.pending_steer == 1 and "steer" or (state.pending_steer .. " steers")
     end
-    if total_pending > 0 then
-        local pending = {}
-        if state.pending_steer > 0 then
-            pending[#pending + 1] = state.pending_steer == 1 and "steer" or (state.pending_steer .. " steers")
-        end
-        if state.pending_follow_up > 0 then
-            pending[#pending + 1] = state.pending_follow_up == 1 and "follow-up"
-                or (state.pending_follow_up .. " follow-ups")
-        end
-        local prefix = #chunks > 0 and " · " or ""
-        chunks[#chunks + 1] = { prefix .. table.concat(pending, " + ") .. " queued", "PiStatusLine" }
+    if state.pending_follow_up > 0 then
+        pending[#pending + 1] = state.pending_follow_up == 1 and "follow-up"
+            or (state.pending_follow_up .. " follow-ups")
     end
+    chunks[#chunks + 1] = { table.concat(pending, " + ") .. " queued", "PiStatusLineActivity" }
     return chunks
 end
 
