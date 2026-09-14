@@ -68,14 +68,13 @@ end
 
 --- Events we've reviewed and deliberately choose not to handle.
 --- turn_start/turn_end: TUI doesn't handle them; lifecycle is fully
---- covered by message_start / message_end / agent_end.
+--- covered by message_start / message_end / agent_settled.
 --- thinking_level_changed/session_info_changed: pi.nvim refreshes state
 --- through command callbacks; these are redundant notifications.
 ---@type table<string, true>
 local ignored_events = {
     turn_start = true,
     turn_end = true,
-    queue_update = true,
     thinking_level_changed = true,
     session_info_changed = true,
 }
@@ -188,8 +187,12 @@ local function handle_event(session, msg)
         chat:on_agent_start()
     elseif t == "agent_end" then
         chat:on_agent_end()
+    elseif t == "agent_settled" then
+        chat:on_agent_settled()
         CommandsCache.refresh(session.rpc)
         M.refresh_state(session)
+    elseif t == "queue_update" then
+        chat:on_queue_update(msg.steering or {}, msg.followUp or {})
     elseif t == "message_update" then
         local event = msg.assistantMessageEvent
         if event then
@@ -290,10 +293,7 @@ local function handle_event(session, msg)
         end
     elseif t == "_process_exit" then
         vim.schedule(function()
-            chat:set_status(nil)
-            if Config.options.debug and msg.code ~= 0 and msg.code ~= 143 then
-                print("Process exited with code " .. (msg.code or "-"))
-            end
+            chat:on_process_exit(msg.code, msg.expected == true)
         end)
     elseif t == "response" then
         -- Normally handled by rpc:send() one-shot callbacks. Late error

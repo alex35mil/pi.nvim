@@ -88,6 +88,7 @@ end
 
 ---@param text string
 ---@return boolean handled
+---@return string? error
 function M.execute(text)
     local name, args = text:match("^/([^%s]+)%s*(.*)$")
     if not name then
@@ -95,6 +96,9 @@ function M.execute(text)
     end
     for _, command in ipairs(commands) do
         if command.name == name then
+            if text:find("\n", 1, true) then
+                return true, "/" .. name .. " must be sent on its own line"
+            end
             command.run(args)
             return true
         end

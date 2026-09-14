@@ -13,6 +13,11 @@
 - **ADDED:** Add native `nvim-cmp` completion for `@` file mentions and `/` commands.
 - **FIXED:** Show `Starting…` immediately after submitting a prompt instead of waiting for the first agent event.
 - **FIXED:** Clear the immediate activity state when Pi rejects a prompt before the agent starts.
+- **FIXED:** Keep the agent busy through retries, compaction, and queued continuations until Pi emits its authoritative settled event.
+- **FIXED:** Reconcile pending messages from Pi queue snapshots and restore rejected or interrupted input instead of losing it.
+- **FIXED:** Reset activity and queue state on chat clear or process exit, with an actionable error when Pi exits unexpectedly.
+- **FIXED:** Reject multiline local slash actions without discarding the remaining prompt text.
+- **CHANGED:** Require Pi 0.80.4 or newer for the authoritative `agent_settled` lifecycle event; validated through Pi 0.85.1.
 
 ## 2026-07-08
 

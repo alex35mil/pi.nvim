@@ -569,7 +569,9 @@ When the agent is **streaming**, the two diverge. Both options queue your messag
 
 Both queued messages are rendered in the history with distinct labels (`labels.steer_message` and `labels.follow_up_message`) so you can tell them apart later.
 
-While the agent is running, the prompt statusline keeps the available controls visible in plain language: `Enter` steers, `Alt-Enter` queues a follow-up, and `Ctrl-C` aborts the active turn without closing the chat or discarding the session. Submitted steering and follow-up messages are counted next to the activity until Pi consumes them.
+While the agent is running, the prompt statusline keeps the available controls visible in plain language: `Enter` steers, `Alt-Enter` queues a follow-up, and `Ctrl-C` aborts the active turn without closing the chat or discarding the session. Submitted steering and follow-up messages are reconciled with Pi's queue and counted next to the activity until Pi consumes them. The chat stays busy through retries, compaction, and queued continuations, and returns to idle only after Pi reports that the complete run has settled.
+
+If Pi rejects a submitted message or exits before accepting it, pi.nvim restores the text and image attachments to the prompt. An unexpected process exit is also rendered in the chat with instructions for restarting the session.
 
 ### Mentions
 
@@ -1693,8 +1695,8 @@ The health check verifies the basics:
 
 - The `pi` executable (from the `bin` config option, defaults to `"pi"`) exists and is in `$PATH`.
 - pi backend compatibility against the plugin's tracked versions:
-    - minimum supported: `0.65.2`
-    - last validated: `0.79.3`
+    - minimum supported: `0.80.4`
+    - last validated: `0.85.1`
     - newer versions are reported as unvalidated (warning), not hard-failed.
 - Neovim is at version 0.10 or newer.
 

@@ -17,11 +17,13 @@
 ---@field _assistant_tool_only_header_rendered boolean
 ---@field _assistant_message_timestamp number?
 ---@field _flushed_queue_entries pi.PendingQueueEntry[]
+---@field _dequeued_queue_entries pi.PendingQueueEntry[] Entries removed by queue_update, awaiting message_start.
 ---@field _replay_flushed_queue_entries pi.PendingQueueEntry[]
 ---@field _compaction_queue pi.CompactionQueuedMessage[]
 ---@field _active_verb string?
 ---@field _done_verb string?
 ---@field _last_turn_stop_reason "aborted"|"error"|nil
+---@field _inflight_prompt? { text: string, expanded_text: string, attachments?: pi.Attachment[] }
 ---@field _attachments pi.ChatAttachments
 ---@field _zen pi.Zen
 local Chat = {}
@@ -45,6 +47,7 @@ local Zen = require("pi.ui.chat.zen")
 ---@field mode "steer"|"follow_up"
 ---@field images? table[]
 ---@field image_count? integer
+---@field attachments? pi.Attachment[]
 
 ---@param tab pi.TabId
 ---@param mode pi.LayoutMode
@@ -66,11 +69,13 @@ function Chat.new(tab, mode, agent)
     self._assistant_tool_only_header_rendered = false
     self._assistant_message_timestamp = nil
     self._flushed_queue_entries = {}
+    self._dequeued_queue_entries = {}
     self._replay_flushed_queue_entries = {}
     self._compaction_queue = {}
     self._active_verb = nil
     self._done_verb = nil
     self._last_turn_stop_reason = nil
+    self._inflight_prompt = nil
     self._zen = Zen.new(self._prompt)
     return self
 end
@@ -446,8 +451,13 @@ function Chat:_execute_local_command()
     if not text:match("^/[^%s]+%s*.*$") then
         return false
     end
-    if not LocalCommands.execute(text) then
+    local handled, err = LocalCommands.execute(text)
+    if not handled then
         return false
+    end
+    if err then
+        Notify.warn(err)
+        return true
     end
     self._prompt:clear_text()
     return true
@@ -495,7 +505,30 @@ function Chat:_send_compaction_entry(entry, command_type)
     if entry.images and #entry.images > 0 then
         cmd.images = entry.images
     end
-    return self._agent.send(cmd) ~= false
+    local queue_type = command_type ~= "prompt" and command_type or nil
+    if not queue_type then
+        self._inflight_prompt = {
+            text = entry.text,
+            expanded_text = entry.expanded,
+            attachments = entry.attachments,
+        }
+    end
+    local callback = function(response)
+        if response.success == false then
+            vim.schedule(function()
+                self:_restore_rejected_message(queue_type, entry.text, entry.expanded, entry.attachments)
+            end)
+        end
+    end
+    local sent = self._agent.send(cmd, callback)
+    if sent == false then
+        self:_restore_rejected_message(queue_type, entry.text, entry.expanded, entry.attachments)
+        return false
+    end
+    if not queue_type then
+        self:set_status({ type = "agent", text = "Starting…" })
+    end
+    return true
 end
 
 ---@param entry pi.PendingQueueEntry|pi.CompactionQueuedMessage
@@ -505,18 +538,70 @@ function Chat:_remember_flushed_queue_entry(entry)
         text = entry.text,
         expanded_text = entry.expanded_text or entry.expanded,
         image_count = entry.image_count,
+        attachments = entry.attachments,
     }
 end
 
 ---@param entry pi.CompactionQueuedMessage
 function Chat:_ensure_pending_compaction_entry(entry)
     self._history:remove_pending_queue_entry(entry.expanded)
-    self._history:add_pending_queue_entry(entry.mode, entry.text, entry.expanded, entry.image_count)
+    self._history:add_pending_queue_entry(entry.mode, entry.text, entry.expanded, entry.image_count, entry.attachments)
     self:_refresh_pending_queue_status()
 end
 
 function Chat:_refresh_pending_queue_status()
     self._prompt:statusline():set_pending_queue(self._history:get_pending_queue())
+end
+
+---@param queue_type "steer"|"follow_up"
+---@param text string
+---@return pi.PendingQueueEntry?
+function Chat:_remove_dequeued_queue_entry(queue_type, text)
+    for i, entry in ipairs(self._dequeued_queue_entries) do
+        if entry.queue_type == queue_type and entry.expanded_text == text then
+            return table.remove(self._dequeued_queue_entries, i)
+        end
+    end
+    return nil
+end
+
+---@param queue_type "steer"|"follow_up"
+---@param text string
+---@return pi.PendingQueueEntry?
+function Chat:_remove_pending_or_dequeued_queue_entry(queue_type, text)
+    local entry = self._history:remove_pending_queue_entry(text, queue_type)
+    if entry then
+        return entry
+    end
+    return self:_remove_dequeued_queue_entry(queue_type, text)
+end
+
+---@param queue_type "steer"|"follow_up"|nil
+---@param text string
+---@param expanded string
+---@param attachment_items pi.Attachment[]?
+function Chat:_restore_rejected_message(queue_type, text, expanded, attachment_items)
+    if queue_type then
+        local entry = self:_remove_pending_or_dequeued_queue_entry(queue_type, expanded)
+        if not entry then
+            return
+        end
+        self:_remove_flushed_queue_entry(expanded)
+        self:_remove_replay_flushed_queue_entry(expanded)
+        attachment_items = entry.attachments or attachment_items
+        self:_refresh_pending_queue_status()
+    else
+        if not self._inflight_prompt or self._inflight_prompt.expanded_text ~= expanded then
+            return
+        end
+        attachment_items = self._inflight_prompt.attachments or attachment_items
+        self._inflight_prompt = nil
+        if not self._streaming then
+            self:set_status(nil)
+        end
+    end
+    self._prompt:restore_text(text)
+    self._attachments:restore(attachment_items)
 end
 
 ---@param mode "steer"|"follow_up"
@@ -532,13 +617,17 @@ function Chat:_queue_compaction_message(mode)
     end
 
     self._prompt:clear_text()
-    local attachments = image_count > 0 and self._attachments:get() or nil
+    local attachment_items = image_count > 0 and self._attachments:snapshot() or nil
+    local attachments = attachment_items and self._attachments:get() or nil
     self._attachments:clear()
     local expanded = Mentions.expand(text)
 
     if self:_is_extension_command(text) then
         self._history:add_user_message(text, nil, attachments and #attachments or nil)
-        self:_send_compaction_entry({ text = text, expanded = expanded, mode = mode, images = attachments }, "prompt")
+        self:_send_compaction_entry(
+            { text = text, expanded = expanded, mode = mode, images = attachments, attachments = attachment_items },
+            "prompt"
+        )
         return
     end
 
@@ -548,9 +637,10 @@ function Chat:_queue_compaction_message(mode)
         mode = mode,
         images = attachments,
         image_count = attachments and #attachments or nil,
+        attachments = attachment_items,
     }
     self._compaction_queue[#self._compaction_queue + 1] = entry
-    self._history:add_pending_queue_entry(mode, text, expanded, entry.image_count)
+    self._history:add_pending_queue_entry(mode, text, expanded, entry.image_count, attachment_items)
     self:_refresh_pending_queue_status()
     Notify.info("Queued message for after compaction")
 end
@@ -605,18 +695,30 @@ function Chat:_send_message(queue_type)
 
     self._prompt:clear_text()
 
-    local attachments = self._attachments:count() > 0 and self._attachments:get() or nil
+    local attachment_items = self._attachments:count() > 0 and self._attachments:snapshot() or nil
+    local attachments = attachment_items and self._attachments:get() or nil
     self._attachments:clear()
 
     local expanded = Mentions.expand(text)
 
     if queue_type then
         -- Queued message: show in pending area, render in history on delivery
-        self._history:add_pending_queue_entry(queue_type, text, expanded, attachments and #attachments or nil)
+        self._history:add_pending_queue_entry(
+            queue_type,
+            text,
+            expanded,
+            attachments and #attachments or nil,
+            attachment_items
+        )
         self:_refresh_pending_queue_status()
     else
         -- Immediate: render in history now
         self._history:add_user_message(text, nil, attachments and #attachments or nil)
+        self._inflight_prompt = {
+            text = text,
+            expanded_text = expanded,
+            attachments = attachment_items,
+        }
     end
 
     ---@type pi.RpcCommand
@@ -632,19 +734,17 @@ function Chat:_send_message(queue_type)
         cmd.images = attachments
     end
 
-    local callback = not queue_type
-            and function(response)
-                if response.success == false then
-                    vim.schedule(function()
-                        if not self._streaming then
-                            self:set_status(nil)
-                        end
-                    end)
-                end
-            end
-        or nil
+    local callback = function(response)
+        if response.success == false then
+            vim.schedule(function()
+                self:_restore_rejected_message(queue_type, text, expanded, attachment_items)
+            end)
+        end
+    end
     local sent = self._agent.send(cmd, callback)
-    if sent ~= false and not queue_type then
+    if sent == false then
+        self:_restore_rejected_message(queue_type, text, expanded, attachment_items)
+    elseif not queue_type then
         self:set_status({ type = "agent", text = "Starting…" })
     end
 end
@@ -676,6 +776,7 @@ end
 ---@param timestamp? number
 function Chat:on_agent_start(timestamp)
     self._streaming = true
+    self._inflight_prompt = nil
     self._last_turn_stop_reason = nil
     self._assistant_block_open = false
     self._assistant_message_header_rendered = false
@@ -709,10 +810,11 @@ end
 
 ---@param entries pi.PendingQueueEntry[]
 ---@param text string
+---@param queue_type? "steer"|"follow_up"
 ---@return pi.PendingQueueEntry?
-function Chat:_remove_queue_entry(entries, text)
+function Chat:_remove_queue_entry(entries, text, queue_type)
     for i, entry in ipairs(entries) do
-        if entry.expanded_text == text then
+        if entry.expanded_text == text and (not queue_type or entry.queue_type == queue_type) then
             return table.remove(entries, i)
         end
     end
@@ -746,23 +848,10 @@ function Chat:clear_for_compaction_rebuild()
 end
 
 function Chat:on_agent_end()
-    self._streaming = false
     self._assistant_block_open = false
     self._assistant_message_header_rendered = false
     self._assistant_tool_only_header_rendered = false
     self._assistant_message_timestamp = nil
-    -- Flush any remaining pending queue entries into the history.
-    -- Normally they are moved on message_start, but if the agent ends
-    -- without delivering them (e.g. abort), render them now so they
-    -- don't silently vanish.
-    local pending_queue = self._history:get_pending_queue()
-    for _, entry in ipairs(pending_queue) do
-        self:_remember_flushed_queue_entry(entry)
-        self._history:add_user_message(entry.text, nil, entry.image_count, entry.queue_type)
-    end
-    self._history:clear_pending_queue()
-    self:_refresh_pending_queue_status()
-
     local completion_text = self._done_verb
     local force_completion = false
     if self._last_turn_stop_reason == "aborted" then
@@ -773,11 +862,25 @@ function Chat:on_agent_end()
         force_completion = true
     end
 
-    self._active_verb = nil
     self._done_verb = nil
     self._last_turn_stop_reason = nil
 
     self._history:on_agent_end(completion_text, { force_completion = force_completion })
+end
+
+--- Pi is authoritative here: retries, compaction, and queued turns are complete.
+function Chat:on_agent_settled()
+    self._streaming = false
+    self._assistant_block_open = false
+    self._assistant_message_header_rendered = false
+    self._assistant_tool_only_header_rendered = false
+    self._assistant_message_timestamp = nil
+    self._active_verb = nil
+    self._done_verb = nil
+    self._last_turn_stop_reason = nil
+    self._dequeued_queue_entries = {}
+    self._history:clear_pending_queue()
+    self:_refresh_pending_queue_status()
     self:set_status(nil)
 
     if not self:has_prompt_focus() then
@@ -785,6 +888,72 @@ function Chat:on_agent_end()
         if attention_config and attention_config.notify_on_completion then
             Attention.notify(self._tab, "Agent finished - waiting for your input", vim.log.levels.INFO)
         end
+    end
+end
+
+--- Reconcile optimistic local entries with Pi's authoritative queue snapshot.
+---@param steering string[]
+---@param follow_up string[]
+function Chat:on_queue_update(steering, follow_up)
+    local previous = self._history:get_pending_queue()
+    local next_entries = {}
+
+    local function append(queue_type, messages)
+        for _, text in ipairs(messages) do
+            local entry = self:_remove_queue_entry(previous, text, queue_type)
+            next_entries[#next_entries + 1] = entry or { queue_type = queue_type, text = text, expanded_text = text }
+        end
+    end
+
+    append("steer", steering)
+    append("follow_up", follow_up)
+    for _, entry in ipairs(previous) do
+        self._dequeued_queue_entries[#self._dequeued_queue_entries + 1] = entry
+    end
+    self._history:set_pending_queue(next_entries)
+    self:_refresh_pending_queue_status()
+end
+
+---@param code integer?
+---@param expected? boolean
+function Chat:on_process_exit(code, expected)
+    local pending = self._history:get_pending_queue()
+    vim.list_extend(pending, self._dequeued_queue_entries)
+    local restored_text = {}
+    for _, entry in ipairs(pending) do
+        restored_text[#restored_text + 1] = entry.text
+        self._attachments:restore(entry.attachments)
+    end
+    if self._inflight_prompt then
+        restored_text[#restored_text + 1] = self._inflight_prompt.text
+        self._attachments:restore(self._inflight_prompt.attachments)
+    end
+    if #restored_text > 0 then
+        self._prompt:restore_text(table.concat(restored_text, "\n\n"))
+    end
+
+    self._streaming = false
+    self._compacting = false
+    self._assistant_block_open = false
+    self._assistant_message_header_rendered = false
+    self._assistant_tool_only_header_rendered = false
+    self._assistant_message_timestamp = nil
+    self._active_verb = nil
+    self._done_verb = nil
+    self._last_turn_stop_reason = nil
+    self._inflight_prompt = nil
+    self._dequeued_queue_entries = {}
+    self._compaction_queue = {}
+    self._history:clear_pending_queue()
+    self._history:mark_pending_tools_errored("[failed] Pi process exited")
+    self:_refresh_pending_queue_status()
+    self:set_status(nil)
+
+    if not expected then
+        self:on_system_error(
+            "Pi process exited unexpectedly (code " .. tostring(code or "unknown") .. "). Run :PiStop, then reopen :Pi.",
+            { pad_top = true, pad_bottom = true }
+        )
     end
 end
 
@@ -814,7 +983,9 @@ function Chat:on_message_start(msg)
                 end
             end
         end
-        local entry = self._history:remove_pending_queue_entry(text) or self:_remove_replay_flushed_queue_entry(text)
+        local entry = self._history:remove_pending_queue_entry(text)
+            or self:_remove_queue_entry(self._dequeued_queue_entries, text)
+            or self:_remove_replay_flushed_queue_entry(text)
         self:_refresh_pending_queue_status()
         if entry then
             self._history:add_user_message(
@@ -1011,12 +1182,16 @@ function Chat:clear()
     self._assistant_tool_only_header_rendered = false
     self._assistant_message_timestamp = nil
     self._flushed_queue_entries = {}
+    self._dequeued_queue_entries = {}
     self._replay_flushed_queue_entries = {}
     self._compaction_queue = {}
     self._active_verb = nil
     self._done_verb = nil
     self._last_turn_stop_reason = nil
+    self._inflight_prompt = nil
     self._history:clear()
+    self._prompt:statusline():set_activity(nil, false)
+    self._prompt:statusline():set_pending_queue({})
     self._prompt:statusline():reset_usage()
 end
 

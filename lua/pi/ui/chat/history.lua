@@ -95,6 +95,7 @@ History.__index = History
 ---@field text string
 ---@field expanded_text string
 ---@field image_count? integer
+---@field attachments? pi.Attachment[]
 
 ---@class pi.ChatErrorOpts
 ---@field pad_top? boolean
@@ -2492,13 +2493,25 @@ end
 ---@param display_text string raw user text (for display)
 ---@param expanded_text string expanded text (for matching on delivery)
 ---@param image_count? integer
-function History:add_pending_queue_entry(queue_type, display_text, expanded_text, image_count)
+---@param attachments? pi.Attachment[]
+function History:add_pending_queue_entry(queue_type, display_text, expanded_text, image_count, attachments)
     self._pending_queue[#self._pending_queue + 1] = {
         queue_type = queue_type,
         text = display_text,
         expanded_text = expanded_text,
         image_count = image_count,
+        attachments = attachments,
     }
+    self:_update_status_extmark()
+    if self:_should_auto_scroll() then
+        self:_scroll_to_bottom()
+    end
+end
+
+--- Replace the optimistic local queue with Pi's authoritative queue snapshot.
+---@param entries pi.PendingQueueEntry[]
+function History:set_pending_queue(entries)
+    self._pending_queue = entries
     self:_update_status_extmark()
     if self:_should_auto_scroll() then
         self:_scroll_to_bottom()
@@ -2508,10 +2521,11 @@ end
 --- Remove the first pending queue entry whose expanded_text matches.
 --- Called when `message_start` arrives for a delivered steering/follow-up message.
 ---@param text string the user message text from the event
+---@param queue_type? "steer"|"follow_up"
 ---@return pi.PendingQueueEntry? entry the removed entry, or nil if not found
-function History:remove_pending_queue_entry(text)
+function History:remove_pending_queue_entry(text, queue_type)
     for i, entry in ipairs(self._pending_queue) do
-        if entry.expanded_text == text then
+        if entry.expanded_text == text and (not queue_type or entry.queue_type == queue_type) then
             table.remove(self._pending_queue, i)
             self:_update_status_extmark()
             return entry
