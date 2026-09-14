@@ -59,30 +59,18 @@ local function set_defaults()
     local agent = func
 
     if user.fg then
-        vim.api.nvim_set_hl(0, "PiUserMessageLabel", { default = true, fg = normal.bg, bg = user.fg, bold = true })
+        vim.api.nvim_set_hl(0, "PiUserMessageLabel", { default = true, fg = user.fg, bold = true })
     end
     if agent.fg then
-        vim.api.nvim_set_hl(0, "PiAgentResponseLabel", { default = true, fg = normal.bg, bg = agent.fg, bold = true })
+        vim.api.nvim_set_hl(0, "PiAgentResponseLabel", { default = true, fg = agent.fg, bold = true })
     end
-    vim.api.nvim_set_hl(0, "PiDebugLabel", { default = true, fg = normal.bg, bg = comment.fg, bold = true })
-    vim.api.nvim_set_hl(
-        0,
-        "PiStartupLabel",
-        { default = true, fg = normal.bg, bg = comment.fg, bold = true, nocombine = true }
-    )
+    vim.api.nvim_set_hl(0, "PiDebugLabel", { default = true, fg = comment.fg, bold = true })
+    vim.api.nvim_set_hl(0, "PiStartupLabel", { default = true, fg = comment.fg, bold = true, nocombine = true })
     vim.api.nvim_set_hl(0, "PiStartupHint", { default = true, fg = comment.fg, italic = true })
-    vim.api.nvim_set_hl(
-        0,
-        "PiStartupErrorLabel",
-        { default = true, fg = normal.bg, bg = diagnostic_error.fg, bold = true, nocombine = true }
-    )
+    vim.api.nvim_set_hl(0, "PiStartupErrorLabel", { default = true, fg = palette.error, bold = true, nocombine = true })
     vim.api.nvim_set_hl(0, "PiStartupDetail", { default = true, fg = comment.fg, nocombine = true })
     vim.api.nvim_set_hl(0, "PiStartupError", { default = true, fg = diagnostic_error.fg, nocombine = true })
-    vim.api.nvim_set_hl(
-        0,
-        "PiCompactionLabel",
-        { default = true, fg = normal.bg, bg = comment.fg, bold = true, nocombine = true }
-    )
+    vim.api.nvim_set_hl(0, "PiCompactionLabel", { default = true, fg = palette.command, bold = true, nocombine = true })
     vim.api.nvim_set_hl(0, "PiCompactionText", { default = true, fg = comment.fg, nocombine = true })
     vim.api.nvim_set_hl(0, "PiCompactionHint", { default = true, fg = comment.fg, italic = true, nocombine = true })
     vim.api.nvim_set_hl(0, "PiMessageDateTime", { default = true, fg = comment.fg })
@@ -118,7 +106,7 @@ local function set_defaults()
     vim.api.nvim_set_hl(0, "PiAttachmentIcon", { default = true, fg = palette.command })
 
     vim.api.nvim_set_hl(0, "PiChatHistoryWinbar", { default = true, bg = normal.bg })
-    vim.api.nvim_set_hl(0, "PiChatHistoryWinbarTitle", { default = true, fg = normal.bg, bg = user.fg, bold = true })
+    vim.api.nvim_set_hl(0, "PiChatHistoryWinbarTitle", { default = true, fg = user.fg, bg = normal.bg, bold = true })
     vim.api.nvim_set_hl(0, "PiChatPromptWinbar", { default = true, bg = normal.bg })
     vim.api.nvim_set_hl(0, "PiChatPromptWinbarTitle", { default = true, fg = comment.fg, bg = normal.bg, bold = true })
     vim.api.nvim_set_hl(
@@ -136,7 +124,7 @@ local function set_defaults()
     vim.api.nvim_set_hl(0, "PiFloat", { default = true, bg = normal.bg })
     vim.api.nvim_set_hl(0, "PiFloatBorder", { default = true, fg = comment.fg, bg = normal.bg })
     vim.api.nvim_set_hl(0, "PiDialogTitle", { default = true, fg = title.fg, bold = true })
-    vim.api.nvim_set_hl(0, "PiChatHistoryFloatTitle", { default = true, fg = normal.bg, bg = user.fg })
+    vim.api.nvim_set_hl(0, "PiChatHistoryFloatTitle", { default = true, fg = user.fg, bg = normal.bg })
     vim.api.nvim_set_hl(0, "PiChatPromptFloatTitle", { default = true, fg = comment.fg, bg = normal.bg })
     vim.api.nvim_set_hl(
         0,

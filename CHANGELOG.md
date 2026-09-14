@@ -19,6 +19,7 @@
 - **FIXED:** Reject multiline local slash actions without discarding the remaining prompt text.
 - **CHANGED:** Require Pi 0.80.4 or newer for the authoritative `agent_settled` lifecycle event; validated through Pi 0.85.1.
 - **CHANGED:** Derive semantic foreground and icon colors from the active colorscheme, with Pi's light/dark colors as fallbacks, while preserving the existing Neovim chat background.
+- **CHANGED:** Render message, startup, compaction, and panel-title glyphs with foreground color instead of badge-like colored cells.
 - **CHANGED:** Keep the animated agent verb in chat history only; the prompt statusline now shows controls and queued-message counts without repeating it.
 - **FIXED:** Apply highlight defaults immediately when pi.nvim is lazy-loaded and start Markdown Tree-sitter highlighting for chat history buffers.
 
