@@ -280,10 +280,12 @@ require("pi").setup({
         -- Entries are built-in component names, literal separators,
         -- or custom component functions.
         layout = {
-            left = { "context", "  ", "attention" },
-            right = { "model", "   ", "thinking" },
+            left = { "activity", "  ", "context", "  ", "attention" },
+            right = { "controls", "   ", "model", "   ", "thinking" },
         },
         components = {
+            activity = { icon = false },
+            controls = { icon = false },
             tokens = { icon = "" },
             cache = { icon = "󰆼" },
             cost = { icon = "" },
@@ -546,13 +548,14 @@ Each panel has a winbar with a title controlled by `panels.<panel>.title` (a str
 
 The prompt buffer (`pi-chat-prompt`) is a regular multi-line buffer where you compose the next message. It clears itself after each submission, but its contents are preserved across `:PiToggleChat`, layout toggles, and tab switches — the buffer lives with the session.
 
-Three buffer-local mappings control submission:
+Four buffer-local mappings control the active conversation:
 
 | Key | Mode | Action |
 | --- | --- | --- |
 | `<CR>` | normal, insert | Submit the prompt |
 | `<A-CR>` | normal, insert | Submit as a follow-up |
 | `<S-CR>` | insert | Insert a newline |
+| `<C-c>` | normal, insert | Abort the active turn and keep the session |
 
 > [!NOTE]
 > These keys are currently hardcoded. If you'd like them to be configurable, please open an issue.
@@ -565,6 +568,8 @@ When the agent is **streaming**, the two diverge. Both options queue your messag
 - `<A-CR>` sends a **follow-up**. The message waits until the agent has fully finished the current turn (no more tool calls, no pending steers) and is then delivered as the next message. Use it when you want to add something for the agent to address _after_ it's done with the current work, without interrupting the flow.
 
 Both queued messages are rendered in the history with distinct labels (`labels.steer_message` and `labels.follow_up_message`) so you can tell them apart later.
+
+While the agent is running, the prompt statusline keeps the available controls visible: `<CR>` steers, `<A-CR>` queues a follow-up, and `<C-c>` aborts the active turn without closing the chat or discarding the session.
 
 ### Mentions
 
@@ -601,13 +606,25 @@ While typing, `@mentions` are highlighted in the prompt buffer so you can see at
 
 ### Slash commands
 
-Slash commands come from the **pi backend**, not from pi.nvim. They cover three sources:
+Slash completion combines Pi's RPC command list with a small set of Neovim-native harness actions. Backend commands cover three sources:
 
 - **Extension commands** — registered by pi extensions (e.g. `/permission-toggle-auto-accept`).
 - **Prompt templates** — reusable prompt snippets, expanded server-side before being sent to the LLM.
 - **Skills** — invoked as `/skill:name`, also expanded server-side.
 
-pi.nvim fetches the available command list from the running session over RPC and refreshes it periodically, so the set of `/commands` you can use depends on which extensions, templates, and skills the backend has loaded for the current session.
+pi.nvim fetches the backend command list from the running session over RPC and refreshes it periodically, so those `/commands` depend on which extensions, templates, and skills the backend has loaded for the current session.
+
+The following harness actions run directly in Neovim and mirror their Pi TUI counterparts where the RPC API supports them:
+
+| Command | Action |
+| --- | --- |
+| `/abort` | Abort the active agent turn |
+| `/clear`, `/new` | Start a fresh session; the previous conversation remains resumable |
+| `/compact [instructions]` | Compact conversation context |
+| `/model` | Open the model picker |
+| `/name [name]` | Set or show the session name |
+| `/resume` | Open the session picker |
+| `/thinking` | Open the thinking-level picker |
 
 To invoke a command, type it on the **first line** of the prompt:
 
@@ -621,11 +638,11 @@ Arguments, if the command takes any, follow on the same line:
 /some-command arg1 arg2
 ```
 
-Only the first line is recognized as a command — everything else in the same message is treated as plain prompt text. This is a [pi backend convention](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md#get_commands), not a pi.nvim restriction. If you want a command and a regular prompt to take effect together, send them as two separate messages.
+Only the first line is recognized as a command — everything else in the same message is treated as plain prompt text. Backend commands follow this [Pi RPC convention](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md#get_commands). If you want a command and a regular prompt to take effect together, send them as two separate messages.
 
 That said, this only applies to the explicit `/command` invocation path. Skills in particular are surfaced to the model as part of the system context: per the [Agent Skills spec](https://agentskills.io/specification), each skill's `name` and `description` are loaded at startup for _all_ available skills ("progressive disclosure"), and the full `SKILL.md` body is only loaded once the model decides to activate that skill. As a result, most models will pick up the right skill even when you _mention_ it inline ("please use the `commit` skill to write the message"), without you having to invoke `/skill:commit` explicitly. How reliably this works depends on the model and on how much other context it's juggling, so for anything load-bearing it's still safer to invoke the command explicitly on the first line.
 
-While typing, the prompt buffer highlights `/commands` in real time, but **only if the command name actually matches one in the backend's command list**. If you don't see the highlight, either the command doesn't exist, you have a typo, or the cache hasn't been populated yet (it's fetched the first time the chat opens and refreshed every 30 seconds).
+While typing, the prompt buffer highlights `/commands` in real time, but **only if the command name actually matches an available command**. The native harness actions are available immediately; backend commands appear after the running session's command list is fetched.
 
 You can also invoke a command programmatically from Lua, without going through the prompt buffer:
 
@@ -652,7 +669,7 @@ Note that `pi.invoke` requires an active session — if no chat is running for t
 
 ### Completion
 
-The π prompt buffer ships with completion for both `@mentions` and `/commands` out of the box. Two integrations are provided:
+The π prompt buffer ships with completion for both `@mentions` and `/commands` out of the box. Three integrations are provided:
 
 **1. Built-in `completefunc` (always on).** Every π prompt buffer has a `completefunc` set, so completion works without any extra configuration. If you don't use a completion plugin, trigger it manually in insert mode with:
 
@@ -667,7 +684,18 @@ This is the default Vim user-defined completion key. It will:
 
 The completion popup shows source metadata for `/commands` (`extension`, `prompt`, `skill`) and the command description when available.
 
-**2. `blink.cmp` source (optional).** If you use [blink.cmp](https://github.com/Saghen/blink.cmp), pi.nvim ships a source at `pi.completion.blink` that integrates natively with the blink popup, including auto-trigger on `@`, `/`, and `.`. Scope it to the π prompt filetype with `per_filetype` so it doesn't interfere with completion in your regular files:
+**2. `nvim-cmp` source (optional).** If you use [nvim-cmp](https://github.com/hrsh7th/nvim-cmp), register the source at `pi.completion.cmp` and scope it to the π prompt filetype. Typing `@` opens project file completion; typing `/` at the beginning of the first prompt line opens commands, skills, prompts, and extensions:
+
+```lua
+local cmp = require("cmp")
+
+cmp.register_source("pi", require("pi.completion.cmp").new())
+cmp.setup.filetype("pi-chat-prompt", {
+    sources = { { name = "pi" } },
+})
+```
+
+**3. `blink.cmp` source (optional).** If you use [blink.cmp](https://github.com/Saghen/blink.cmp), pi.nvim ships a source at `pi.completion.blink` that integrates natively with the blink popup, including auto-trigger on `@`, `/`, and `.`. Scope it to the π prompt filetype with `per_filetype` so it doesn't interfere with completion in your regular files:
 
 ```lua
 require("blink.cmp").setup({
@@ -682,7 +710,7 @@ require("blink.cmp").setup({
 })
 ```
 
-Other completion plugins (nvim-cmp, etc.) aren't shipped as first-class sources, but they can usually bridge the built-in `completefunc` via their `omni`/`completefunc` source adapters. If you'd like a native source for another plugin, please open an issue.
+Other completion plugins can usually bridge the built-in `completefunc` via their `omni`/`completefunc` source adapters.
 
 #### Adapting non-upstream RPC backends
 
@@ -846,6 +874,8 @@ require("pi").setup({
 
 | Name | Example output | When it's visible |
 | --- | --- | --- |
+| `activity` | `Working…` | The agent is starting or running, or context is compacting |
+| `controls` | `/ commands · @ files` or `<CR> steer · <A-CR> queue · <C-c> abort` | Always; its hints change with agent activity |
 | `tokens` | `↑3.8k ↓58k` | Total input/output tokens used this session |
 | `cache` | `R7.2M W416k` | Total prompt-cache read/write |
 | `cost` | `$7.665` | Session cost is greater than zero |
@@ -865,6 +895,8 @@ Per-component options live under `statusline.components.<name>`:
 statusline = {
     components = {
         -- Every built-in takes an `icon` prefix. Set to `false` to disable.
+        activity = { icon = false },
+        controls = { icon = false },
         compaction = { icon = false },
         model = { icon = "󰚩" },
 
@@ -1529,6 +1561,7 @@ And mid-session management:
 | Command | Lua | What it does |
 | --- | --- | --- |
 | `:PiNewSession` | `pi.new_session()` | Discard the current session in this tab and start a fresh one. Extensions can cancel this via the `session_before_switch` hook (e.g. to warn about unsaved draft state). |
+| `:PiClear` | `pi.new_session()` | Clear the chat by starting a fresh session. The previous conversation remains available through `:PiResume`. |
 | `:PiSessionName [name]` | `pi.set_session_name(name?)` | Set a human-readable display name for the current session. Without an argument, opens a dialog to type one. Without any argument and via the API, returns the current name. Names appear in the `:PiResume` picker so you can identify long-running conversations at a glance. |
 | `:PiStop` | `pi.stop()` | Tear down the current session entirely, killing the backing `pi --mode rpc` process. Different from `:PiToggleChat`, which just hides the windows while the session keeps running. |
 
@@ -1926,6 +1959,8 @@ All highlight groups are defined with `default = true`, so they can be overridde
 | Group | Role |
 | --- | --- |
 | `PiStatusLine` | Default highlight for statusline chunks |
+| `PiStatusLineActivity` | Active agent status in the prompt statusline |
+| `PiStatusLineKey` | Active prompt key hints in the prompt statusline |
 | `PiStatusLineAttention` | Attention component highlight |
 | `PiStatusLineWarning` | `warn`-threshold highlight for `context` / `cost` components |
 | `PiStatusLineError` | `error`-threshold highlight for `context` / `cost` components |

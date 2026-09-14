@@ -116,6 +116,8 @@ local function set_defaults()
     vim.api.nvim_set_hl(0, "PiDiffReviewNote", { default = true, fg = warning.fg, italic = true })
 
     vim.api.nvim_set_hl(0, "PiStatusLine", { default = true, fg = comment.fg })
+    vim.api.nvim_set_hl(0, "PiStatusLineActivity", { default = true, fg = agent.fg, bold = true })
+    vim.api.nvim_set_hl(0, "PiStatusLineKey", { default = true, fg = normal.fg, bold = true })
     vim.api.nvim_set_hl(0, "PiStatusLineAttention", { default = true, fg = warning.fg, bold = true })
     vim.api.nvim_set_hl(0, "PiStatusLineWarning", { default = true, fg = warning.fg })
     vim.api.nvim_set_hl(0, "PiStatusLineError", { default = true, fg = diagnostic_error.fg })

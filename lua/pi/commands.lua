@@ -72,6 +72,10 @@ function M.setup()
         Pi.new_session()
     end, { desc = "Start new π session" })
 
+    vim.api.nvim_create_user_command("PiClear", function()
+        Pi.new_session()
+    end, { desc = "Clear chat and start a fresh π session" })
+
     vim.api.nvim_create_user_command("PiToggleThinking", function()
         Pi.toggle_thinking()
     end, { desc = "Toggle π thinking visibility" })

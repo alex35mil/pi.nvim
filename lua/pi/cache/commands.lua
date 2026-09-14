@@ -10,13 +10,15 @@
 ---@class pi.SlashCommand
 ---@field name string command name (invoke with /name)
 ---@field description? string human-readable description
----@field source "extension"|"prompt"|"skill"
+---@field source "extension"|"prompt"|"skill"|"pi.nvim"
 ---@field sourceInfo? pi.SourceInfo structured source metadata from pi RPC
 
 local M = {}
 
 ---@type pi.SlashCommand[]
-local cache = {}
+local LocalCommands = require("pi.local_commands")
+
+local cache = LocalCommands.list()
 
 ---@type boolean
 local fetched = false
@@ -29,7 +31,16 @@ local REFETCH_INTERVAL_NS = 30e9 -- 30 seconds
 --- Replace the cached command list.
 ---@param commands pi.SlashCommand[]
 function M.set(commands)
-    cache = commands
+    cache = LocalCommands.list()
+    local reserved = {}
+    for _, command in ipairs(cache) do
+        reserved[command.name] = true
+    end
+    for _, command in ipairs(commands) do
+        if not reserved[command.name] then
+            cache[#cache + 1] = command
+        end
+    end
     fetched = true
 end
 
@@ -47,7 +58,7 @@ end
 
 --- Clear the cache so the next access triggers a fresh fetch.
 function M.invalidate()
-    cache = {}
+    cache = LocalCommands.list()
     fetched = false
 end
 

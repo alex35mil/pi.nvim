@@ -1,7 +1,7 @@
 --- Chat UI orchestration — layout, window management, and wiring.
 
 ---@class pi.ChatAgent
----@field send fun(msg: pi.RpcCommand): boolean?
+---@field send fun(msg: pi.RpcCommand, callback?: fun(response: pi.RpcEvent)): boolean?
 
 ---@class pi.Chat
 ---@field _tab pi.TabId
@@ -30,6 +30,7 @@ Chat.__index = Chat
 local Config = require("pi.config")
 local Notify = require("pi.notify")
 local CommandsCache = require("pi.cache.commands")
+local LocalCommands = require("pi.local_commands")
 local Layout = require("pi.ui.chat.layout")
 local Attention = require("pi.attention")
 local History = require("pi.ui.chat.history")
@@ -175,6 +176,11 @@ function Chat:_set_keymaps()
     vim.keymap.set("i", "<A-CR>", function()
         self:submit_follow_up()
     end, { buffer = pbuf, desc = "Submit π follow-up" })
+
+    vim.keymap.set({ "n", "i" }, "<C-c>", "<Cmd>PiAbort<CR>", {
+        buffer = pbuf,
+        desc = "Abort current π operation",
+    })
 
     -- New line
     -- TODO?: Should be configurable?
@@ -411,6 +417,9 @@ end
 
 --- Submit the prompt. When streaming, sends as a steer (interrupt); otherwise regular prompt.
 function Chat:submit()
+    if self:_execute_local_command() then
+        return
+    end
     if self._compacting then
         self:_queue_compaction_message("steer")
         return
@@ -421,11 +430,27 @@ end
 --- Submit the prompt as a follow-up. When streaming, queued until agent finishes;
 --- otherwise sends as a regular prompt.
 function Chat:submit_follow_up()
+    if self:_execute_local_command() then
+        return
+    end
     if self._compacting then
         self:_queue_compaction_message("follow_up")
         return
     end
     self:_send_message(self._streaming and "follow_up" or nil)
+end
+
+---@return boolean handled
+function Chat:_execute_local_command()
+    local text = self._prompt:text()
+    if not text:match("^/[^%s]+%s*.*$") then
+        return false
+    end
+    if not LocalCommands.execute(text) then
+        return false
+    end
+    self._prompt:clear_text()
+    return true
 end
 
 ---@return boolean
@@ -599,7 +624,21 @@ function Chat:_send_message(queue_type)
         cmd.images = attachments
     end
 
-    self._agent.send(cmd)
+    local callback = not queue_type
+            and function(response)
+                if response.success == false then
+                    vim.schedule(function()
+                        if not self._streaming then
+                            self:set_status(nil)
+                        end
+                    end)
+                end
+            end
+        or nil
+    local sent = self._agent.send(cmd, callback)
+    if sent ~= false and not queue_type then
+        self:set_status({ type = "agent", text = "Starting…" })
+    end
 end
 
 ---@return string?
@@ -610,6 +649,8 @@ end
 ---@param status pi.Status?
 function Chat:set_status(status)
     self._history:set_status(status)
+    local text = status and (status.type == "compaction" and "Compacting…" or status.text) or nil
+    self._prompt:statusline():set_activity(text, status ~= nil and status.type == "agent" and self._streaming)
 end
 
 ---@param msg string

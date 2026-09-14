@@ -90,6 +90,8 @@
 ---@alias pi.StatusLineItem string|pi.StatusLineComponentFn
 
 ---@alias pi.StatusLineBuiltinName
+---| "activity"
+---| "controls"
 ---| "tokens"
 ---| "cache"
 ---| "cost"
@@ -121,6 +123,8 @@
 ---@field counter? boolean Show the pending attention count next to the icon.
 
 ---@class pi.StatusLineComponents
+---@field activity? pi.StatusLineComponentConfig
+---@field controls? pi.StatusLineComponentConfig
 ---@field tokens? pi.StatusLineComponentConfig
 ---@field cache? pi.StatusLineComponentConfig
 ---@field cost? pi.StatusLineCostConfig
@@ -269,10 +273,12 @@ local defaults = {
     },
     statusline = {
         layout = {
-            left = { "context", "  ", "attention" },
-            right = { "model", "   ", "thinking" },
+            left = { "activity", "  ", "context", "  ", "attention" },
+            right = { "controls", "   ", "model", "   ", "thinking" },
         },
         components = {
+            activity = { icon = false },
+            controls = { icon = false },
             tokens = { icon = "" },
             cache = { icon = "󰆼" },
             cost = { icon = "" },

@@ -401,8 +401,8 @@ function M.get_or_create(opts)
 
     ---@type pi.ChatAgent
     local agent = {
-        send = function(msg)
-            return rpc:send(msg)
+        send = function(msg, callback)
+            return rpc:send(msg, callback)
         end,
     }
 

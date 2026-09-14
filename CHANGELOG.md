@@ -4,6 +4,15 @@
 
 - **FIXED:** Validate diff reviews against disk content, reject ambiguous or unchanged edits, preserve line endings and empty files, and keep the review open when writing fails.
 
+## 2026-09-14
+
+- **ADDED:** Keep agent activity and steering, follow-up, and abort hints visible in the prompt statusline.
+- **ADDED:** Bind `<C-c>` in the prompt to abort the active turn while preserving the session.
+- **ADDED:** Add `:PiClear`, `/clear`, and Neovim-native slash actions for common Pi TUI workflows.
+- **ADDED:** Add native `nvim-cmp` completion for `@` file mentions and `/` commands.
+- **FIXED:** Show `Starting…` immediately after submitting a prompt instead of waiting for the first agent event.
+- **FIXED:** Clear the immediate activity state when Pi rejects a prompt before the agent starts.
+
 ## 2026-07-08
 
 - **FIXED:** Show the assistant header before tool-only turns so tool calls do not appear under the user message.

@@ -9,6 +9,8 @@
 ---@alias pi.StatusLineComponentFn fun(state: pi.StatusLineState): string|string[][]|nil, string|nil
 
 ---@class pi.StatusLineState
+---@field activity string?
+---@field can_steer boolean
 ---@field model_id string?
 ---@field model_context_window integer?
 ---@field model_reasoning boolean
@@ -108,6 +110,39 @@ end
 
 ---@type table<string, pi.StatusLineComponentFn>
 local builtin = {}
+
+--- Working…
+function builtin.activity(state)
+    if not state.activity then
+        return nil
+    end
+    return state.activity, "PiStatusLineActivity"
+end
+
+--- Context-sensitive prompt controls and discovery hints.
+function builtin.controls(state)
+    if state.can_steer then
+        return {
+            { "<CR>", "PiStatusLineKey" },
+            { " steer · ", "PiStatusLine" },
+            { "<A-CR>", "PiStatusLineKey" },
+            { " queue · ", "PiStatusLine" },
+            { "<C-c>", "PiStatusLineKey" },
+            { " abort", "PiStatusLine" },
+        }
+    elseif state.activity then
+        return {
+            { "<C-c>", "PiStatusLineKey" },
+            { " abort", "PiStatusLine" },
+        }
+    end
+    return {
+        { "/", "PiStatusLineKey" },
+        { " commands · ", "PiStatusLine" },
+        { "@", "PiStatusLineKey" },
+        { " files", "PiStatusLine" },
+    }
+end
 
 --- ↑3.8k ↓58k
 function builtin.tokens(state)
@@ -229,6 +264,8 @@ end
 ---@return pi.StatusLineState
 local function new_state()
     return {
+        activity = nil,
+        can_steer = false,
         model_id = nil,
         model_context_window = nil,
         model_reasoning = false,
@@ -258,6 +295,15 @@ function StatusLine.new(buf, tab, win_fn)
     self._state = new_state()
     self:render()
     return self
+end
+
+--- Set or clear the current agent activity and prompt action hints.
+---@param text string?
+---@param can_steer boolean?
+function StatusLine:set_activity(text, can_steer)
+    self._state.activity = text
+    self._state.can_steer = can_steer == true
+    self:render()
 end
 
 --- Number of virt_lines currently rendered (padding + status).
