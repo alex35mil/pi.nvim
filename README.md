@@ -1963,6 +1963,7 @@ All highlight groups are defined with `default = true`, so they can be overridde
 | Group | Role |
 | --- | --- |
 | `PiStatusLine` | Default highlight for statusline chunks |
+| `PiBotIcon` | Agent and model bot glyph |
 | `PiStatusLineIcon` | Icons prefixed to statusline components |
 | `PiStatusLineActivity` | Active agent status in the prompt statusline |
 | `PiStatusLineKey` | Active prompt key hints in the prompt statusline |

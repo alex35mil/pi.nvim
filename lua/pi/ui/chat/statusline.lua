@@ -104,7 +104,7 @@ local function prepend_icon(name, chunks)
         return chunks
     end
     local first = chunks[1]
-    local icon_hl = first[2] or "PiStatusLineIcon"
+    local icon_hl = first[2] or (name == "model" and "PiBotIcon" or "PiStatusLineIcon")
     if first[1] == "" then
         chunks[1] = { icon, icon_hl }
     else

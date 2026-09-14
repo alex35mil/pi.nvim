@@ -58,11 +58,12 @@ local function set_defaults()
     local user = title
     local agent = func
 
+    vim.api.nvim_set_hl(0, "PiBotIcon", { default = true, fg = palette.warning, bold = true })
     if user.fg then
         vim.api.nvim_set_hl(0, "PiUserMessageLabel", { default = true, fg = user.fg, bold = true })
     end
     if agent.fg then
-        vim.api.nvim_set_hl(0, "PiAgentResponseLabel", { default = true, fg = agent.fg, bold = true })
+        vim.api.nvim_set_hl(0, "PiAgentResponseLabel", { default = true, link = "PiBotIcon" })
     end
     vim.api.nvim_set_hl(0, "PiDebugLabel", { default = true, fg = comment.fg, bold = true })
     vim.api.nvim_set_hl(0, "PiStartupLabel", { default = true, fg = comment.fg, bold = true, nocombine = true })
