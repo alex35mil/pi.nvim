@@ -1857,7 +1857,7 @@ pi.toggle_debug()             -- toggle RPC debug logging for the current Neovim
 
 ## Highlight groups
 
-All highlight groups are defined with `default = true`, so they can be overridden by your colorscheme or by a later `vim.api.nvim_set_hl` call. pi.nvim selects light or dark semantic foreground colors from Pi's built-in themes, while retaining the active Neovim background and using base colorscheme groups where appropriate. Markdown highlighting is started explicitly for chat history buffers, so headings, code, links, lists, and quoted text use your colorscheme's Tree-sitter captures even when pi.nvim is lazy-loaded. Run `:hi PiGroupName` at any time to see the current value.
+All highlight groups are defined with `default = true`, so they can be overridden by your colorscheme or by a later `vim.api.nvim_set_hl` call. pi.nvim derives semantic foregrounds from standard colorscheme groups (`Title`, `Function`, `String`, `Keyword`, `Comment`, `WarningMsg`, and `DiagnosticError`) with Pi's light/dark theme colors as fallbacks. Chat and panel backgrounds remain colorscheme-derived. Markdown highlighting is started explicitly for chat history buffers, so headings, code, links, lists, and quoted text use your colorscheme's Tree-sitter captures even when pi.nvim is lazy-loaded. Run `:hi PiGroupName` at any time to see the current value.
 
 ### Chat history
 

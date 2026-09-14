@@ -9,6 +9,7 @@ local palettes = {
         warning = 0xFFFF00,
         muted = 0x808080,
         thinking = 0x808080,
+        command = 0x9575CD,
     },
     light = {
         accent = 0x5A8080,
@@ -18,6 +19,7 @@ local palettes = {
         warning = 0x9A7326,
         muted = 0x6C6C6C,
         thinking = 0x6C6C6C,
+        command = 0x7E57C2,
     },
 }
 
@@ -30,15 +32,31 @@ M.CHAT_ATTACHMENTS_WINHIGHLIGHT = "NormalFloat:PiFloat,FloatBorder:PiFloatBorder
 M.DIFF_WINHIGHLIGHT = "WinBar:PiDiffWinbar,WinBarNC:PiDiffWinbar"
 
 local function set_defaults()
-    local palette = palettes[vim.o.background == "light" and "light" or "dark"]
+    local fallback = palettes[vim.o.background == "light" and "light" or "dark"]
     local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
     local title = vim.api.nvim_get_hl(0, { name = "Title", link = false })
+    local func = vim.api.nvim_get_hl(0, { name = "Function", link = false })
+    local string_hl = vim.api.nvim_get_hl(0, { name = "String", link = false })
+    local keyword_hl = vim.api.nvim_get_hl(0, { name = "Keyword", link = false })
     local comment = vim.api.nvim_get_hl(0, { name = "Comment", link = false })
     local warning = vim.api.nvim_get_hl(0, { name = "WarningMsg", link = false })
     local diagnostic_error = vim.api.nvim_get_hl(0, { name = "DiagnosticError", link = false })
 
-    local user = { fg = palette.accent }
-    local agent = { fg = palette.border }
+    local palette = {
+        accent = title.fg or fallback.accent,
+        border = func.fg or fallback.border,
+        success = string_hl.fg or fallback.success,
+        error = diagnostic_error.fg or fallback.error,
+        warning = warning.fg or fallback.warning,
+        muted = comment.fg or fallback.muted,
+        thinking = comment.fg or fallback.thinking,
+        command = keyword_hl.fg or fallback.command,
+    }
+
+    -- These groups provide existing badge and winbar backgrounds. Keep them
+    -- colorscheme-derived; the semantic palette is for text and glyphs only.
+    local user = title
+    local agent = func
 
     if user.fg then
         vim.api.nvim_set_hl(0, "PiUserMessageLabel", { default = true, fg = normal.bg, bg = user.fg, bold = true })
@@ -68,13 +86,13 @@ local function set_defaults()
     vim.api.nvim_set_hl(0, "PiCompactionText", { default = true, fg = comment.fg, nocombine = true })
     vim.api.nvim_set_hl(0, "PiCompactionHint", { default = true, fg = comment.fg, italic = true, nocombine = true })
     vim.api.nvim_set_hl(0, "PiMessageDateTime", { default = true, fg = comment.fg })
-    vim.api.nvim_set_hl(0, "PiMessageQueueTag", { default = true, fg = palette.accent, italic = true })
-    vim.api.nvim_set_hl(0, "PiPendingQueueLabel", { default = true, fg = palette.accent, bold = true })
+    vim.api.nvim_set_hl(0, "PiMessageQueueTag", { default = true, fg = palette.warning, italic = true })
+    vim.api.nvim_set_hl(0, "PiPendingQueueLabel", { default = true, fg = palette.warning, bold = true })
     vim.api.nvim_set_hl(0, "PiPendingQueueText", { default = true, fg = comment.fg, italic = true })
     vim.api.nvim_set_hl(0, "PiMessageAttachments", { default = true, fg = comment.fg, italic = true })
     vim.api.nvim_set_hl(0, "PiThinking", { default = true, fg = palette.thinking, italic = true })
     vim.api.nvim_set_hl(0, "PiToolBorder", { default = true, fg = palette.border })
-    vim.api.nvim_set_hl(0, "PiToolIcon", { default = true, fg = palette.accent })
+    vim.api.nvim_set_hl(0, "PiToolIcon", { default = true, fg = palette.warning })
     vim.api.nvim_set_hl(0, "PiToolSuccessIcon", { default = true, fg = palette.success })
     vim.api.nvim_set_hl(0, "PiToolHeader", { default = true, fg = palette.accent, bold = true })
     vim.api.nvim_set_hl(0, "PiToolCall", { default = true, fg = palette.border })
@@ -95,9 +113,9 @@ local function set_defaults()
     vim.api.nvim_set_hl(0, "PiBusy", { default = true, fg = palette.accent, bold = true })
     vim.api.nvim_set_hl(0, "PiBusyTime", { default = true, fg = comment.fg })
     vim.api.nvim_set_hl(0, "PiMention", { default = true, fg = palette.border, underline = true })
-    vim.api.nvim_set_hl(0, "PiCommand", { default = true, fg = palette.accent, bold = true })
+    vim.api.nvim_set_hl(0, "PiCommand", { default = true, fg = palette.command, bold = true })
     vim.api.nvim_set_hl(0, "PiAttachmentFilename", { default = true, fg = normal.fg })
-    vim.api.nvim_set_hl(0, "PiAttachmentIcon", { default = true, fg = palette.accent })
+    vim.api.nvim_set_hl(0, "PiAttachmentIcon", { default = true, fg = palette.command })
 
     vim.api.nvim_set_hl(0, "PiChatHistoryWinbar", { default = true, bg = normal.bg })
     vim.api.nvim_set_hl(0, "PiChatHistoryWinbarTitle", { default = true, fg = normal.bg, bg = user.fg, bold = true })
@@ -139,8 +157,8 @@ local function set_defaults()
     vim.api.nvim_set_hl(0, "PiDiffReviewNote", { default = true, fg = warning.fg, italic = true })
 
     vim.api.nvim_set_hl(0, "PiStatusLine", { default = true, fg = comment.fg })
-    vim.api.nvim_set_hl(0, "PiStatusLineIcon", { default = true, fg = palette.accent })
-    vim.api.nvim_set_hl(0, "PiStatusLineActivity", { default = true, fg = palette.accent, bold = true })
+    vim.api.nvim_set_hl(0, "PiStatusLineIcon", { default = true, fg = palette.border })
+    vim.api.nvim_set_hl(0, "PiStatusLineActivity", { default = true, fg = palette.warning, bold = true })
     vim.api.nvim_set_hl(0, "PiStatusLineKey", { default = true, fg = palette.accent, bold = true })
     vim.api.nvim_set_hl(0, "PiStatusLineAttention", { default = true, fg = warning.fg, bold = true })
     vim.api.nvim_set_hl(0, "PiStatusLineWarning", { default = true, fg = warning.fg })
