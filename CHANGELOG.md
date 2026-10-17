@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-17
+
+- **FIXED:** Validate diff reviews against disk content, reject ambiguous or unchanged edits, preserve line endings and empty files, and keep the review open when writing fails.
+
 ## 2026-07-08
 
 - **FIXED:** Show the assistant header before tool-only turns so tool calls do not appear under the user message.

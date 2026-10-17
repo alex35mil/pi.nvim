@@ -973,6 +973,8 @@ Like the focus functions, all scroll functions are no-ops when no session is act
 
 When an `edit` or `write` tool is about to run, pi.nvim can intercept it and open a two-way diff in a new tab so you can inspect, tweak, and accept or reject the change _before_ it lands on disk. This is the main review surface for agent-driven refactoring.
 
+If review is rejected because a loaded buffer has unsaved changes or differs from disk, save it or reload it with `:checktime`, then retry.
+
 Once the diff is open:
 
 - **Left pane** — the current file content, opened read-only.

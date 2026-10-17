@@ -54,39 +54,129 @@ local function refresh_diff_windows(left_win, right_win)
     end
 end
 
----@param path string
----@return string[]
-local function read_file(path)
-    local f = io.open(path, "r")
-    if not f then
-        return {}
+---@param text string
+---@return string
+local function normalize_to_lf(text)
+    return (text:gsub("\r\n", "\n"):gsub("\r", "\n"))
+end
+
+---@param text string
+---@return string
+local function normalize_for_edit_match(text)
+    local normalized = normalize_to_lf(text)
+    for _, quote in ipairs({ "‘", "’", "‚", "‛" }) do
+        normalized = normalized:gsub(quote, "'")
     end
-    local content = f:read("*a")
-    f:close()
-    return vim.split(content, "\n", { plain = true })
+    for _, quote in ipairs({ "“", "”", "„", "‟" }) do
+        normalized = normalized:gsub(quote, '"')
+    end
+    for _, dash in ipairs({ "‐", "‑", "‒", "–", "—", "―", "−" }) do
+        normalized = normalized:gsub(dash, "-")
+    end
+    for _, space in ipairs({ " ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " ", "　" }) do
+        normalized = normalized:gsub(space, " ")
+    end
+    local lines = vim.split(normalized, "\n", { plain = true })
+    for i, line in ipairs(lines) do
+        lines[i] = line:gsub("%s+$", "")
+    end
+    return table.concat(lines, "\n")
+end
+
+---@param content string
+---@param needle string
+---@return integer
+local function count_occurrences(content, needle)
+    if needle == "" then
+        return 0
+    end
+    local count = 0
+    local search_from = 1
+    while true do
+        local s, e = content:find(needle, search_from, true)
+        if not s then
+            break
+        end
+        count = count + 1
+        search_from = e + 1
+    end
+    return count
+end
+
+---@param content string
+---@return string
+local function detect_line_ending(content)
+    if content:find("\r\n", 1, true) then
+        return "\r\n"
+    end
+    return "\n"
 end
 
 ---@param path string
+---@return string?
+---@return string?
+local function read_file_content(path)
+    local f, err = io.open(path, "r")
+    if not f then
+        return nil, err
+    end
+    local content, read_err = f:read("*a")
+    f:close()
+    if not content then
+        return nil, read_err
+    end
+    return content, nil
+end
+
+---@class pi.WriteOptions
+---@field line_ending? string
+
+---@param path string
 ---@param lines string[]
+---@param write_opts? pi.WriteOptions
 ---@return boolean
-local function write_file(path, lines)
+local function write_file(path, lines, write_opts)
+    write_opts = write_opts or {}
     local dir = vim.fn.fnamemodify(path, ":h")
     vim.fn.mkdir(dir, "p")
+    local content = table.concat(lines, "\n")
+    if write_opts.line_ending == "\r\n" then
+        content = content:gsub("\n", "\r\n")
+    end
     local f = io.open(path, "w")
     if not f then
         Notify.error("Failed to write: " .. path)
         return false
     end
-    f:write(table.concat(lines, "\n"))
-    f:close()
+    local ok, err = f:write(content)
+    if not ok then
+        f:close()
+        Notify.error("Failed to write: " .. path .. ": " .. tostring(err))
+        return false
+    end
+    ok, err = f:close()
+    if not ok then
+        Notify.error("Failed to close: " .. path .. ": " .. tostring(err))
+        return false
+    end
     return true
+end
+
+---@param path string?
+---@return string?
+local function abs(path)
+    if not path then
+        return nil
+    end
+    return vim.fn.resolve(vim.fn.fnamemodify(path, ":p"))
 end
 
 ---@param abs_path string
 local function reload_buf_for_file(abs_path)
+    local target = abs(abs_path)
     for _, b in ipairs(vim.api.nvim_list_bufs()) do
         if vim.api.nvim_buf_is_loaded(b) then
-            if vim.api.nvim_buf_get_name(b) == abs_path then
+            if abs(vim.api.nvim_buf_get_name(b)) == target then
                 vim.api.nvim_buf_call(b, function()
                     vim.cmd("edit!")
                 end)
@@ -101,18 +191,6 @@ local function wipe_stale_buf(name)
     if existing ~= -1 then
         vim.api.nvim_buf_delete(existing, { force = true })
     end
-end
-
----@param path string?
----@return string?
-local function abs(path)
-    if not path then
-        return nil
-    end
-    if vim.startswith(path, "/") then
-        return path
-    end
-    return vim.fn.getcwd() .. "/" .. path
 end
 
 -- AI models cannot reliably reproduce Unicode characters outside the basic
@@ -157,6 +235,11 @@ local function find_lines_fuzzy(content_lines, old_lines)
     return nil
 end
 
+---@param message string
+local function notify_edit_error(message)
+    Notify.dispatch(message, vim.log.levels.ERROR, { id = "pi-diff-edit-error" })
+end
+
 --- Apply multiple edits against the original content.
 --- All matches are resolved against the original string, not incrementally.
 ---@param lines string[]
@@ -164,45 +247,59 @@ end
 ---@return string[]?
 local function apply_edits(lines, edits)
     local content = table.concat(lines, "\n")
+    local normalized_content = normalize_for_edit_match(content)
     local replacements = {}
 
-    for _, edit in ipairs(edits) do
-        local old_str = edit.oldText or ""
-        local new_str = edit.newText or ""
+    for index, edit in ipairs(edits) do
+        local old_str = normalize_to_lf(edit.oldText or "")
+        local new_str = normalize_to_lf(edit.newText or "")
+        local old_first_line = vim.split(old_str, "\n", { plain = true })[1] or ""
 
         if old_str == "" then
-            Notify.error("diff: Empty oldText is not supported in multi-edit review")
+            notify_edit_error("diff: Empty oldText is not supported in multi-edit review (edit " .. index .. ")")
             return nil
         end
 
-        local search_from = 1
-        local start_pos, end_pos = nil, nil
-
-        while true do
-            local s, e = content:find(old_str, search_from, true)
-            if not s then
-                break
-            end
-
-            local overlaps = false
-            for _, existing in ipairs(replacements) do
-                if not (e < existing.start_pos or s > existing.end_pos) then
-                    overlaps = true
-                    break
-                end
-            end
-
-            if not overlaps then
-                start_pos, end_pos = s, e
-                break
-            end
-
-            search_from = s + 1
+        local fuzzy_occurrences = count_occurrences(normalized_content, normalize_for_edit_match(old_str))
+        if fuzzy_occurrences > 1 then
+            notify_edit_error(
+                "diff: Found "
+                    .. fuzzy_occurrences
+                    .. " normalized occurrences for edit "
+                    .. index
+                    .. ": "
+                    .. old_first_line
+                    .. " — oldText must be unique"
+            )
+            return nil
         end
 
-        if not start_pos then
-            Notify.error(
-                "diff: The original content not found in file. The agent likely used stale content — add 'Always re-read files before editing' to your AGENTS.md"
+        local start_pos, end_pos = nil, nil
+        local occurrences = count_occurrences(content, old_str)
+        if occurrences == 1 then
+            start_pos, end_pos = content:find(old_str, 1, true)
+        end
+
+        if occurrences == 0 then
+            notify_edit_error(
+                "diff: The original content not found in file for edit "
+                    .. index
+                    .. ": "
+                    .. old_first_line
+                    .. " — the agent likely used stale content; add 'Always re-read files before editing' to your AGENTS.md"
+            )
+            return nil
+        end
+
+        if occurrences > 1 then
+            notify_edit_error(
+                "diff: Found "
+                    .. occurrences
+                    .. " occurrences for edit "
+                    .. index
+                    .. ": "
+                    .. old_first_line
+                    .. " — oldText must be unique"
             )
             return nil
         end
@@ -211,6 +308,7 @@ local function apply_edits(lines, edits)
             start_pos = start_pos,
             end_pos = end_pos,
             new_str = new_str,
+            edit_index = index,
         }
     end
 
@@ -222,7 +320,13 @@ local function apply_edits(lines, edits)
         local prev = replacements[i - 1]
         local curr = replacements[i]
         if curr.start_pos <= prev.end_pos then
-            Notify.error("diff: Overlapping edits are not supported")
+            notify_edit_error(
+                "diff: edit "
+                    .. curr.edit_index
+                    .. " overlaps edit "
+                    .. prev.edit_index
+                    .. "; merge overlapping changes into one edit"
+            )
             return nil
         end
     end
@@ -239,6 +343,10 @@ local function apply_edits(lines, edits)
     parts[#parts + 1] = content:sub(last_pos)
 
     local result = table.concat(parts)
+    if result == content then
+        notify_edit_error("diff: No changes made; replacement produced identical content")
+        return nil
+    end
     return vim.split(result, "\n", { plain = true })
 end
 
@@ -358,26 +466,82 @@ function M.open(payload, callback, opts)
         return
     end
 
-    -- Prefer buffer content over disk — the tool already matched against the
-    -- buffer, so reading from disk can fail on multi-byte characters.
+    local disk_content, disk_err = read_file_content(path)
+    local stat = (vim.uv or vim.loop).fs_stat(path)
+    local write_opts = {
+        line_ending = payload.toolName == "edit" and disk_content and detect_line_ending(disk_content) or "\n",
+    }
     local before_lines
     local bufnr = nil
     for _, b in ipairs(vim.api.nvim_list_bufs()) do
-        if vim.api.nvim_buf_is_loaded(b) and vim.api.nvim_buf_get_name(b) == path then
+        if vim.api.nvim_buf_is_loaded(b) and abs(vim.api.nvim_buf_get_name(b)) == path then
             bufnr = b
             break
         end
     end
     if bufnr then
-        before_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-        -- nvim_buf_get_lines strips trailing-newline info that read_file
-        -- preserves as a trailing "".  Re-add it so apply_edit and
-        -- write_file round-trip the file's eol state correctly.
-        if vim.bo[bufnr].eol then
-            table.insert(before_lines, "")
+        if vim.bo[bufnr].modified then
+            notify_edit_error(
+                "diff: Cannot review changes for "
+                    .. path
+                    .. " because the loaded buffer has unsaved changes; save or reload the buffer, then retry"
+            )
+            callback("Reject")
+            return
         end
+        if not disk_content then
+            if payload.toolName == "write" and not stat then
+                disk_content = ""
+            else
+                notify_edit_error(
+                    "diff: Cannot review changes for "
+                        .. path
+                        .. " because disk content could not be read: "
+                        .. tostring(disk_err)
+                )
+                callback("Reject")
+                return
+            end
+        end
+
+        local buffer_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        -- Neovim stores the UTF-8 BOM in 'bomb', not in the buffer lines.
+        local buffer_content = (vim.bo[bufnr].bomb and "\239\187\191" or "") .. table.concat(buffer_lines, "\n")
+        -- Empty and BOM-only files have one placeholder line and may have 'eol' set.
+        if
+            vim.bo[bufnr].eol
+            and not (#buffer_lines == 1 and buffer_lines[1] == "" and disk_content == buffer_content)
+        then
+            buffer_content = buffer_content .. "\n"
+        end
+
+        if normalize_to_lf(disk_content) ~= normalize_to_lf(buffer_content) then
+            notify_edit_error(
+                "diff: Cannot review changes for "
+                    .. path
+                    .. " because the loaded buffer differs from disk; run :checktime or reload the buffer, then retry"
+            )
+            callback("Reject")
+            return
+        end
+        -- Match against disk bytes so edits retain the BOM as well as final EOL.
+        before_lines = vim.split(normalize_to_lf(disk_content), "\n", { plain = true })
     else
-        before_lines = read_file(path)
+        if not disk_content then
+            if payload.toolName == "edit" or stat then
+                notify_edit_error(
+                    "diff: Cannot review changes for "
+                        .. path
+                        .. " because disk content could not be read: "
+                        .. tostring(disk_err)
+                )
+                callback("Reject")
+                return
+            end
+            before_lines = {}
+        else
+            before_lines = vim.split(normalize_to_lf(disk_content), "\n", { plain = true })
+        end
     end
     local proposed_lines
 
@@ -394,22 +558,24 @@ function M.open(payload, callback, opts)
             return
         end
     elseif payload.toolName == "write" then
-        local content = input.content or ""
-        proposed_lines = vim.split(content, "\n", { plain = true })
+        proposed_lines = vim.split(input.content or "", "\n", { plain = true })
     else
         Notify.error("diff: unexpected tool: " .. tostring(payload.toolName))
         callback("Reject")
         return
     end
 
-    -- Strip the trailing empty-string EOL marker that vim.split / read_file
-    -- produce for files ending with "\n".  Neovim represents this via the
-    -- buffer `eol` option rather than a visible line, so keeping it would
-    -- show a phantom empty-line diff against the left side (which is opened
-    -- with :edit and handles EOL natively).
-    local proposed_eol = #proposed_lines > 0 and proposed_lines[#proposed_lines] == ""
+    -- Normalize proposed content for Neovim buffer display. A trailing empty
+    -- split item represents final EOL and belongs in the buffer `eol` option,
+    -- not as a visible line. A single empty split item represents true
+    -- zero-byte content, which Neovim displays as one empty placeholder line
+    -- but must serialize back to zero bytes on accept.
+    local proposed_zero_bytes = #proposed_lines == 1 and proposed_lines[1] == ""
+    local proposed_eol = not proposed_zero_bytes and #proposed_lines > 0 and proposed_lines[#proposed_lines] == ""
     if proposed_eol then
         table.remove(proposed_lines)
+    elseif proposed_zero_bytes then
+        proposed_lines = {}
     end
 
     local rel_path = vim.fn.fnamemodify(path, ":~:.")
@@ -1339,9 +1505,13 @@ function M.open(payload, callback, opts)
         responded = true
 
         local final_lines = vim.api.nvim_buf_get_lines(after_buf, 0, -1, false)
+        if proposed_zero_bytes and not vim.bo[after_buf].eol and #final_lines == 1 and final_lines[1] == "" then
+            final_lines = {}
+        end
 
         -- Check if user modified the proposed content (before EOL fixup).
-        local modified = #final_lines ~= #proposed_lines
+        local final_eol = vim.bo[after_buf].eol
+        local modified = final_eol ~= proposed_eol or #final_lines ~= #proposed_lines
         if not modified then
             for i, line in ipairs(final_lines) do
                 if line ~= proposed_lines[i] then
@@ -1352,12 +1522,15 @@ function M.open(payload, callback, opts)
         end
 
         -- Restore EOL marker so write_file round-trips the trailing newline.
-        if vim.bo[after_buf].eol then
+        if final_eol then
             final_lines[#final_lines + 1] = ""
         end
 
         local review_notes = collect_notes()
-        write_file(path, final_lines)
+        if not write_file(path, final_lines, write_opts) then
+            responded = false
+            return
+        end
         require("pi.cache.files").invalidate()
         reload_buf_for_file(vim.fn.fnamemodify(path, ":p"))
         close_review_tab()
