@@ -1,2 +1,3 @@
 /.agents/gigs/
 /.agents/notes/
+.project/**/.local/

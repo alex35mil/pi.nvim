@@ -1,0 +1,53 @@
+{
+    "tracker": {
+        "provider": "github",
+        "mcpServer": "github",
+        "repository": { "owner": "alex35mil", "repo": "pi.nvim" },
+        "project": { "owner": "alex35mil", "ownerType": "user", "number": 6 },
+        "labels": {
+            "kind": {
+                "epic": "Kind: Epic",
+                "deliverableKinds": {
+                    "feature": "Kind: Feature",
+                    "bugfix": "Kind: Bugfix",
+                    "research": "Kind: Research",
+                    "refactor": "Kind: Refactor",
+                    "audit": "Kind: Audit",
+                    "chore": "Kind: Chore"
+                }
+            }
+        },
+        "fields": {
+            "status": {
+                "field": "Status",
+                "values": {
+                    "backlog": "Backlog",
+                    "todo": "Todo",
+                    "inProgress": "In Progress",
+                    "inReview": "In Review",
+                    "done": "Done",
+                    "canceled": "Canceled"
+                }
+            },
+            "phase": {
+                "field": "Phase",
+                "values": {
+                    "planning": "Planning",
+                    "execution": "Execution",
+                    "selfReview": "Self-Review"
+                }
+            },
+            "priority": {
+                "scope": "project",
+                "field": "Priority",
+                "values": ["Urgent", "High", "Medium", "Low"]
+            },
+            "internalId": { "scope": "project", "field": "Internal ID" }
+        }
+    },
+    "forge": {
+        "provider": "github",
+        "mcpServer": "github",
+        "repository": { "owner": "alex35mil", "repo": "pi.nvim" }
+    }
+}
