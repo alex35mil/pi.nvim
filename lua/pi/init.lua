@@ -32,7 +32,7 @@ function M.setup(opts)
     require("pi.ui.highlights").setup()
     require("pi.attention").setup_autocmds()
     require("pi.sessions.manager").setup_autocmds()
-    require("pi.commands").setup()
+    require("pi.commands").NvimCommands.setup()
     require("pi.ui.winfix").setup()
 end
 

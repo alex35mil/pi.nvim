@@ -104,7 +104,10 @@ local function prepend_icon(name, chunks)
         return chunks
     end
     local first = chunks[1]
-    local icon_hl = first[2] or (name == "model" and "PiBotIcon" or "PiStatusLineIcon")
+    local icon_hl = first[2]
+    if Config.options.statusline.icons == "color" then
+        icon_hl = icon_hl or (name == "model" and "PiBotIcon" or "PiStatusLineIcon")
+    end
     if first[1] == "" then
         chunks[1] = { icon, icon_hl }
     else
@@ -120,7 +123,7 @@ local builtin = {}
 
 --- Queued steering and follow-up counts. Agent activity remains internal so
 --- controls can change without duplicating the history's animated status.
-function builtin.activity(state)
+function builtin.queue(state)
     local total_pending = state.pending_steer + state.pending_follow_up
     if total_pending == 0 then
         return nil
@@ -338,6 +341,9 @@ function StatusLine:set_pending_queue(entries)
         elseif entry.queue_type == "follow_up" then
             follow_up = follow_up + 1
         end
+    end
+    if self._state.pending_steer == steer and self._state.pending_follow_up == follow_up then
+        return
     end
     self._state.pending_steer = steer
     self._state.pending_follow_up = follow_up

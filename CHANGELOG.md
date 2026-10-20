@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-20
+
+- **BREAKING:** Replace `PiToolStatus` and `PiToolError` with separate tool header-icon, status-icon, status-text and summary highlight groups. Update custom overrides using the README highlight reference.
+- **FIXED:** Keep resumed and compacted sessions responsive, handle commands that finish without an agent response, and recover rejected or unacknowledged input with attachments across process restarts.
+- **FIXED:** Complete file mentions in slash-command arguments with nvim-cmp.
+- **ADDED:** Add `statusline.icons = "color" | "monochrome"` to control built-in icon colours.
+- **CHANGED:** Use muted, bold tool calls and muted result summaries and success text, with independently styled status icons.
+
 ## 2026-10-17
 
 - **FIXED:** Validate diff reviews against disk content, reject ambiguous or unchanged edits, preserve line endings and empty files, and keep the review open when writing fails.

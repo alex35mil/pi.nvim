@@ -276,15 +276,16 @@ require("pi").setup({
 
     -- Status line in the prompt window
     statusline = {
+        icons = "color", -- "color" or "monochrome"
         -- Components rendered in the prompt statusline.
         -- Entries are built-in component names, literal separators,
         -- or custom component functions.
         layout = {
-            left = { "activity", "  ", "context", "  ", "attention" },
+            left = { "queue", "  ", "context", "  ", "attention" },
             right = { "controls", "   ", "model", "   ", "thinking" },
         },
         components = {
-            activity = { icon = false },
+            queue = { icon = false },
             controls = { icon = false },
             tokens = { icon = "" },
             cache = { icon = "󰆼" },
@@ -569,9 +570,11 @@ When the agent is **streaming**, the two diverge. Both options queue your messag
 
 Both queued messages are rendered in the history with distinct labels (`labels.steer_message` and `labels.follow_up_message`) so you can tell them apart later.
 
-While the agent is running, the prompt statusline keeps the available controls visible in plain language: `Enter` steers, `Alt-Enter` queues a follow-up, and `Ctrl-C` aborts the active turn without closing the chat or discarding the session. Submitted steering and follow-up messages are reconciled with Pi's queue and counted next to the activity until Pi consumes them. The chat stays busy through retries, compaction, and queued continuations, and returns to idle only after Pi reports that the complete run has settled.
+While the agent is running, the prompt statusline keeps the available controls visible in plain language: `Enter` steers, `Alt-Enter` queues a follow-up, and `Ctrl-C` aborts the active turn without closing the chat or discarding the session. The `queue` component counts Pi's confirmed queue and messages still buffered locally during compaction. Confirmed entries use Pi's backend-expanded text, so skills and prompt templates appear as their expanded instructions. Locally buffered messages keep their original text until sent. The chat stays busy through retries, compaction, and queued continuations, and returns to idle only after Pi reports that the complete run has settled.
 
-If Pi rejects a submitted message or exits before accepting it, pi.nvim restores the text and image attachments to the prompt. An unexpected process exit is also rendered in the chat with instructions for restarting the session.
+Rejected messages return to the prompt with their attachments. Messages already accepted by Pi aren’t automatically recovered after a crash.
+
+An unexpected process exit is rendered in the chat with instructions for restarting the session: run `:PiStop`, then reopen `:Pi`. When the process has already exited, this restart carries the recovered draft and its images into the new session in the same tab. Recovery is kept in memory while Neovim stays open; closing the tab discards it.
 
 ### Mentions
 
@@ -686,7 +689,7 @@ This is the default Vim user-defined completion key. It will:
 
 The completion popup shows source metadata for `/commands` (`extension`, `prompt`, `skill`) and the command description when available.
 
-**2. `nvim-cmp` source (optional).** If you use [nvim-cmp](https://github.com/hrsh7th/nvim-cmp), register the source at `pi.completion.cmp` and scope it to the π prompt filetype. Typing `@` opens project file completion; typing `/` at the beginning of the first prompt line opens commands, skills, prompts, and extensions:
+**2. `nvim-cmp` source (optional).** If you use [nvim-cmp](https://github.com/hrsh7th/nvim-cmp), register the source at `pi.completion.cmp` and scope it to the π prompt filetype. Typing `@` opens project file completion; typing `/` at the beginning of the first prompt line opens commands, skills, prompts, and extensions. Command completion covers only the command token, so arguments such as `/skill:review @lua` use file completion at the `@` mention:
 
 ```lua
 local cmp = require("cmp")
@@ -876,7 +879,7 @@ require("pi").setup({
 
 | Name | Example output | When it's visible |
 | --- | --- | --- |
-| `activity` | `steer queued` | A steering or follow-up message is waiting; animated agent activity stays in the chat history to avoid duplicate text |
+| `queue` | `steer queued` | A steering or follow-up message is waiting; animated agent activity stays in the chat history to avoid duplicate text |
 | `controls` | `/ commands · @ files` or `Enter steer · Alt-Enter queue · Ctrl-C abort` | Always; its hints change with agent activity |
 | `tokens` | `↑3.8k ↓58k` | Total input/output tokens used this session |
 | `cache` | `R7.2M W416k` | Total prompt-cache read/write |
@@ -889,6 +892,21 @@ require("pi").setup({
 
 Any component that has nothing to show returns `nil` and is silently skipped (along with its adjacent separator).
 
+#### Icon colours
+
+`statusline.icons` sets the colour mode for built-in component icons:
+
+- `"color"` (default): use separate icon highlights (`PiStatusLineIcon`, or `PiBotIcon` for the model).
+- `"monochrome"`: match each icon to its component's text highlight.
+
+```lua
+statusline = {
+    icons = "monochrome",
+}
+```
+
+Explicit warning, error, attention, and custom component highlights keep their styling in both modes. Chat labels and tool colours are unchanged. Hide individual icons with `statusline.components.<name>.icon = false`.
+
 #### Component config
 
 Per-component options live under `statusline.components.<name>`:
@@ -897,7 +915,7 @@ Per-component options live under `statusline.components.<name>`:
 statusline = {
     components = {
         -- Every built-in takes an `icon` prefix. Set to `false` to disable.
-        activity = { icon = false },
+        queue = { icon = false },
         controls = { icon = false },
         compaction = { icon = false },
         model = { icon = "󰚩" },
@@ -1402,7 +1420,7 @@ The labels in the header and footer come from `labels.tool`, `labels.tool_succes
 
 Tools come in two rendering styles:
 
-- **Inline tools** render as a single line. `read` is the canonical example — it shows `read path/to/file (42 lines)` and stays on one line even when the file is huge, because inlining the content would just be noise. Consecutive inline tool calls are grouped without blank lines between them.
+- **Inline tools** render as a single line. `read` is the canonical example — it shows `read path/to/file (42 lines)` and stays on one line even when the file is huge, because inlining the content would just be noise. Consecutive inline tool calls are grouped without blank lines between them. Result summaries such as `(42 lines)` use `PiToolSummary` (muted, italic), separately from the completion marker's `PiToolStatusSuccessIcon` or `PiToolStatusErrorIcon`.
 - **Full-block tools** get the multi-line bordered block shown above. `bash`, `edit`, `write`, and any tool pi.nvim doesn't have a dedicated renderer for fall into this category.
 
 #### Auto-collapse and `<Tab>`
@@ -1565,7 +1583,7 @@ And mid-session management:
 | `:PiNewSession` | `pi.new_session()` | Discard the current session in this tab and start a fresh one. Extensions can cancel this via the `session_before_switch` hook (e.g. to warn about unsaved draft state). |
 | `:PiClear` | `pi.new_session()` | Clear the chat by starting a fresh session. The previous conversation remains available through `:PiResume`. |
 | `:PiSessionName [name]` | `pi.set_session_name(name?)` | Set a human-readable display name for the current session. Without an argument, opens a dialog to type one. Without any argument and via the API, returns the current name. Names appear in the `:PiResume` picker so you can identify long-running conversations at a glance. |
-| `:PiStop` | `pi.stop()` | Tear down the current session entirely, killing the backing `pi --mode rpc` process. Different from `:PiToggleChat`, which just hides the windows while the session keeps running. |
+| `:PiStop` | `pi.stop()` | Tear down the current session, killing the backing `pi --mode rpc` process. When the process has already exited, keep the recovered draft for the next `:Pi` in the same tab. Different from `:PiToggleChat`, which just hides the windows while the session keeps running. |
 
 #### Compaction
 
@@ -1578,7 +1596,7 @@ Long sessions eventually run into the model's context window limit. pi delegates
 :PiCompact focus on architectural decisions and the reasoning behind them; drop intermediate tool outputs
 ```
 
-Compaction can't run while the agent is streaming — wait for the current turn to finish (or abort it) first. Message submits during compaction are queued and sent after compaction finishes.
+Compaction can't run while the agent is streaming — wait for the current turn to finish (or abort it) first. Message submits during compaction are buffered locally. When Pi isn't automatically resuming a turn, pi.nvim sends a leading prompt and keeps the rest buffered until a model turn starts. Input handled without a model turn lets the next buffered message become the prompt. If the leading prompt is rejected, it and the still-unsent buffer return to the prompt for editing.
 
 After successful compaction, pi.nvim renders a collapsed summary block in chat history. Focus the block and press `<Tab>` to expand the backend-generated summary.
 
@@ -1895,14 +1913,18 @@ All highlight groups are defined with `default = true`, so they can be overridde
 | Group | Role |
 | --- | --- |
 | `PiToolBorder` | Tool block border glyphs (`╭─`, `│`, `├────`, `╰─`) |
-| `PiToolIcon` | Active tool icon |
-| `PiToolSuccessIcon` | Completed tool icon |
-| `PiToolHeader` | Tool block header row (tool name) |
-| `PiToolCall` | Tool input / call summary |
+| `PiToolHeader` | Tool name |
+| `PiToolHeaderIcon` | Active header icon |
+| `PiToolHeaderSuccessIcon` | Successful header icon |
+| `PiToolHeaderErrorIcon` | Failed/rejected/aborted header icon |
+| `PiToolCall` | Tool input / call summary (muted, bold) |
 | `PiToolOutput` | Tool output body |
-| `PiToolStatus` | Tool status line (completed / rejected / aborted) |
+| `PiToolSummary` | Inline result summary, such as `(42 lines)` (muted, italic) |
+| `PiToolStatusSuccessIcon` | Success status icon (inline marker or footer glyph) |
+| `PiToolStatusSuccess` | Completed-tool footer text (muted, italic) |
+| `PiToolStatusErrorIcon` | Failed/rejected/aborted status icon (inline marker or footer glyph) |
+| `PiToolStatusError` | Failed/rejected/aborted footer text |
 | `PiToolCollapsed` | `+N lines` / `…N lines` markers on collapsed blocks |
-| `PiToolError` | Tool error output |
 | `PiTableBorder` | Table border inside tool output |
 | `PiTableHeader` | Table header row inside tool output |
 | `PiDiffAdd` | Added lines inside inline tool diffs (links to `DiffAdd`) |
@@ -1963,9 +1985,9 @@ All highlight groups are defined with `default = true`, so they can be overridde
 | Group | Role |
 | --- | --- |
 | `PiStatusLine` | Default highlight for statusline chunks |
-| `PiBotIcon` | Agent and model bot glyph |
-| `PiStatusLineIcon` | Icons prefixed to statusline components |
-| `PiStatusLineActivity` | Active agent status in the prompt statusline |
+| `PiBotIcon` | Agent glyph; model icon when `statusline.icons = "color"` |
+| `PiStatusLineIcon` | Built-in statusline icons in `"color"` mode |
+| `PiStatusLineActivity` | Queued steering and follow-up counts in the prompt statusline |
 | `PiStatusLineKey` | Active prompt key hints in the prompt statusline |
 | `PiStatusLineAttention` | Attention component highlight |
 | `PiStatusLineWarning` | `warn`-threshold highlight for `context` / `cost` components |

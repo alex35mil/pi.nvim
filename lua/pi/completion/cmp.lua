@@ -52,7 +52,7 @@ function source:complete(params, callback)
     local cmp = require("cmp")
     local line = params.context.cursor_before_line
 
-    if params.context.cursor.row == 1 and line:byte(1) == 47 then
+    if params.context.cursor.row == 1 and line:match("^/[^%s]*$") then
         local prefix = line:sub(2)
         local items = Matcher.complete_commands(prefix, function(cmd, is_fuzzy)
             return {

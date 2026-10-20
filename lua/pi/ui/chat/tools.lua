@@ -550,7 +550,7 @@ end
 ---@field output_visible? integer lines to show when collapsed (default: show all)
 ---@field inline? boolean  render as a single line (no header/footer)
 ---@field inline_text? fun(args: table?): string?  text to show after tool name
----@field inline_status? fun(result: table?, is_error: boolean?): string?  extra text next to status icon
+---@field inline_summary? fun(result: table?, is_error: boolean?): string?  result summary shown next to the status icon
 
 ---@type table<string, pi.ToolRenderer>
 local renderers = {
@@ -579,7 +579,7 @@ local renderers = {
         inline_text = function(args)
             return args and (args.path or args.file_path) or nil
         end,
-        inline_status = function(result)
+        inline_summary = function(result)
             local text = extract_result_text(result)
             if text then
                 local n = select(2, text:gsub("\n", "\n")) + 1

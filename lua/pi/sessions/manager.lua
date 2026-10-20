@@ -61,6 +61,9 @@ end
 ---@type table<pi.TabId, pi.Session>
 local sessions = {}
 
+---@type table<pi.TabId, pi.ChatDraft>
+local recovered_drafts = {}
+
 ---@return pi.TabId
 local function current_tab()
     return vim.api.nvim_get_current_tabpage()
@@ -425,6 +428,12 @@ function M.get_or_create(opts)
 
     sessions[tab] = session
 
+    local draft = recovered_drafts[tab]
+    if draft then
+        chat:restore_draft(draft)
+        recovered_drafts[tab] = nil
+    end
+
     -- Fetch available /commands for completion, highlighting, and system info
     fetch_commands_and_show_startup_block(session)
 
@@ -442,6 +451,9 @@ function M.stop()
         return
     end
 
+    if not session.rpc:is_running() and session.chat:has_draft() then
+        recovered_drafts[tab] = session.chat:snapshot_draft()
+    end
     Attention.clear_session(session)
     session.rpc:stop()
     session.chat:hide()
@@ -943,6 +955,11 @@ function M.cleanup()
             Attention.clear_session(session)
             session.rpc:stop()
             sessions[tab] = nil
+        end
+    end
+    for tab in pairs(recovered_drafts) do
+        if not valid_tabs[tab] then
+            recovered_drafts[tab] = nil
         end
     end
 end
