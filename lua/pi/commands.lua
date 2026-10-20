@@ -1,6 +1,10 @@
---- User command registration.
+--- User-command and slash-command adapters over the Pi API.
 
-local M = {}
+---@class pi.NvimCommands
+local NvimCommands = {}
+
+---@class pi.SlashCommands
+local SlashCommands = {}
 
 ---@type table<string, string[]>
 local flag_values = { layout = { "side", "float" } }
@@ -33,7 +37,8 @@ local function complete_flags(prefix)
     end, candidates)
 end
 
-function M.setup()
+--- Register Neovim's :Pi commands.
+function NvimCommands.setup()
     local Pi = require("pi")
 
     vim.api.nvim_create_user_command("Pi", function(cmd)
@@ -71,6 +76,10 @@ function M.setup()
     vim.api.nvim_create_user_command("PiNewSession", function()
         Pi.new_session()
     end, { desc = "Start new π session" })
+
+    vim.api.nvim_create_user_command("PiClear", function()
+        Pi.new_session()
+    end, { desc = "Clear chat and start a fresh π session" })
 
     vim.api.nvim_create_user_command("PiToggleThinking", function()
         Pi.toggle_thinking()
@@ -127,4 +136,108 @@ function M.setup()
     end, { desc = "Toggle π RPC debug logging" })
 end
 
-return M
+---@class pi.LocalCommand : pi.SlashCommand
+---@field run fun(args: string)
+
+---@type pi.LocalCommand[]
+local commands = {
+    {
+        name = "abort",
+        description = "Abort the active agent turn",
+        source = "pi.nvim",
+        run = function()
+            require("pi").abort()
+        end,
+    },
+    {
+        name = "clear",
+        description = "Start a fresh, resumable session",
+        source = "pi.nvim",
+        run = function()
+            require("pi").new_session()
+        end,
+    },
+    {
+        name = "compact",
+        description = "Compact context, optionally with instructions",
+        source = "pi.nvim",
+        run = function(args)
+            require("pi").compact(args ~= "" and args or nil)
+        end,
+    },
+    {
+        name = "model",
+        description = "Select the active model",
+        source = "pi.nvim",
+        run = function()
+            require("pi").select_model()
+        end,
+    },
+    {
+        name = "name",
+        description = "Set or show the session name",
+        source = "pi.nvim",
+        run = function(args)
+            require("pi").set_session_name(args ~= "" and args or nil)
+        end,
+    },
+    {
+        name = "new",
+        description = "Start a fresh session",
+        source = "pi.nvim",
+        run = function()
+            require("pi").new_session()
+        end,
+    },
+    {
+        name = "resume",
+        description = "Select a previous session",
+        source = "pi.nvim",
+        run = function()
+            require("pi").resume_session()
+        end,
+    },
+    {
+        name = "thinking",
+        description = "Select the thinking level",
+        source = "pi.nvim",
+        run = function()
+            require("pi").select_thinking_level()
+        end,
+    },
+}
+
+---@return pi.SlashCommand[]
+function SlashCommands.list()
+    local result = {}
+    for _, command in ipairs(commands) do
+        result[#result + 1] = {
+            name = command.name,
+            description = command.description,
+            source = command.source,
+        }
+    end
+    return result
+end
+
+---@param text string
+---@return boolean handled
+---@return string? error
+function SlashCommands.execute(text)
+    local name, args = text:match("^/([^%s]+)%s*(.*)$")
+    if not name then
+        return false
+    end
+    for _, command in ipairs(commands) do
+        if command.name == name then
+            if text:find("\n", 1, true) then
+                return true, "/" .. name .. " must be sent on its own line"
+            end
+            command.run(args)
+            return true
+        end
+    end
+    return false
+end
+
+return { NvimCommands = NvimCommands, SlashCommands = SlashCommands }

@@ -1,4 +1,4 @@
---- Slash-command cache — fetches available /commands from the pi RPC process.
+--- Slash-command cache — combines pi.nvim actions with commands fetched over Pi RPC.
 
 ---@class pi.SourceInfo
 ---@field path string absolute file path to the command source
@@ -10,13 +10,15 @@
 ---@class pi.SlashCommand
 ---@field name string command name (invoke with /name)
 ---@field description? string human-readable description
----@field source "extension"|"prompt"|"skill"
+---@field source "extension"|"prompt"|"skill"|"pi.nvim"
 ---@field sourceInfo? pi.SourceInfo structured source metadata from pi RPC
 
 local M = {}
 
+local SlashCommands = require("pi.commands").SlashCommands
+
 ---@type pi.SlashCommand[]
-local cache = {}
+local cache = SlashCommands.list()
 
 ---@type boolean
 local fetched = false
@@ -29,7 +31,16 @@ local REFETCH_INTERVAL_NS = 30e9 -- 30 seconds
 --- Replace the cached command list.
 ---@param commands pi.SlashCommand[]
 function M.set(commands)
-    cache = commands
+    cache = SlashCommands.list()
+    local reserved = {}
+    for _, command in ipairs(cache) do
+        reserved[command.name] = true
+    end
+    for _, command in ipairs(commands) do
+        if not reserved[command.name] then
+            cache[#cache + 1] = command
+        end
+    end
     fetched = true
 end
 
@@ -47,7 +58,7 @@ end
 
 --- Clear the cache so the next access triggers a fresh fetch.
 function M.invalidate()
-    cache = {}
+    cache = SlashCommands.list()
     fetched = false
 end
 

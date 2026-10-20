@@ -3,8 +3,8 @@
 ---@field validated string latest pi version manually validated against this plugin
 local M = {
     -- Keep these in sync with release validation notes.
-    min_supported = "0.65.2",
-    validated = "0.79.3",
+    min_supported = "0.80.4",
+    validated = "0.85.1",
 }
 
 ---@param version string

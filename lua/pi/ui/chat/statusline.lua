@@ -9,6 +9,10 @@
 ---@alias pi.StatusLineComponentFn fun(state: pi.StatusLineState): string|string[][]|nil, string|nil
 
 ---@class pi.StatusLineState
+---@field activity string?
+---@field can_steer boolean
+---@field pending_steer integer
+---@field pending_follow_up integer
 ---@field model_id string?
 ---@field model_context_window integer?
 ---@field model_reasoning boolean
@@ -99,8 +103,16 @@ local function prepend_icon(name, chunks)
     if type(icon) ~= "string" or icon == "" or #chunks == 0 then
         return chunks
     end
-    local first = chunks[1][1]
-    chunks[1] = { first == "" and icon or (icon .. " " .. first), chunks[1][2] }
+    local first = chunks[1]
+    local icon_hl = first[2]
+    if Config.options.statusline.icons == "color" then
+        icon_hl = icon_hl or (name == "model" and "PiBotIcon" or "PiStatusLineIcon")
+    end
+    if first[1] == "" then
+        chunks[1] = { icon, icon_hl }
+    else
+        table.insert(chunks, 1, { icon .. " ", icon_hl })
+    end
     return chunks
 end
 
@@ -108,6 +120,51 @@ end
 
 ---@type table<string, pi.StatusLineComponentFn>
 local builtin = {}
+
+--- Queued steering and follow-up counts. Agent activity remains internal so
+--- controls can change without duplicating the history's animated status.
+function builtin.queue(state)
+    local total_pending = state.pending_steer + state.pending_follow_up
+    if total_pending == 0 then
+        return nil
+    end
+    local chunks = {}
+    local pending = {}
+    if state.pending_steer > 0 then
+        pending[#pending + 1] = state.pending_steer == 1 and "steer" or (state.pending_steer .. " steers")
+    end
+    if state.pending_follow_up > 0 then
+        pending[#pending + 1] = state.pending_follow_up == 1 and "follow-up"
+            or (state.pending_follow_up .. " follow-ups")
+    end
+    chunks[#chunks + 1] = { table.concat(pending, " + ") .. " queued", "PiStatusLineActivity" }
+    return chunks
+end
+
+--- Context-sensitive prompt controls and discovery hints.
+function builtin.controls(state)
+    if state.can_steer then
+        return {
+            { "Enter", "PiStatusLineKey" },
+            { " steer · ", "PiStatusLine" },
+            { "Alt-Enter", "PiStatusLineKey" },
+            { " queue · ", "PiStatusLine" },
+            { "Ctrl-C", "PiStatusLineKey" },
+            { " abort", "PiStatusLine" },
+        }
+    elseif state.activity then
+        return {
+            { "Ctrl-C", "PiStatusLineKey" },
+            { " abort", "PiStatusLine" },
+        }
+    end
+    return {
+        { "/", "PiStatusLineKey" },
+        { " commands · ", "PiStatusLine" },
+        { "@", "PiStatusLineKey" },
+        { " files", "PiStatusLine" },
+    }
+end
 
 --- ↑3.8k ↓58k
 function builtin.tokens(state)
@@ -229,6 +286,10 @@ end
 ---@return pi.StatusLineState
 local function new_state()
     return {
+        activity = nil,
+        can_steer = false,
+        pending_steer = 0,
+        pending_follow_up = 0,
         model_id = nil,
         model_context_window = nil,
         model_reasoning = false,
@@ -258,6 +319,35 @@ function StatusLine.new(buf, tab, win_fn)
     self._state = new_state()
     self:render()
     return self
+end
+
+--- Set or clear the current agent activity and prompt action hints.
+---@param text string?
+---@param can_steer boolean?
+function StatusLine:set_activity(text, can_steer)
+    self._state.activity = text
+    self._state.can_steer = can_steer == true
+    self:render()
+end
+
+--- Update the visible steering and follow-up queue counts.
+---@param entries pi.PendingQueueEntry[]
+function StatusLine:set_pending_queue(entries)
+    local steer = 0
+    local follow_up = 0
+    for _, entry in ipairs(entries) do
+        if entry.queue_type == "steer" then
+            steer = steer + 1
+        elseif entry.queue_type == "follow_up" then
+            follow_up = follow_up + 1
+        end
+    end
+    if self._state.pending_steer == steer and self._state.pending_follow_up == follow_up then
+        return
+    end
+    self._state.pending_steer = steer
+    self._state.pending_follow_up = follow_up
+    self:render()
 end
 
 --- Number of virt_lines currently rendered (padding + status).

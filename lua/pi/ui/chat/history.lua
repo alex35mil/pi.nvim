@@ -90,11 +90,8 @@ History.__index = History
 ---@field line_count integer
 ---@field expanded boolean
 
----@class pi.PendingQueueEntry
----@field queue_type "steer"|"follow_up"
----@field text string
----@field expanded_text string
----@field image_count? integer
+---@class pi.PendingQueueEntry : pi.BackendQueueEntry
+---@field image_count? integer Known for messages still buffered locally.
 
 ---@class pi.ChatErrorOpts
 ---@field pad_top? boolean
@@ -453,6 +450,7 @@ function History.new(tab)
     vim.bo[self._buf].bufhidden = "hide"
     vim.bo[self._buf].modifiable = false
     vim.api.nvim_buf_set_name(self._buf, name)
+    pcall(vim.treesitter.start, self._buf, "markdown")
 
     return self
 end
@@ -1754,7 +1752,7 @@ function History:on_tool_start(tool_name, tool_call_id, tool_input)
             Tools.set_border(self, row, Tools.GLYPHS.MID)
             local icon_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, row, 0, {
                 end_col = #icon,
-                hl_group = "PiToolHeader",
+                hl_group = "PiToolHeaderIcon",
             })
             -- Tool name
             vim.api.nvim_buf_set_extmark(self._buf, ns, row, #icon, {
@@ -1799,7 +1797,7 @@ function History:on_tool_start(tool_name, tool_call_id, tool_input)
         Tools.set_border(self, header_row, Tools.GLYPHS.TOP)
         local icon_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, header_row, 0, {
             end_col = #icon,
-            hl_group = "PiToolHeader",
+            hl_group = "PiToolHeaderIcon",
         })
         vim.api.nvim_buf_set_extmark(self._buf, ns, header_row, #icon, {
             end_col = #header,
@@ -1855,9 +1853,9 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
             local labels = Config.options.labels
             local status = Tools.resolve_status(result, is_error)
             local is_success = status == "completed"
-            local icon_hl = is_success and "PiToolHeader" or "PiToolError"
+            local icon_hl = is_success and "PiToolHeaderSuccessIcon" or "PiToolHeaderErrorIcon"
             local status_icon = is_success and labels.tool_success or labels.tool_failure
-            local status_hl = is_success and "PiToolStatus" or "PiToolError"
+            local status_hl = is_success and "PiToolStatusSuccessIcon" or "PiToolStatusErrorIcon"
 
             -- Update icon color
             local icon = Config.options.labels.tool
@@ -1871,14 +1869,14 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
                 hl_group = icon_hl,
             })
 
-            -- Append status as virtual text at end of line
+            -- Append result summary and status as virtual text at end of line
             local renderer = Tools.get_renderer(tool_name)
-            local extra = renderer.inline_status and renderer.inline_status(result, is_error) or nil
+            local summary = renderer.inline_summary and renderer.inline_summary(result, is_error) or nil
             local row = pos[1]
             local line = vim.api.nvim_buf_get_lines(self._buf, row, row + 1, false)[1] or ""
             local virt = {}
-            if extra then
-                virt[#virt + 1] = { " " .. extra, "PiToolStatus" }
+            if summary then
+                virt[#virt + 1] = { " " .. summary, "PiToolSummary" }
             end
             virt[#virt + 1] = { "  " .. status_icon, status_hl }
             vim.api.nvim_buf_set_extmark(self._buf, ns, row, #line, {
@@ -1922,8 +1920,10 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
         local labels = Config.options.labels
         local status = Tools.resolve_status(result, is_error)
         local is_success = status == "completed"
-        local footer = is_success and (labels.tool_success .. " completed") or (labels.tool_failure .. " " .. status)
-        local footer_hl = is_success and "PiToolStatus" or "PiToolError"
+        local status_icon = is_success and labels.tool_success or labels.tool_failure
+        local footer = status_icon .. " " .. status
+        local status_icon_hl = is_success and "PiToolStatusSuccessIcon" or "PiToolStatusErrorIcon"
+        local status_hl = is_success and "PiToolStatusSuccess" or "PiToolStatusError"
         local start
         if insert_at then
             start, insert_at = self:_insert_lines(insert_at, { footer })
@@ -1932,12 +1932,16 @@ function History:on_tool_end(tool_name, tool_call_id, result, is_error)
         end
         Tools.set_border(self, start, Tools.GLYPHS.BOT)
         local footer_extmark = vim.api.nvim_buf_set_extmark(self._buf, ns, start, 0, {
+            end_col = #status_icon,
+            hl_group = status_icon_hl,
+        })
+        vim.api.nvim_buf_set_extmark(self._buf, ns, start, #status_icon + 1, {
             end_col = #footer,
-            hl_group = footer_hl,
+            hl_group = status_hl,
         })
 
         if block then
-            local icon_hl = is_success and "PiToolHeader" or "PiToolError"
+            local icon_hl = is_success and "PiToolHeaderSuccessIcon" or "PiToolHeaderErrorIcon"
             local icon = Config.options.labels.tool
             local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, block.icon_extmark, {})
             if pos[1] then
@@ -2487,52 +2491,22 @@ function History:clear_placeholder()
     self._placeholder_mode = nil
 end
 
---- Add a message to the pending queue (displayed as virtual text at the bottom).
----@param queue_type "steer"|"follow_up"
----@param display_text string raw user text (for display)
----@param expanded_text string expanded text (for matching on delivery)
----@param image_count? integer
-function History:add_pending_queue_entry(queue_type, display_text, expanded_text, image_count)
-    self._pending_queue[#self._pending_queue + 1] = {
-        queue_type = queue_type,
-        text = display_text,
-        expanded_text = expanded_text,
-        image_count = image_count,
-    }
-    self:_update_status_extmark()
-    if self:_should_auto_scroll() then
-        self:_scroll_to_bottom()
-    end
-end
-
---- Remove the first pending queue entry whose expanded_text matches.
---- Called when `message_start` arrives for a delivered steering/follow-up message.
----@param text string the user message text from the event
----@return pi.PendingQueueEntry? entry the removed entry, or nil if not found
-function History:remove_pending_queue_entry(text)
-    for i, entry in ipairs(self._pending_queue) do
-        if entry.expanded_text == text then
-            table.remove(self._pending_queue, i)
-            self:_update_status_extmark()
-            return entry
-        end
-    end
-    return nil
-end
-
---- Get a shallow copy of pending queue entries.
----@return pi.PendingQueueEntry[]
-function History:get_pending_queue()
-    return { unpack(self._pending_queue) }
-end
-
---- Clear all pending queue entries.
-function History:clear_pending_queue()
-    if #self._pending_queue == 0 then
+--- Render the queue view supplied by Chat; delivery and recovery live there.
+---@param entries pi.PendingQueueEntry[]
+function History:set_pending_queue(entries)
+    if vim.deep_equal(self._pending_queue, entries) then
         return
     end
-    self._pending_queue = {}
-    self:_update_status_extmark()
+    self._pending_queue = entries
+    vim.schedule(function()
+        if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
+            return
+        end
+        self:_update_status_extmark()
+        if self:_should_auto_scroll() then
+            self:_scroll_to_bottom()
+        end
+    end)
 end
 
 function History:clear()

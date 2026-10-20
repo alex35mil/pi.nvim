@@ -266,6 +266,19 @@ function Prompt:clear_text()
     end
 end
 
+--- Restore rejected or interrupted input ahead of any draft typed since it was sent.
+---@param text string
+function Prompt:restore_text(text)
+    if text == "" or not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
+        return
+    end
+    local current = self:text()
+    local restored = current == "" and text or (text .. "\n\n" .. current)
+    vim.api.nvim_buf_set_lines(self._buf, 0, -1, false, vim.split(restored, "\n", { plain = true }))
+    self:resize()
+    self:_render_statusline()
+end
+
 ---@return integer
 function Prompt:content_height()
     if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then

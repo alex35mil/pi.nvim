@@ -1,8 +1,36 @@
 # Changelog
 
+## 2026-10-20
+
+- **BREAKING:** Replace `PiToolStatus` and `PiToolError` with separate tool header-icon, status-icon, status-text and summary highlight groups. Update custom overrides using the README highlight reference.
+- **FIXED:** Keep resumed and compacted sessions responsive, handle commands that finish without an agent response, and recover rejected or unacknowledged input with attachments across process restarts.
+- **FIXED:** Complete file mentions in slash-command arguments with nvim-cmp.
+- **ADDED:** Add `statusline.icons = "color" | "monochrome"` to control built-in icon colours.
+- **CHANGED:** Use muted, bold tool calls and muted result summaries and success text, with independently styled status icons.
+
 ## 2026-10-17
 
 - **FIXED:** Validate diff reviews against disk content, reject ambiguous or unchanged edits, preserve line endings and empty files, and keep the review open when writing fails.
+
+## 2026-09-14
+
+- **ADDED:** Keep agent activity and steering, follow-up, and abort hints visible in the prompt statusline.
+- **ADDED:** Keep pending steering and follow-up counts visible until Pi consumes the queued messages.
+- **ADDED:** Bind `<C-c>` in the prompt to abort the active turn while preserving the session.
+- **ADDED:** Add `:PiClear`, `/clear`, and Neovim-native slash actions for common Pi TUI workflows.
+- **ADDED:** Add native `nvim-cmp` completion for `@` file mentions and `/` commands.
+- **FIXED:** Show `Starting…` immediately after submitting a prompt instead of waiting for the first agent event.
+- **FIXED:** Clear the immediate activity state when Pi rejects a prompt before the agent starts.
+- **FIXED:** Keep the agent busy through retries, compaction, and queued continuations until Pi emits its authoritative settled event.
+- **FIXED:** Reconcile pending messages from Pi queue snapshots and restore rejected or interrupted input instead of losing it.
+- **FIXED:** Reset activity and queue state on chat clear or process exit, with an actionable error when Pi exits unexpectedly.
+- **FIXED:** Reject multiline local slash actions without discarding the remaining prompt text.
+- **CHANGED:** Require Pi 0.80.4 or newer for the authoritative `agent_settled` lifecycle event; validated through Pi 0.85.1.
+- **CHANGED:** Derive semantic foreground and icon colors from the active colorscheme, with Pi's light/dark colors as fallbacks, while preserving the existing Neovim chat background.
+- **CHANGED:** Render message, startup, compaction, and panel-title glyphs with foreground color instead of badge-like colored cells.
+- **CHANGED:** Use the colorscheme's warning/yellow foreground for bot glyphs, welcome copy, and active loading text.
+- **CHANGED:** Keep the animated agent verb in chat history only; the prompt statusline now shows controls and queued-message counts without repeating it.
+- **FIXED:** Apply highlight defaults immediately when pi.nvim is lazy-loaded and start Markdown Tree-sitter highlighting for chat history buffers.
 
 ## 2026-07-08
 

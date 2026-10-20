@@ -90,6 +90,8 @@
 ---@alias pi.StatusLineItem string|pi.StatusLineComponentFn
 
 ---@alias pi.StatusLineBuiltinName
+---| "queue"
+---| "controls"
 ---| "tokens"
 ---| "cache"
 ---| "cost"
@@ -121,6 +123,8 @@
 ---@field counter? boolean Show the pending attention count next to the icon.
 
 ---@class pi.StatusLineComponents
+---@field queue? pi.StatusLineComponentConfig
+---@field controls? pi.StatusLineComponentConfig
 ---@field tokens? pi.StatusLineComponentConfig
 ---@field cache? pi.StatusLineComponentConfig
 ---@field cost? pi.StatusLineCostConfig
@@ -131,6 +135,7 @@
 ---@field thinking? pi.StatusLineComponentConfig
 
 ---@class pi.StatusLineConfig
+---@field icons "color"|"monochrome" Built-in icon styling; monochrome matches the component text highlight.
 ---@field layout pi.StatusLineLayout
 ---@field components? pi.StatusLineComponents
 
@@ -268,11 +273,14 @@ local defaults = {
         },
     },
     statusline = {
+        icons = "color",
         layout = {
-            left = { "context", "  ", "attention" },
-            right = { "model", "   ", "thinking" },
+            left = { "queue", "  ", "context", "  ", "attention" },
+            right = { "controls", "   ", "model", "   ", "thinking" },
         },
         components = {
+            queue = { icon = false },
+            controls = { icon = false },
             tokens = { icon = "" },
             cache = { icon = "󰆼" },
             cost = { icon = "" },

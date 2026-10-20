@@ -7,6 +7,7 @@ local FilesCache = require("pi.cache.files")
 ---@type table<string, vim.lsp.protocol.CompletionItemKind>
 local source_kinds = {
     extension = vim.lsp.protocol.CompletionItemKind.Event,
+    ["pi.nvim"] = vim.lsp.protocol.CompletionItemKind.Function,
     prompt = vim.lsp.protocol.CompletionItemKind.Snippet,
     skill = vim.lsp.protocol.CompletionItemKind.Module,
 }

@@ -8,7 +8,7 @@ Neovim plugin (Lua) — a frontend for the [pi coding agent](https://github.com/
 - Ask before broad, multi-file, or potentially destructive changes. State assumptions and tradeoffs briefly when they matter.
 - Match the existing style and conventions of the file/project. Don't reformat unrelated code and avoid unrelated cleanup.
 - Treat `lua/` as the source of truth; `README.md` is user-facing documentation, not authority over behavior.
-- If public API, commands, keymaps, config defaults, or other user-visible behavior change, update `README.md` in the same change.
+- Keep `README.md` focused on user workflows, public APIs (including commands, keymaps, and highlight groups), configuration, and meaningful limitations. Update it in the same change when these change. Put bug-fix summaries in the changelog and implementation/verification details in private working notes.
 - Re-read a file immediately before editing it. Never rely on content from an earlier read — it may be stale.
 - Handle errors explicitly. Don't swallow them or mask them with odd defaults. Use `pcall` for Neovim API calls that may fail (invalid windows/buffers) and `Notify.error/warn/info` for user-facing messages.
 

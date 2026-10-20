@@ -183,6 +183,23 @@ function Attachments:clear()
     self:_rerender()
 end
 
+---@return pi.Attachment[]
+function Attachments:snapshot()
+    return vim.deepcopy(self._items)
+end
+
+--- Restore rejected attachments ahead of any attachments added since submission.
+---@param items pi.Attachment[]?
+function Attachments:restore(items)
+    if not items or #items == 0 then
+        return
+    end
+    local current = self._items
+    self._items = vim.deepcopy(items)
+    vim.list_extend(self._items, current)
+    self:_rerender()
+end
+
 ---@return pi.RpcImageContent[]
 function Attachments:get()
     ---@type pi.RpcImageContent[]

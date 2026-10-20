@@ -2,6 +2,8 @@
 ---@alias pi.RpcEventType
 ---| "agent_start"
 ---| "agent_end"
+---| "agent_settled"
+---| "queue_update"
 ---| "message_start"
 ---| "message_update"
 ---| "message_end"
@@ -90,6 +92,8 @@
 ---@field method? string
 ---@field message? string|{ stopReason?: string, errorMessage?: string, [string]: any }
 ---@field messages? table[]
+---@field steering? string[]
+---@field followUp? string[]
 ---@field notifyType? "info"|"warning"|"error"
 ---@field options? string[]
 ---@field timeout? integer
@@ -110,6 +114,7 @@
 ---@field _tab pi.TabId
 ---@field _req_id integer
 ---@field _stdout_buf string
+---@field _stopping boolean
 local Rpc = {}
 Rpc.__index = Rpc
 
@@ -275,6 +280,7 @@ function Rpc.new(tab)
     self._tab = tab
     self._req_id = 1
     self._stdout_buf = ""
+    self._stopping = false
     return self
 end
 
@@ -307,6 +313,7 @@ function Rpc:start()
         return true
     end
     self._stdout_buf = ""
+    self._stopping = false
     local cmd = Cli.command()
     self._job_id = vim.fn.jobstart(cmd, {
         on_stdout = function(_, data)
@@ -365,6 +372,7 @@ end
 
 function Rpc:stop()
     if self._job_id then
+        self._stopping = true
         vim.fn.jobstop(self._job_id)
         self._job_id = nil
     end
@@ -415,9 +423,12 @@ end
 
 ---@param code integer
 function Rpc:_on_exit(code)
+    local expected = self._stopping
     self._job_id = nil
     self._stdout_buf = ""
-    self:_dispatch({ type = "_process_exit", code = code })
+    self._pending = {}
+    self._stopping = false
+    self:_dispatch({ type = "_process_exit", code = code, expected = expected })
 end
 
 function Rpc.toggle_debug()
