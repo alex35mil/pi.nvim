@@ -2133,33 +2133,6 @@ function History:toggle_blocks_expanded()
     return self:set_blocks_expanded(not self:_all_blocks_expanded())
 end
 
----@param msg table?
----@return string?
-local function extract_tool_update_text(msg)
-    local partial = msg and msg.partialResult
-    local content = partial and partial.content
-    if type(content) == "string" then
-        local trimmed = vim.trim(Tools.sanitize_text(content))
-        return trimmed ~= "" and trimmed or nil
-    end
-    if type(content) ~= "table" then
-        return nil
-    end
-    local parts = {}
-    for _, item in ipairs(content) do
-        if type(item) == "table" and item.type == "text" and type(item.text) == "string" then
-            parts[#parts + 1] = Tools.sanitize_text(item.text)
-        elseif type(item) == "string" then
-            parts[#parts + 1] = Tools.sanitize_text(item)
-        end
-    end
-    if #parts == 0 then
-        return nil
-    end
-    local trimmed = vim.trim(table.concat(parts, "\n"))
-    return trimmed ~= "" and trimmed or nil
-end
-
 ---@param text string
 ---@return string[]
 local function build_tool_live_update_lines(text)
@@ -2234,7 +2207,7 @@ function History:on_tool_update(tool_name, tool_call_id, msg)
             return
         end
 
-        local text = extract_tool_update_text(msg)
+        local text = Tools.result_text(tool_name, msg.partialResult)
         if not text then
             return
         end

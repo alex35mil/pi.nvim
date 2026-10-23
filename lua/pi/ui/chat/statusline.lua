@@ -378,26 +378,20 @@ function StatusLine:update_state(data)
     self:render()
 end
 
---- Accumulate usage from one assistant message.
---- Token totals (input, output, cache, cost) are summed across all calls.
---- context_tokens is overwritten (not accumulated) — the latest message's
---- total is the best estimate of current context window usage
---- (matches TUI's calculateContextTokens).
---- Skips messages with zero input (aborted/errored before reaching the model).
----@param usage table
-function StatusLine:add_usage(usage)
-    if not usage or (usage.input or 0) <= 0 then
-        return
-    end
+--- Billing spans the full session; context usage describes only the active context.
+---@param stats pi.SessionStats
+function StatusLine:update_stats(stats)
     local s = self._state
-    s.total_input = s.total_input + (usage.input or 0)
-    s.total_output = s.total_output + (usage.output or 0)
-    s.total_cache_read = s.total_cache_read + (usage.cacheRead or 0)
-    s.total_cache_write = s.total_cache_write + (usage.cacheWrite or 0)
-    local cost = type(usage.cost) == "table" and (usage.cost.total or 0) or 0
-    s.total_cost = s.total_cost + cost
-    -- Overwrite: latest message is the best context window estimate
-    s.context_tokens = (usage.input or 0) + (usage.output or 0) + (usage.cacheRead or 0) + (usage.cacheWrite or 0)
+    s.total_input = stats.tokens.input
+    s.total_output = stats.tokens.output
+    s.total_cache_read = stats.tokens.cacheRead
+    s.total_cache_write = stats.tokens.cacheWrite
+    s.total_cost = stats.cost
+    local context = stats.contextUsage
+    s.context_tokens = context and type(context.tokens) == "number" and context.tokens or nil
+    if context then
+        s.model_context_window = context.contextWindow
+    end
     self:render()
 end
 

@@ -1,10 +1,10 @@
 ---@class pi.Compat
 ---@field min_supported string minimum pi version supported by this plugin
----@field validated string latest pi version manually validated against this plugin
+---@field validated string latest pi version verified against this plugin
 local M = {
     -- Keep these in sync with release validation notes.
-    min_supported = "0.80.4",
-    validated = "0.85.1",
+    min_supported = "1.3.0",
+    validated = "1.3.0",
 }
 
 ---@param version string

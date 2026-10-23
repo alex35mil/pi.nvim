@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-23
+
+- **BREAKING:** Require pi 1.3.0 and update the backend integration to its current RPC APIs.
+- **CHANGED:** Use explicit prompt acceptance outcomes for submission and compaction handoffs.
+- **FIXED:** Offer only the current model's supported thinking levels, including `max`, and refresh state after extension-driven changes.
+- **FIXED:** Use full-session token and cost totals, including tool calls, compaction, summaries, and cache warming; keep unknown post-compaction context distinct from billing.
+- **ADDED:** Render codemode scripts and nested-call progress inside the parent tool block, including stored results on resume.
+- **FIXED:** Show summarization retry progress and use the backend's settled cancellation outcome.
+- **CHANGED:** Document a tool-wrapper permission bridge that returns successful results for accepted direct and nested edits without applying them twice.
+
 ## 2026-10-20
 
 - **BREAKING:** Replace `PiToolStatus` and `PiToolError` with separate tool header-icon, status-icon, status-text and summary highlight groups. Update custom overrides using the README highlight reference.

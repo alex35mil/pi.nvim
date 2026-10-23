@@ -37,6 +37,7 @@ local Attention = require("pi.attention")
 local Dialog = require("pi.ui.dialog")
 local Extension = require("pi.ui.extension")
 local CommandsCache = require("pi.cache.commands")
+local Tools = require("pi.ui.chat.tools")
 
 ---@class pi.StartupSection
 ---@field header string
@@ -69,17 +70,12 @@ local function current_tab()
     return vim.api.nvim_get_current_tabpage()
 end
 
---- Events we've reviewed and deliberately choose not to handle.
---- turn_start/turn_end: TUI doesn't handle them; lifecycle is fully
---- covered by message_start / message_end / agent_settled.
---- thinking_level_changed/session_info_changed: pi.nvim refreshes state
---- through command callbacks; these are redundant notifications.
+--- Run/message events cover turn boundaries. Direct RPC bash has no client UI yet.
 ---@type table<string, true>
 local ignored_events = {
     turn_start = true,
     turn_end = true,
-    thinking_level_changed = true,
-    session_info_changed = true,
+    bash_execution_update = true,
 }
 
 ---@type fun(session: pi.Session, result: table, will_retry: boolean)?
@@ -93,7 +89,9 @@ local function restore_active_agent_status(chat)
     -- Compaction/retry cleanup can fire after agent_end (between turns).
     -- Only restore the spinner if an agent loop is still active.
     local active_verb = chat:active_verb()
-    if active_verb then
+    if chat:is_compacting() then
+        chat:set_status({ type = "compaction" })
+    elseif active_verb then
         chat:set_status({ type = "agent", text = active_verb .. "…" })
     else
         chat:set_status(nil)
@@ -154,16 +152,44 @@ local function stash_file_tool_args(session, tool_name, tool_call_id, args)
     session._pending_file_change_args[tool_call_id] = decoded
 end
 
---- Fetch current state and update the status line.
+--- Recover successful nested file mutations from bounded persisted metadata.
+---@param session pi.Session
+---@param result table
+local function track_nested_files(session, result)
+    for _, call in ipairs(result.nestedCalls and result.nestedCalls.calls or {}) do
+        if call.status == "ok" and (call.name == "edit" or call.name == "write") then
+            track_changed_file(session, call.arguments)
+        end
+    end
+end
+
+--- Read full-session billing and the backend's current context estimate.
+---@param session pi.Session
+function M.refresh_stats(session)
+    session.rpc:send({ type = "get_session_stats" }, function(res)
+        vim.schedule(function()
+            if res.success then
+                session.chat:update_stats(res.data)
+            else
+                Notify.warn(res.error or "Failed to fetch session statistics")
+            end
+        end)
+    end)
+end
+
+--- Fetch current state and accounting for the status line.
 ---@param session pi.Session
 function M.refresh_state(session)
     session.rpc:send({ type = "get_state" }, function(res)
-        if res.success and res.data then
-            vim.schedule(function()
+        vim.schedule(function()
+            if res.success then
                 session.chat:update_state(res.data)
-            end)
-        end
+            else
+                Notify.warn(res.error or "Failed to fetch session state")
+            end
+        end)
     end)
+    M.refresh_stats(session)
 end
 
 --- Central event handler for a session.
@@ -191,9 +217,19 @@ local function handle_event(session, msg)
     elseif t == "agent_end" then
         chat:on_agent_end()
     elseif t == "agent_settled" then
-        chat:on_agent_settled()
+        chat:on_agent_settled(msg.aborted == true)
         CommandsCache.refresh(session.rpc)
         M.refresh_state(session)
+    elseif t == "thinking_level_changed" or t == "session_info_changed" then
+        M.refresh_state(session)
+    elseif t == "entry_appended" then
+        local entry = msg.entry
+        if entry.type == "compaction" and rebuild_after_compaction then
+            rebuild_after_compaction(session, entry, chat:is_streaming())
+        elseif entry.type == "usage" or entry.type == "context_edit" then
+            M.refresh_stats(session)
+        end
+        -- Custom entry presentation belongs to the separate entry-rendering API.
     elseif t == "queue_update" then
         chat:on_queue_update(msg.steering or {}, msg.followUp or {})
     elseif t == "message_update" then
@@ -221,20 +257,29 @@ local function handle_event(session, msg)
         end
     elseif t == "tool_execution_start" then
         local args = normalize_tool_args(msg.args) or msg.args
-        chat:on_tool_start(msg.toolName or "tool", msg.toolCallId, args)
-        -- Stash args for file-changing tools; tool_execution_end doesn't carry args.
+        if not msg.parentToolCallId then
+            chat:on_tool_start(msg.toolName or "tool", msg.toolCallId, args)
+        end
+        -- Nested file mutations still count even though their parent owns presentation.
         stash_file_tool_args(session, msg.toolName, msg.toolCallId, args)
     elseif t == "tool_execution_end" then
-        chat:on_tool_end(msg.toolName or "tool", msg.toolCallId, msg.result, msg.isError)
-        if session._pending_file_change_args and not msg.isError then
-            local args = session._pending_file_change_args[msg.toolCallId]
-            track_changed_file(session, args)
-            session._pending_file_change_args[msg.toolCallId] = nil
+        if not msg.parentToolCallId then
+            chat:on_tool_end(msg.toolName or "tool", msg.toolCallId, msg.result, msg.isError)
         end
-    elseif t == "compaction_start" or t == "auto_compaction_start" then
+        if session._pending_file_change_args then
+            local completed = Tools.resolve_status(msg.result, msg.isError) == "completed"
+            if completed then
+                track_changed_file(session, session._pending_file_change_args[msg.toolCallId])
+            end
+            -- Direct calls still receive a finalized message_end; children do not.
+            if completed or msg.parentToolCallId then
+                session._pending_file_change_args[msg.toolCallId] = nil
+            end
+        end
+    elseif t == "compaction_start" then
         chat:set_compacting(true)
         chat:set_status({ type = "compaction" })
-    elseif t == "compaction_end" or t == "auto_compaction_end" then
+    elseif t == "compaction_end" then
         if msg.aborted then
             chat:set_compacting(false)
             restore_active_agent_status(chat)
@@ -267,6 +312,17 @@ local function handle_event(session, msg)
         else
             restore_active_agent_status(chat)
         end
+    elseif t == "summarization_retry_scheduled" then
+        chat:on_error(msg.errorMessage, { pad_top = true, pad_bottom = true })
+        chat:set_status({ type = "agent", text = "Retrying summary…" })
+    elseif t == "summarization_retry_attempt_start" then
+        if msg.source == "compaction" then
+            chat:set_status({ type = "compaction" })
+        else
+            chat:set_status({ type = "agent", text = "Summarizing branch…" })
+        end
+    elseif t == "summarization_retry_finished" then
+        restore_active_agent_status(chat)
     elseif t == "extension_ui_request" then
         vim.schedule(function()
             Extension.handle(session, msg)
@@ -299,9 +355,8 @@ local function handle_event(session, msg)
             chat:on_process_exit(msg.code, msg.expected == true)
         end)
     elseif t == "response" then
-        -- Normally handled by rpc:send() one-shot callbacks. Late error
-        -- responses (e.g. async prompt failures like auth errors) arrive
-        -- after the initial success response already consumed the callback.
+        -- Callbacks reconcile the submitted input; command failures are also
+        -- shown in history. Failures after acceptance use the event stream.
         if msg.success == false and type(msg.error) == "string" then
             chat:on_error(msg.error, { pad_top = true, pad_bottom = true })
         end
@@ -311,6 +366,12 @@ local function handle_event(session, msg)
     elseif t == "message_end" then
         chat:on_message_end(msg)
         local message = msg.message
+        if type(message) == "table" and (message.role == "assistant" or message.role == "toolResult") then
+            M.refresh_stats(session)
+            if message.role == "toolResult" then
+                track_nested_files(session, message)
+            end
+        end
         if type(message) == "table" and message.role == "toolResult" and session._pending_file_change_args then
             local tool_call_id = message.toolCallId or message.toolUseId
             if type(tool_call_id) == "string" and tool_call_id ~= "" then
@@ -322,7 +383,9 @@ local function handle_event(session, msg)
             end
         end
     elseif t == "tool_execution_update" then
-        chat:on_tool_update(msg.toolName or "tool", msg.toolCallId, msg)
+        if not msg.parentToolCallId then
+            chat:on_tool_update(msg.toolName or "tool", msg.toolCallId, msg)
+        end
     elseif ignored_events[t] then
         return true
     else
@@ -497,6 +560,7 @@ local function start_new_session(session)
                 session._pending_file_change_args = nil
                 session.chat:clear()
                 fetch_commands_and_show_startup_block(session)
+                M.refresh_state(session)
             end)
         end)
         if not sent_new then
@@ -615,10 +679,6 @@ local function replay_messages(session, messages)
                     pending_agent_end = true
                 end
             end
-            local stop = msg.stopReason
-            if stop ~= "aborted" and stop ~= "error" and type(msg.usage) == "table" then
-                session.chat:add_usage(msg.usage)
-            end
         elseif role == "toolResult" then
             local tool_call_id = msg.toolCallId or msg.toolUseId or ""
             local tool_name = msg.toolName or "tool"
@@ -630,6 +690,7 @@ local function replay_messages(session, messages)
             if tc_args then
                 track_changed_file(session, tc_args)
             end
+            track_nested_files(session, msg)
         elseif role == "compactionSummary" then
             if pending_agent_end then
                 session.chat:on_agent_end()
