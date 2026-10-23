@@ -1,5 +1,7 @@
 --- Tool call rendering for chat history.
 
+local Fences = require("pi.ui.chat.fences")
+
 local M = {}
 
 M.GLYPHS = { TOP = "╭─ ", MID = "│  ", SEP = "├──── ", BOT = "╰─ " }
@@ -149,25 +151,9 @@ local function render_output(history, text, insert_at)
     end
     M.set_border(history, sep_row, M.GLYPHS.SEP)
     local output_lines = vim.split(text, "\n", { plain = true })
-    -- The history buffer uses treesitter markdown for rendering agent prose.
-    -- Tool output may contain ``` at the start of a line (e.g. a command that
-    -- prints code fences). Treesitter treats these as code fence delimiters —
-    -- an unclosed fence causes all content below to be styled as code.
-    --
-    -- We use conceallevel=0 on the history window so treesitter can't conceal
-    -- characters (brackets, bold markers, etc.) inside tool output. But it still
-    -- PARSES ``` as fence delimiters. To prevent leaking, we count fence lines
-    -- and auto-close if odd — same approach used for user messages in history.lua.
-    local auto_closed = false
-    local fences = 0
-    for _, line in ipairs(output_lines) do
-        if line:match("^```") then
-            fences = fences + 1
-        end
-    end
-    if fences % 2 == 1 then
-        output_lines[#output_lines + 1] = "```"
-        auto_closed = true
+    local closer = Fences.closer(text)
+    if closer then
+        output_lines[#output_lines + 1] = closer
     end
     local start
     if insert_at then
@@ -186,9 +172,9 @@ local function render_output(history, text, insert_at)
             })
         end
     end
-    if auto_closed then
+    if closer then
         local close_row = start + #output_lines - 1
-        vim.api.nvim_buf_set_extmark(history:buf(), history:ns(), close_row, 3, {
+        vim.api.nvim_buf_set_extmark(history:buf(), history:ns(), close_row, #closer, {
             virt_text = { { " ← auto-closed", "PiWarning" } },
             virt_text_pos = "inline",
         })
@@ -456,6 +442,14 @@ function M.build_collapsed_view(input_lines, output_lines, has_output, input_vis
                 add(output_lines[i], "output")
             end
         end
+    end
+
+    -- Selection and width truncation can turn a balanced source into an opener.
+    -- Keep the synthetic closer outside those limits so it remains valid Markdown.
+    local closer = Fences.closer(table.concat(lines, "\n"))
+    if closer then
+        lines[#lines + 1] = closer
+        specs[#specs + 1] = has_output and output_visible > 0 and "output" or "input"
     end
 
     return lines, specs

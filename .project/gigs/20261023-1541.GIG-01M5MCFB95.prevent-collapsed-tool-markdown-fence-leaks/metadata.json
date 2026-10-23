@@ -1,0 +1,52 @@
+{
+  "id": "GIG-01M5MCFB95",
+  "rawId": "01M5MCFB95",
+  "slug": "prevent-collapsed-tool-markdown-fence-leaks",
+  "title": "Prevent collapsed tool output from leaking Markdown fences into later chat",
+  "createdAt": "2026-10-23T12:41:18.885Z",
+  "phase": "selfReview",
+  "branch": {
+    "state": "ready",
+    "name": "gig-01m5mcfb95-prevent-collapsed-tool-markdown-fence-leaks",
+    "start": "main",
+    "target": "main",
+    "source": "generated"
+  },
+  "integrations": [
+    {
+      "role": "tracker",
+      "provider": "github",
+      "repository": {
+        "owner": "alex35mil",
+        "repo": "pi.nvim"
+      },
+      "state": "bound",
+      "external": {
+        "issueNumber": 17
+      },
+      "planComment": {
+        "state": "published",
+        "token": "a49b3db3-f4b2-42e6-80ba-bae74abe6749",
+        "id": 6367695847,
+        "url": "https://github.com/alex35mil/pi.nvim/issues/17#issuecomment-6367695847"
+      }
+    },
+    {
+      "role": "forge",
+      "provider": "github",
+      "repository": {
+        "owner": "alex35mil",
+        "repo": "pi.nvim"
+      },
+      "head": "gig-01m5mcfb95-prevent-collapsed-tool-markdown-fence-leaks",
+      "target": "main",
+      "state": "intent"
+    }
+  ],
+  "authority": {
+    "kind": "tracker",
+    "provider": "github"
+  },
+  "entity": "gig",
+  "kind": "bugfix"
+}
