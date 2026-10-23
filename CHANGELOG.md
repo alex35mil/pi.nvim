@@ -2,6 +2,7 @@
 
 ## 2026-10-23
 
+- **FIXED:** Keep Markdown fences in collapsed tool previews and unfinished messages from changing later chat formatting, with shared boundary handling for backtick and tilde fences.
 - **BREAKING:** Require pi 1.3.0 and update the backend integration to its current RPC APIs.
 - **CHANGED:** Use explicit prompt acceptance outcomes for submission and compaction handoffs.
 - **FIXED:** Offer only the current model's supported thinking levels, including `max`, and refresh state after extension-driven changes.

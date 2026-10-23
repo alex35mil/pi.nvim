@@ -106,6 +106,7 @@ History.__index = History
 local Ft = require("pi.filetypes")
 local Config = require("pi.config")
 local Tools = require("pi.ui.chat.tools")
+local Fences = require("pi.ui.chat.fences")
 
 local ns = vim.api.nvim_create_namespace("pi-chat")
 
@@ -649,18 +650,6 @@ function History:_append_text(text)
     self:_maybe_scroll()
 end
 
----@param text string
----@return boolean
-function History:_agent_text_has_open_fence(text)
-    local open = false
-    for _, line in ipairs(vim.split(text, "\n", { plain = true })) do
-        if line:match("^%s*```") then
-            open = not open
-        end
-    end
-    return open
-end
-
 ---@param lines_list string[]
 ---@return integer start_row 0-indexed row where the first line was placed
 function History:_append_lines(lines_list)
@@ -961,16 +950,9 @@ function History:add_user_message(msg, timestamp, image_count, queue_type)
         local label = " " .. Config.options.labels.user_message .. " "
         local has_message_text = msg ~= ""
         local msg_lines = has_message_text and vim.split(msg, "\n", { plain = true }) or {}
-        -- Treesitter highlights fenced code blocks — an unclosed fence bleeds
-        -- into everything below. We track fence parity and auto-close if odd.
-        local fences = 0
-        for _, line in ipairs(msg_lines) do
-            if line:match("^```") then
-                fences = fences + 1
-            end
-        end
-        if fences % 2 == 1 then
-            msg_lines[#msg_lines + 1] = "```"
+        local closer = Fences.closer(msg)
+        if closer then
+            msg_lines[#msg_lines + 1] = closer
         end
         local time = timestamp or (os.time() * 1000)
         local time_str = format_time(time)
@@ -1089,11 +1071,12 @@ function History:on_agent_end(done_verb, opts)
         if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
             return
         end
-        -- Agent may stop mid-stream with an open fence. Recompute from the
-        -- streamed agent text because chunks can split the ``` marker.
+        -- Rejoin only assistant text: chunks may split a delimiter, and tool
+        -- output in the same buffer must not change this message's fence state.
         local agent_text = table.concat(self._agent_text_chunks or {})
-        if self:_agent_text_has_open_fence(agent_text) then
-            self:_append_text("\n```")
+        local closer = Fences.closer(agent_text)
+        if closer then
+            self:_append_text("\n" .. closer)
         end
         self._agent_text_chunks = nil
         -- Render markdown tables in the agent response text.
@@ -2136,15 +2119,11 @@ end
 ---@param text string
 ---@return string[]
 local function build_tool_live_update_lines(text)
-    local output_lines = vim.split(Tools.sanitize_text(text), "\n", { plain = true })
-    local fences = 0
-    for _, line in ipairs(output_lines) do
-        if line:match("^```") then
-            fences = fences + 1
-        end
-    end
-    if fences % 2 == 1 then
-        output_lines[#output_lines + 1] = "```"
+    text = Tools.sanitize_text(text)
+    local output_lines = vim.split(text, "\n", { plain = true })
+    local closer = Fences.closer(text)
+    if closer then
+        output_lines[#output_lines + 1] = closer
     end
 
     local lines = { "" }
