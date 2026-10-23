@@ -551,9 +551,62 @@ end
 ---@field inline? boolean  render as a single line (no header/footer)
 ---@field inline_text? fun(args: table?): string?  text to show after tool name
 ---@field inline_summary? fun(result: table?, is_error: boolean?): string?  result summary shown next to the status icon
+---@field result_text? fun(result: table?): string? Structured result presentation shared by live updates and final output.
+
+---@param result table?
+---@return string?
+local function codemode_result_text(result)
+    if not result then
+        return nil
+    end
+    local lines = {} ---@type string[]
+    for _, call in ipairs(result.details and result.details.calls or {}) do
+        local line = "[" .. call.status .. "] " .. call.name
+        if call.args and call.args ~= "" then
+            line = line .. " " .. call.args
+        end
+        if call.durationMs then
+            line = line .. string.format(" (%.1fs)", call.durationMs / 1000)
+        end
+        if call.cost and call.cost > 0 then
+            line = line .. string.format(" $%.4g", call.cost)
+        end
+        lines[#lines + 1] = line
+        if call.error and call.error ~= "" then
+            lines[#lines + 1] = "    " .. call.error:gsub("\n", "\n    ")
+        end
+    end
+    local text = extract_result_text(result)
+    if text and text ~= "" then
+        if #lines > 0 then
+            lines[#lines + 1] = ""
+        end
+        lines[#lines + 1] = text
+    end
+    return #lines > 0 and table.concat(lines, "\n") or nil
+end
 
 ---@type table<string, pi.ToolRenderer>
 local renderers = {
+    codemode = {
+        input_visible = 10,
+        output_visible = 5,
+        result_text = codemode_result_text,
+        on_start = function(history, args)
+            if args and type(args.code) == "string" then
+                for _, line in ipairs(vim.split(args.code, "\n", { plain = true })) do
+                    render_body_line(history, line)
+                end
+            end
+        end,
+        on_end = function(history, _, result, _, insert_at)
+            local text = codemode_result_text(result)
+            if text then
+                insert_at = render_output(history, text, insert_at)
+            end
+            return insert_at
+        end,
+    },
     bash = {
         input_visible = 1,
         output_visible = 1,
@@ -772,6 +825,18 @@ local default_renderer = {
 ---@return pi.ToolRenderer
 function M.get_renderer(tool_name)
     return renderers[tool_name] or default_renderer
+end
+
+--- Present structured or text results through the selected renderer.
+---@param tool_name string
+---@param result table?
+---@return string?
+function M.result_text(tool_name, result)
+    local renderer = M.get_renderer(tool_name)
+    if renderer.result_text then
+        return renderer.result_text(result)
+    end
+    return extract_result_text(result)
 end
 
 return M

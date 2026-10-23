@@ -1,0 +1,46 @@
+{
+  "id": "GIG-01M5EVNKQ5",
+  "rawId": "01M5EVNKQ5",
+  "slug": "upgrade-pi-v1-3-0",
+  "title": "Upgrade pi.nvim to pi v1.3.0",
+  "createdAt": "2026-10-21T09:11:26.181Z",
+  "phase": "selfReview",
+  "branch": {
+    "state": "ready",
+    "name": "gig-01m5evnkq5-upgrade-pi-v1-3-0",
+    "start": "main",
+    "target": "main",
+    "source": "generated"
+  },
+  "integrations": [
+    {
+      "role": "tracker",
+      "provider": "github",
+      "repository": {
+        "owner": "alex35mil",
+        "repo": "pi.nvim"
+      },
+      "state": "bound",
+      "external": {
+        "issueNumber": 14
+      }
+    },
+    {
+      "role": "forge",
+      "provider": "github",
+      "repository": {
+        "owner": "alex35mil",
+        "repo": "pi.nvim"
+      },
+      "head": "gig-01m5evnkq5-upgrade-pi-v1-3-0",
+      "target": "main",
+      "state": "intent"
+    }
+  ],
+  "authority": {
+    "kind": "tracker",
+    "provider": "github"
+  },
+  "entity": "gig",
+  "kind": "chore"
+}

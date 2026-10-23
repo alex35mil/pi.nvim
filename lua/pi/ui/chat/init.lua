@@ -518,55 +518,23 @@ function Chat:_is_extension_command(text)
     return false
 end
 
---- A successful prompt response also covers commands handled without a run.
+--- Reconcile only this prompt's handoff; run events own global activity.
 ---@param submission pi.SubmittedMessage
-function Chat:_reconcile_prompt(submission)
+---@param disposition pi.PromptDisposition
+function Chat:_reconcile_prompt(submission, disposition)
     if self._inflight_prompt ~= submission and self._compaction_prompt ~= submission then
         return
     end
-    -- TODO: When the minimum supported Pi version exposes response.data.disposition,
-    -- handle no-run completion directly and remove this get_state round trip.
-    local sent = self._agent.send({ type = "get_state" }, function(response)
-        vim.schedule(function()
-            if self._inflight_prompt ~= submission and self._compaction_prompt ~= submission then
-                return
-            end
-            if not response.success then
-                Notify.warn(response.error or "Failed to check prompt completion")
-                return
-            end
-            local state = response.data
-            if
-                type(state) ~= "table"
-                or type(state.isStreaming) ~= "boolean"
-                or type(state.isCompacting) ~= "boolean"
-            then
-                Notify.warn("Pi returned an invalid activity state")
-                return
-            end
-            if state.isStreaming then
-                if self._compaction_prompt == submission then
-                    self._compaction_prompt = nil
-                    self:flush_compaction_queue(true)
-                end
-                return
-            end
-            if self._inflight_prompt == submission then
-                self._inflight_prompt = nil
-                if not self._streaming and not self._compacting and not state.isCompacting then
-                    self:set_status(nil)
-                end
-            end
-            if self._compaction_prompt == submission then
-                self._compaction_prompt = nil
-                if not state.isCompacting then
-                    self:flush_compaction_queue(false)
-                end
-            end
-        end)
-    end)
-    if sent == false then
-        Notify.warn("Could not check prompt completion")
+    local continuing = disposition == "started" or disposition == "queued"
+    if disposition == "handled" and self._inflight_prompt == submission then
+        self._inflight_prompt = nil
+        if not self._streaming and not self._compacting then
+            self:set_status(nil)
+        end
+    end
+    if self._compaction_prompt == submission then
+        self._compaction_prompt = nil
+        self:flush_compaction_queue(continuing or self._streaming)
     end
 end
 
@@ -661,7 +629,7 @@ function Chat:_send_submission(submission, command_type)
             if response.success == false then
                 self:_restore_submission(submission)
             elseif command_type == "prompt" then
-                self:_reconcile_prompt(submission)
+                self:_reconcile_prompt(submission, response.data.disposition)
             end
         end)
     end
@@ -845,7 +813,8 @@ function Chat:on_agent_end()
 end
 
 --- Pi is authoritative here: retries, compaction, and queued turns are complete.
-function Chat:on_agent_settled()
+---@param aborted boolean
+function Chat:on_agent_settled(aborted)
     self._streaming = false
     self._assistant_block_open = false
     self._assistant_message_header_rendered = false
@@ -861,7 +830,8 @@ function Chat:on_agent_settled()
     if not self:has_prompt_focus() then
         local attention_config = Config.options.attention
         if attention_config and attention_config.notify_on_completion then
-            Attention.notify(self._tab, "Agent finished - waiting for your input", vim.log.levels.INFO)
+            local outcome = aborted and "Agent aborted" or "Agent finished"
+            Attention.notify(self._tab, outcome .. " - waiting for your input", vim.log.levels.INFO)
         end
     end
 end
@@ -947,7 +917,6 @@ end
 --- Handle message_end events.  When an assistant message ends with
 --- stopReason "aborted" or "error", mark all pending tool blocks as
 --- errored so they don't hang open forever.
---- Also updates status line context usage from assistant message usage.
 ---@param msg pi.RpcEvent
 function Chat:on_message_end(msg)
     local message = msg.message
@@ -956,12 +925,6 @@ function Chat:on_message_end(msg)
     end
 
     local stop = message.stopReason
-
-    -- Accumulate usage stats (skip aborted/errored messages —
-    -- they may have zero or stale usage, matching TUI's estimateContextTokens).
-    if stop ~= "aborted" and stop ~= "error" and type(message.usage) == "table" then
-        self._prompt:statusline():add_usage(message.usage)
-    end
 
     if stop == "aborted" or stop == "error" then
         self._last_turn_stop_reason = stop
@@ -996,10 +959,10 @@ function Chat:update_state(data)
     self._prompt:statusline():update_state(data)
 end
 
---- Accumulate usage stats on the status line (e.g. after session replay).
----@param usage table
-function Chat:add_usage(usage)
-    self._prompt:statusline():add_usage(usage)
+--- Replace accounting with the backend's complete session snapshot.
+---@param stats pi.SessionStats
+function Chat:update_stats(stats)
+    self._prompt:statusline():update_stats(stats)
 end
 
 --- Set or clear an extension status value on the status line.

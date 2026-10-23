@@ -1,4 +1,4 @@
---- https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/modes/rpc/rpc-types.ts
+--- https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/src/modes/rpc/rpc-types.ts
 ---@alias pi.RpcEventType
 ---| "agent_start"
 ---| "agent_end"
@@ -14,17 +14,22 @@
 ---| "tool_execution_end"
 ---| "compaction_start"
 ---| "compaction_end"
----| "auto_compaction_start"
----| "auto_compaction_end"
+---| "entry_appended"
+---| "thinking_level_changed"
+---| "session_info_changed"
 ---| "auto_retry_start"
 ---| "auto_retry_end"
+---| "summarization_retry_scheduled"
+---| "summarization_retry_attempt_start"
+---| "summarization_retry_finished"
+---| "bash_execution_update"
 ---| "extension_ui_request"
 ---| "extension_error"
 ---| "response"
 ---| "_process_exit"
 ---| "_stderr"
 
---- https://github.com/earendil-works/pi/blob/main/packages/ai/src/types.ts
+--- https://github.com/earendil-works/pi/blob/v1.3.0/packages/ai/src/types.ts
 ---@alias pi.AssistantMessageEventType
 ---| "start"
 ---| "text_start"
@@ -39,7 +44,7 @@
 ---| "done"
 ---| "error"
 
---- https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/modes/rpc/rpc-types.ts
+--- https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/src/modes/rpc/rpc-types.ts
 ---@alias pi.RpcCommandType
 ---| "prompt"
 ---| "steer"
@@ -50,13 +55,32 @@
 ---| "get_messages"
 ---| "get_commands"
 ---| "get_state"
+---| "get_session_stats"
+---| "compact"
 ---| "set_thinking_level"
 ---| "cycle_thinking_level"
+---| "get_available_thinking_levels"
 ---| "set_model"
 ---| "cycle_model"
 ---| "get_available_models"
 ---| "set_session_name"
 ---| "extension_ui_response"
+
+---@alias pi.PromptDisposition "started"|"queued"|"handled"
+
+---@class pi.SessionStats
+---@field tokens { input: integer, output: integer, cacheRead: integer, cacheWrite: integer, total: integer }
+---@field cost number
+---@field contextUsage? { tokens: integer?, contextWindow: integer, percent: number? } JSON null tokens/percent mean unknown after compaction.
+
+---@class pi.CodemodeCall
+---@field id string
+---@field name string
+---@field args string
+---@field status "running"|"ok"|"error"|"cancelled"
+---@field durationMs? number
+---@field error? string
+---@field cost? number
 
 ---@class pi.RpcImageContent
 ---@field type "image"
@@ -74,18 +98,26 @@
 ---@field cancelled? boolean
 ---@field [string] any
 
---- https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md
+--- https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/docs/json.md
 ---@class pi.RpcEvent
 ---@field type pi.RpcEventType
----@field assistantMessageEvent? { type: pi.AssistantMessageEventType, delta?: string, toolCall?: pi.ToolCall }
+---@field assistantMessageEvent? { type: pi.AssistantMessageEventType, contentIndex?: integer, delta?: string, content?: string, toolCall?: pi.ToolCall, id?: string, toolName?: string }
 ---@field toolName? string
 ---@field toolCallId? string
+---@field parentToolCallId? string
+---@field durationMs? number
+---@field aborted? boolean
+---@field willRetry? boolean
+---@field reason? "manual"|"threshold"|"overflow"
+---@field source? "compaction"|"branchSummary"
+---@field usage? table
+---@field entry? { type: string, [string]: any }
 ---@field args? table
 ---@field result? { content?: table[], details?: table }
 ---@field isError? boolean
 ---@field command? string
 ---@field success? boolean
----@field data? table
+---@field data? { disposition?: pi.PromptDisposition, [string]: any }
 ---@field code? integer
 ---@field error? string
 ---@field id? string
@@ -105,7 +137,8 @@
 ---@class pi.ToolCall
 ---@field id string
 ---@field name string
----@field arguments string|table
+---@field arguments table
+---@field argumentsError? string
 
 ---@class pi.Rpc
 ---@field _job_id integer?

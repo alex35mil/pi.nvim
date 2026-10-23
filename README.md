@@ -130,7 +130,8 @@ https://github.com/user-attachments/assets/f210246a-2427-4fdb-b679-eeb6ceae4538
 ## Requirements
 
 - Neovim 0.10+
-- `pi` in `$PATH`
+- `pi` 1.3.0+ in `$PATH`
+- Node.js 22.19.0+ for npm installations of pi
 
 Optional but useful:
 
@@ -139,6 +140,8 @@ Optional but useful:
 - `blink.cmp` if you want popup completion in the π prompt buffer
 
 Run `:checkhealth pi` to verify.
+
+Upgrading from an older pi version? See the [upgrade guide](UPGRADING.md).
 
 ## Installation
 
@@ -613,7 +616,7 @@ While typing, `@mentions` are highlighted in the prompt buffer so you can see at
 
 Slash completion combines Pi's RPC command list with a small set of Neovim-native harness actions. Backend commands cover three sources:
 
-- **Extension commands** — registered by pi extensions (e.g. `/permission-toggle-auto-accept`).
+- **Extension commands** — registered by pi extensions (e.g. `/permissions-toggle-auto-accept`).
 - **Prompt templates** — reusable prompt snippets, expanded server-side before being sent to the LLM.
 - **Skills** — invoked as `/skill:name`, also expanded server-side.
 
@@ -634,7 +637,7 @@ The following harness actions run directly in Neovim and mirror their Pi TUI cou
 To invoke a command, type it on the **first line** of the prompt:
 
 ```
-/permission-toggle-auto-accept
+/permissions-toggle-auto-accept
 ```
 
 Arguments, if the command takes any, follow on the same line:
@@ -643,7 +646,7 @@ Arguments, if the command takes any, follow on the same line:
 /some-command arg1 arg2
 ```
 
-Only the first line is recognized as a command — everything else in the same message is treated as plain prompt text. Backend commands follow this [Pi RPC convention](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md#get_commands). If you want a command and a regular prompt to take effect together, send them as two separate messages.
+Only the first line is recognized as a command — everything else in the same message is treated as plain prompt text. Backend commands follow this [Pi RPC convention](https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/docs/rpc-commands.md#get_commands). If you want a command and a regular prompt to take effect together, send them as two separate messages.
 
 That said, this only applies to the explicit `/command` invocation path. Skills in particular are surfaced to the model as part of the system context: per the [Agent Skills spec](https://agentskills.io/specification), each skill's `name` and `description` are loaded at startup for _all_ available skills ("progressive disclosure"), and the full `SKILL.md` body is only loaded once the model decides to activate that skill. As a result, most models will pick up the right skill even when you _mention_ it inline ("please use the `commit` skill to write the message"), without you having to invoke `/skill:commit` explicitly. How reliably this works depends on the model and on how much other context it's juggling, so for anything load-bearing it's still safer to invoke the command explicitly on the first line.
 
@@ -652,9 +655,9 @@ While typing, the prompt buffer highlights `/commands` in real time, but **only 
 You can also invoke a command programmatically from Lua, without going through the prompt buffer:
 
 ```lua
-require("pi").invoke("/permission-toggle-auto-accept")
+require("pi").invoke("/permissions-toggle-auto-accept")
 -- the leading slash is optional:
-require("pi").invoke("permission-toggle-auto-accept")
+require("pi").invoke("permissions-toggle-auto-accept")
 ```
 
 This is useful for binding commands directly to keymaps:
@@ -664,7 +667,7 @@ vim.keymap.set(
     "n", 
     "<Leader>pt", 
     function()
-        require("pi").invoke("/permission-toggle-auto-accept")
+        require("pi").invoke("/permissions-toggle-auto-accept")
     end,
     { desc = "Pi toggle auto-accept" },
 )
@@ -858,6 +861,8 @@ The toggle key is registered as a permanent buffer-local mapping on the prompt b
 
 π renders a configurable status line pinned to the bottom of the prompt buffer. It's where session-level info lives — current model, thinking level, context usage, token counts, cost, pending attention, and anything else you want to surface from your extensions.
 
+Token and cost totals come from Pi's full-session statistics, including tool model calls, compaction, branch summaries, and cache warming. They remain session totals after compaction and resume. Context usage is separate: immediately after compaction it displays as unknown (`-/200k`, for example) until Pi has a fresh estimate.
+
 The layout is split into **left** and **right** groups. Each group is just an array of items, and items can be:
 
 - **A built-in component name** — a string matching one of the built-ins listed below.
@@ -1048,9 +1053,9 @@ Here's the part to understand before the rest of this section makes sense: **pi 
 
 In other words, **without a permission extension, there is no diff review**. The agent will apply edits directly, and you'll see them in the chat history as completed tool calls, not as reviewable diffs.
 
-If you want a drop-in, fully-featured solution, use my reference implementation: [**alex35mil/agentic-af/extensions/permission**](https://github.com/alex35mil/agentic-af/tree/main/extensions/permission). It is very similar to Claude Code's allow / ask / deny model with glob rules, per-tool argument matching, skill-derived allowances, bash argument splitting and redirection safety, and an auto-accept toggle.
+If you want a drop-in, fully-featured solution, use my reference implementation: [**alex35mil/pi-af/extensions/permissions**](https://github.com/alex35mil/pi-af/tree/main/extensions/permissions). It is very similar to Claude Code's allow / ask / deny model with glob rules, per-tool argument matching, skill-derived allowances, bash argument splitting and redirection safety, and an auto-accept toggle.
 
-If you'd rather roll your own, or just want to understand the protocol, here's a minimal pi extension that intercepts `edit` and `write` tool calls, routes them through pi.nvim's diff review UI, and handles all response variants.
+If you'd rather roll your own, here's a minimal extension that wraps the built-in `edit` and `write` tools, routes them through pi.nvim's diff review UI, and returns successful results for already-applied changes. This works for direct calls and nested calls made through codemode.
 
 <details>
 <summary><strong>Minimal example</strong> — click to expand</summary>
@@ -1058,19 +1063,19 @@ If you'd rather roll your own, or just want to understand the protocol, here's a
 ```ts
 /**
  * Minimal diff-review permission extension for pi + pi.nvim.
- * Intercepts every `edit` and `write` tool call and routes it through
- * pi.nvim's diff review UI via ctx.ui.select.
+ * Wraps edit/write so already-applied changes return successful tool results.
  */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
-
-// Track which tool calls the user approved so we can flip the
-// blocked-isError flag back in a message_end handler.
-const approvedToolCalls = new Set<string>()
+import {
+    createEditToolDefinition,
+    createWriteToolDefinition,
+    type ExtensionAPI,
+    type ToolDefinition,
+} from "@earendil-works/pi-coding-agent"
+import type { TSchema } from "typebox"
 
 type ReviewNote = {
     path: string
     side: "current" | "proposed"
-    /** 1-indexed inclusive range. */
     lineStart: number
     lineEnd: number
     lines: string[]
@@ -1085,91 +1090,53 @@ function formatNotes(notes?: ReviewNote[]) {
     }).join("\n")
 }
 
-export default function (pi: ExtensionAPI) {
-    pi.on("tool_call", async (event, ctx) => {
-        if (event.toolName !== "edit" && event.toolName !== "write") {
-            return undefined // other tools run without review
-        }
+function registerReviewed<T extends TSchema, D>(pi: ExtensionAPI, tool: ToolDefinition<T, D | undefined>) {
+    pi.registerTool({
+        ...tool,
+        async execute(id, input, signal, onUpdate, ctx) {
+            if (!ctx.hasUI) throw new Error(`[rejected] No UI available to review ${tool.name}`)
+            const path = (input as { path: string }).path
+            const choice = await ctx.ui.select(JSON.stringify({
+                prompt: `${tool.name}: ${path}`,
+                toolName: tool.name,
+                toolInput: input,
+            }), ["Accept", "Reject"])
 
-        if (!ctx.hasUI) {
+            // In the TUI, the original implementation still owns the write.
+            if (choice === "Accept") return tool.execute(id, input, signal, onUpdate, ctx)
+
+            if (choice?.startsWith("{")) {
+                const parsed = JSON.parse(choice)
+                if (parsed.result === "Accepted" || parsed.result === "AcceptModified") {
+                    // Neovim already wrote the file. Never call the original tool again.
+                    let text = `[accepted] Changes applied to ${path}.` + formatNotes(parsed.notes)
+                    if (parsed.result === "AcceptModified") {
+                        text += `\n\nUser modified the proposal. Current content of ${path}:\n`
+                            + "```\n" + parsed.content + "\n```"
+                    }
+                    return { content: [{ type: "text", text }], details: undefined }
+                }
+                if (parsed.result === "Rejected") {
+                    return {
+                        content: [{ type: "text", text: `[rejected] File unchanged: ${path}.` + formatNotes(parsed.notes) }],
+                        details: undefined,
+                        isError: true,
+                    }
+                }
+            }
+            ctx.abort()
             return {
-                block: true,
-                reason: `[rejected] No UI available to review ${event.toolName}`,
+                content: [{ type: "text", text: `[rejected] User rejected the edit to ${path}. File unchanged.` }],
+                details: undefined,
+                isError: true,
             }
-        }
-
-        const path = (event.input as { path?: string }).path
-        if (!path) return undefined
-
-        // Build the payload pi.nvim recognizes as a diff review request.
-        const title = JSON.stringify({
-            prompt: `${event.toolName}: ${path}`,
-            toolName: event.toolName,
-            toolInput: event.input,
-        })
-        const choice = await ctx.ui.select(title, ["Accept", "Reject"])
-
-        // pi TUI path: plain "Accept" — let the tool run normally.
-        if (choice === "Accept") {
-            return undefined
-        }
-
-        // pi.nvim path: structured JSON response.
-        if (choice?.startsWith("{")) {
-            const parsed = JSON.parse(choice)
-
-            if (parsed.result === "Accepted") {
-                // pi.nvim already wrote the file — block the tool so
-                // pi's dispatcher doesn't double-write.
-                approvedToolCalls.add(event.toolCallId)
-                return {
-                    block: true,
-                    reason: `[accepted] User approved the edit. Changes applied to ${path} as proposed.` + formatNotes(parsed.notes),
-                }
-            }
-
-            if (parsed.result === "AcceptModified") {
-                // pi.nvim wrote a user-modified version of the file.
-                approvedToolCalls.add(event.toolCallId)
-                return {
-                    block: true,
-                    reason:
-                        `[accepted] User approved with modifications. ${path} was updated with user's version, which differs from what you proposed.` +
-                        formatNotes(parsed.notes) +
-                        `\n\nCurrent content of ${path}:\n` +
-                        "```\n" + parsed.content + "\n```",
-                }
-            }
-
-            if (parsed.result === "Rejected") {
-                // Rejected with review notes: keep the file unchanged, but let
-                // the turn continue so the agent can address the feedback.
-                return {
-                    block: true,
-                    reason: `[rejected] User rejected the edit to ${path}. File unchanged.` + formatNotes(parsed.notes),
-                }
-            }
-        }
-
-        // Rejected without review notes, cancelled, or unknown response: stop the turn.
-        ctx.abort()
-        return {
-            block: true,
-            reason: `[rejected] User rejected the edit to ${path}. File unchanged.`,
-        }
+        },
     })
+}
 
-    // Blocked tool results come back as isError=true. Flip that back
-    // for approved calls so the agent doesn't treat accepted edits as
-    // failures.
-    pi.on("message_end", async (event) => {
-        const msg = event.message as { role?: string; toolCallId?: string; isError?: boolean }
-        if (msg.role !== "toolResult") return
-        if (typeof msg.toolCallId !== "string") return
-        if (approvedToolCalls.delete(msg.toolCallId)) {
-            msg.isError = false
-        }
-    })
+export default function (pi: ExtensionAPI) {
+    registerReviewed(pi, createEditToolDefinition(process.cwd()))
+    registerReviewed(pi, createWriteToolDefinition(process.cwd()))
 }
 ```
 
@@ -1205,11 +1172,11 @@ For `write`, replace `edits` with `"content": "<full file text>"`.
 
 | Value | Meaning | Extension should… |
 | --- | --- | --- |
-| `"Accept"` | Only returned by the pi TUI, not by pi.nvim. | Return `undefined` and let the tool run normally. |
-| `'{"result":"Accepted","notes":[...]}'` | User accepted. pi.nvim already wrote the file. `notes` is omitted when empty. | Return `{ block: true, reason: "[accepted] ..." }` so pi doesn't double-write. Include notes in `reason` when present. |
-| `'{"result":"AcceptModified","content":"...","notes":[...]}'` | User edited the proposal, then accepted. pi.nvim already wrote the modified version. `notes` is omitted when empty. | Return `{ block: true, reason: "[accepted] ..." }`, ideally including the modified content so the agent sees the final state. Include notes when present. |
-| `'{"result":"Rejected","notes":[...]}'` | User rejected with review notes. File unchanged. | Return `{ block: true, reason: "[rejected] ..." }` with the notes. Do **not** call `ctx.abort()` if you want the agent to continue and address the notes. |
-| Anything else (`"Reject"`, `undefined`, cancellation) | User rejected without notes. | Return `{ block: true, reason: "[rejected] ..." }`; call `ctx.abort()` if rejection should stop the turn. |
+| `"Accept"` | Only returned by the pi TUI, not by pi.nvim. | Delegate to the original tool implementation. |
+| `'{"result":"Accepted","notes":[...]}'` | User accepted. pi.nvim already wrote the file. `notes` is omitted when empty. | Return a successful tool result with `[accepted]` text and any notes; do not invoke the original tool. |
+| `'{"result":"AcceptModified","content":"...","notes":[...]}'` | User edited the proposal, then accepted. pi.nvim already wrote the modified version. `notes` is omitted when empty. | Return a successful result including the final content and any notes; do not invoke the original tool. |
+| `'{"result":"Rejected","notes":[...]}'` | User rejected with review notes. File unchanged. | Return `isError: true` with `[rejected]` text and the notes. Leave the run active to address them. |
+| Anything else (`"Reject"`, `undefined`, cancellation) | User rejected without notes. | Abort the run and return a rejected tool result. |
 
 Review notes are attached to the selected side and line range at review time. `lineStart`/`lineEnd` are 1-indexed inclusive; `lines` contains the text for that range.
 
@@ -1228,7 +1195,7 @@ Review notes are attached to the selected side and line range at review time. `l
 }
 ```
 
-For `AcceptModified` specifically, it's important to surface the final content back to the agent — not just the fact that the edit was accepted. The proposal the agent made and the bytes that actually landed on disk are no longer the same, and if the agent assumes its proposal went through verbatim it will reason about a file state that doesn't exist. The reference extension uses a `reason` string along these lines:
+For `AcceptModified` specifically, it's important to surface the final content back to the agent — not just the fact that the edit was accepted. The proposal the agent made and the bytes that actually landed on disk are no longer the same, and if the agent assumes its proposal went through verbatim it will reason about a file state that doesn't exist. The extension returns tool-result text along these lines:
 
 > `[accepted] User approved with modifications. <path> was updated with user's version, which differs from what you proposed. Current content of <path>:`
 > ` ```
@@ -1239,11 +1206,9 @@ For `AcceptModified` specifically, it's important to surface the final content b
 
 This gives the agent three things in one message: confirmation that the edit landed, an explicit note that the user changed it, and the new authoritative content so the next turn starts from the right file state.
 
-The `[accepted]` and `[rejected]` prefixes in the `reason` string are parsed by pi.nvim and used to pick the tool-call display status (completed vs rejected) in the chat history.
+The `[accepted]` and `[rejected]` prefixes in tool-result text let pi.nvim display completed and rejected calls appropriately.
 
-Because pi.nvim writes the file _itself_ for `Accepted` and `AcceptModified`, the extension **must** return `{ block: true }` in those cases. If it doesn't, pi's tool dispatcher will run the original `edit`/`write` on top of pi.nvim's version and you'll end up with a double-apply.
-
-Blocked tool results come back to the agent with `isError: true`. For approved-but-blocked calls, flip that back in a `message_end` handler (as the minimal example does) so the LLM doesn't treat an accepted edit as a failure on the next turn.
+Because pi.nvim writes the file itself for `Accepted` and `AcceptModified`, return a successful tool result immediately without invoking the original `edit`/`write` implementation. Wrapping the tool keeps this behavior consistent for direct and nested calls, without a later error-flag correction.
 
 ### Attention & dialogs
 
@@ -1421,7 +1386,9 @@ The labels in the header and footer come from `labels.tool`, `labels.tool_succes
 Tools come in two rendering styles:
 
 - **Inline tools** render as a single line. `read` is the canonical example — it shows `read path/to/file (42 lines)` and stays on one line even when the file is huge, because inlining the content would just be noise. Consecutive inline tool calls are grouped without blank lines between them. Result summaries such as `(42 lines)` use `PiToolSummary` (muted, italic), separately from the completion marker's `PiToolStatusSuccessIcon` or `PiToolStatusErrorIcon`.
-- **Full-block tools** get the multi-line bordered block shown above. `bash`, `edit`, `write`, and any tool pi.nvim doesn't have a dedicated renderer for fall into this category.
+- **Full-block tools** get the multi-line bordered block shown above. `bash`, `edit`, `write`, `codemode`, and any tool pi.nvim doesn't have a dedicated renderer for fall into this category.
+
+`codemode` shows its script and a live list of nested calls with their status, argument previews, duration, and errors. Nested calls stay inside the parent block rather than appearing as separate transcript tools. Stored call details are shown again on resume; full child results are not independently persisted by Pi.
 
 #### Auto-collapse and `<Tab>`
 
@@ -1439,6 +1406,7 @@ Built-in thresholds:
 | Tool | `input_visible` | `output_visible` | Notes |
 | --- | --- | --- | --- |
 | `bash` | 1 | 1 | Shows first line of command + first line of output when collapsed |
+| `codemode` | 10 | 5 | Script input, nested-call progress and final output |
 | `read` | — | — | Always inline |
 | `edit` | unlimited | 0 | Renders the proposed diff as input; no separate output section |
 | `write` | unlimited | 0 | Same shape as `edit` for a whole-file write |
@@ -1451,7 +1419,7 @@ pi.nvim picks the tool's display status from the `isError` flag plus any status 
 | Prefix in result | Display status |
 | --- | --- |
 | _none_ (and `isError=false`) | `completed` |
-| `[accepted]` | `completed` (blocked but the action was applied) |
+| `[accepted]` | `completed` (the action was already applied) |
 | `[rejected]` | `rejected` (user or policy refused) |
 | `[aborted]` | `aborted` (turn was aborted while the tool was in flight) |
 | _none_ (and `isError=true`) | `error` |
@@ -1525,20 +1493,20 @@ Hiding thinking doesn't change anything on the backend or affect how the agent w
 
 #### Thinking levels
 
-Beyond visibility, reasoning-capable models let you pick _how much_ the model thinks. pi.nvim exposes the backend's six thinking levels:
+Beyond visibility, reasoning-capable models let you pick how much the model thinks. pi.nvim asks Pi which levels the current model supports. The complete vocabulary is:
 
 ```
-off | minimal | low | medium | high | xhigh
+off | minimal | low | medium | high | xhigh | max
 ```
 
-`off` disables reasoning entirely (where the model supports that), and each successive level gives the model more budget to think. `xhigh` is OpenAI codex-max-only; the other five are broadly supported across reasoning models. The currently-active level appears in the `thinking` statusline component (see [Statusline](#statusline)).
+Only the supported subset is offered. `off` disables reasoning where supported; the other levels select the model's reasoning effort. The active level appears in the `thinking` statusline component (see [Statusline](#statusline)), including changes made by extensions.
 
 Two ways to change it mid-session:
 
-- **Cycle**: `:PiCycleThinking` / `pi.cycle_thinking_level()` — steps to the next level in the list. Handy for a single key you can tap repeatedly.
-- **Pick**: `:PiSelectThinking` / `pi.select_thinking_level()` — opens a dialog with all six levels and the current one preselected.
+- **Cycle**: `:PiCycleThinking` / `pi.cycle_thinking_level()` — lets Pi advance through the model's supported levels.
+- **Pick**: `:PiSelectThinking` / `pi.select_thinking_level()` — opens a dialog with the supported levels and the current one preselected.
 
-Both operations require an active session with a reasoning-capable model; on a non-reasoning model they warn _"Current model does not support thinking"_ and leave state unchanged.
+Both require an active session. A non-reasoning model offers only `off` in the picker; cycling warns _"Current model does not support thinking"_. Backend request failures are reported instead of presenting a guessed list.
 
 Typical setup binds both in the prompt buffer: cycle on a fast key (e.g. `<M-t>`) and pick on a shifted variant (`<M-T>`) — the [Keymaps](#keymaps) example already does this.
 
@@ -1596,15 +1564,15 @@ Long sessions eventually run into the model's context window limit. pi delegates
 :PiCompact focus on architectural decisions and the reasoning behind them; drop intermediate tool outputs
 ```
 
-Compaction can't run while the agent is streaming — wait for the current turn to finish (or abort it) first. Message submits during compaction are buffered locally. When Pi isn't automatically resuming a turn, pi.nvim sends a leading prompt and keeps the rest buffered until a model turn starts. Input handled without a model turn lets the next buffered message become the prompt. If the leading prompt is rejected, it and the still-unsent buffer return to the prompt for editing.
+Manual compaction can't run while the agent is streaming — wait for the current turn to finish (or abort it) first. Message submits during compaction are buffered locally. When Pi isn't automatically resuming a turn, pi.nvim sends a leading prompt and releases the remaining messages as steering/follow-up inputs once Pi confirms it started or queued that prompt. Input handled without a model turn lets the next buffered message become the prompt. If the leading prompt is rejected, it and the still-unsent buffer return to the prompt for editing. Summary retries keep their progress and errors visible.
 
 After successful compaction, pi.nvim renders a collapsed summary block in chat history. Focus the block and press `<Tab>` to expand the backend-generated summary.
 
 ### Extensions & custom rendering
 
-pi extensions are small TypeScript (or Node-compatible) modules that the backend loads at session start. They can intercept tool calls, register slash commands, expose keybindings, surface UI to the user, and inject arbitrary content into the chat. The permission extension in [Diff review](#diff-review) is one example; the `rules:load` / progressive-disclosure hooks in [agentic-af](https://github.com/alex35mil/agentic-af) are others.
+pi extensions are small TypeScript (or Node-compatible) modules that the backend loads at session start. They can intercept tool calls, register slash commands, expose keybindings, surface UI to the user, and inject arbitrary content into the chat. The permission extension in [Diff review](#diff-review) is one example; the `rules:load` / progressive-disclosure hooks in [pi-af](https://github.com/alex35mil/pi-af) are others.
 
-pi.nvim is extension-aware. When pi runs under `--mode rpc`, extensions can address the client (pi.nvim) via the [extension UI protocol](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/rpc.md#extension-ui-protocol), and pi.nvim routes each method to the right surface in your editor:
+pi.nvim is extension-aware. When pi runs under `--mode rpc`, extensions can address the client (pi.nvim) via the [extension UI protocol](https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/docs/rpc-extension-ui.md), and pi.nvim routes each method to the right surface in your editor:
 
 | Extension UI method | Where pi.nvim surfaces it |
 | --- | --- |
@@ -1659,7 +1627,7 @@ A `pi.CustomBlockLine` is a list of styled chunks, and each chunk is a `{ text, 
 
 #### Example
 
-Let's walk through a concrete case. My [rules extension](https://github.com/alex35mil/agentic-af/tree/main/extensions/rules) discovers Markdown rule files under `~/.pi/agent/rules/` (global) and `<repo>/.agents/rules/` (project). Some rules are always-on — their bodies are injected into the system prompt on every turn. Others are **path-scoped**: they have a `paths:` glob list in the frontmatter and are only delivered when the agent reads a file that matches one of those globs. In that case the extension appends the rule body to the `read` tool result (so the agent sees it) _and_ fires a `setWidget("rules:load", [...rule paths])` so **you** can see, inline in the chat, which rules just got loaded for which file.
+Let's walk through a concrete case. My [rules extension](https://github.com/alex35mil/pi-af/tree/main/extensions/rules) discovers Markdown rule files under `~/.pi/agent/rules/` (global) and `<repo>/.agents/rules/` (project). Some rules are always-on — their bodies are injected into the system prompt on every turn. Others are **path-scoped**: they have a `paths:` glob list in the frontmatter and are only delivered when the agent reads a file that matches one of those globs. In that case the extension appends the rule body to the `read` tool result (so the agent sees it) _and_ fires a `setWidget("rules:load", [...rule paths])` so **you** can see, inline in the chat, which rules just got loaded for which file.
 
 Without `on_widget`, that widget would simply be ignored by pi.nvim. With `on_widget`, it becomes a small annotation attached to the read tool call, telling you exactly which rules the agent now has in its context for the file it just read. It's the difference between trusting that the rules extension is doing its job and being able to _see_ it do its job.
 
@@ -1713,8 +1681,8 @@ The health check verifies the basics:
 
 - The `pi` executable (from the `bin` config option, defaults to `"pi"`) exists and is in `$PATH`.
 - pi backend compatibility against the plugin's tracked versions:
-    - minimum supported: `0.80.4`
-    - last validated: `0.85.1`
+    - minimum supported: `1.3.0`
+    - last validated: `1.3.0`
     - newer versions are reported as unvalidated (warning), not hard-failed.
 - Neovim is at version 0.10 or newer.
 
