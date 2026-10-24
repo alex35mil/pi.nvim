@@ -30,6 +30,17 @@
       "external": {
         "issueNumber": 21
       }
+    },
+    {
+      "role": "forge",
+      "provider": "github",
+      "repository": {
+        "owner": "alex35mil",
+        "repo": "pi.nvim"
+      },
+      "head": "epic-01m5n82s0j-externally-prepared-pi-execution-environments",
+      "target": "main",
+      "state": "intent"
     }
   ],
   "authority": {

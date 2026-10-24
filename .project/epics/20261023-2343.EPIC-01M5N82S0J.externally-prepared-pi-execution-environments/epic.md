@@ -14,6 +14,7 @@ This initiative separates frontend behavior from environment preparation. pi.nvi
 - Each tab uses its selected worker's commands, workspace paths, settings, and session storage, so activity in one tab does not use another tab's context.
 - External tooling prepares durable session storage: host-backed storage for local isolated execution and appropriate persistent storage on the remote machine for remote execution.
 - Deliver six ordered stages, ending with remote workspace access and cross-frontend handoff.
+- Ship each Task through the repository default branch, main, after delivering the accepted Epic planning revision there.
 - Keep provisioners, bridges, authentication, network access, and other frontends outside pi.nvim.
 
 ## Tab-bound execution and ordinary commands
@@ -92,6 +93,16 @@ Connection-specific state and workspace behavior belong in their owning abstract
 Documentation must describe public interfaces, ownership, configuration and storage responsibilities, and meaningful limitations as each stage becomes available. A demonstrated RPC connection alone does not establish that lifecycle, filesystem integration, or remote continuation works.
 
 The initiative provides integration contracts and verification support. It excludes environment provisioning, runtime management implementations, credential distribution, bridge services, network-access configuration, other frontends, and service-side client arbitration.
+
+## Task delivery strategy
+
+The approved strategy is repository-default delivery: future Tasks start from and target main rather than using the Epic branch as an umbrella integration target.
+
+The ordered stages provide usable incremental capabilities while preserving the default local workflow. Earlier launching improvements can ship without waiting for live attachment, remote workspace access, or cross-frontend handoff. Each Task must leave main working; prerequisites land before dependent Tasks begin. The Epic does not require intentionally incomplete intermediate states to accumulate on a long-lived integration branch.
+
+Before initializing the first Task, deliver the accepted Epic planning revision into main through approved Git and provider operations. A squash merge is supported when exact configured GitHub evidence confirms delivery of the current Epic branch revision to its stored target. The original source commit need not be an ancestor of main. Default-target Task initialization must also verify that the working accepted Epic plan exactly matches the plan available on the local target branch.
+
+Keep the current Task-target pointer until delivery is verified, then switch future Tasks to the default target through the guarded workflow. The Epic remains In Progress; merging its planning work does not complete the initiative. Existing Tasks retain their stored start and target. A later strategy change requires explicit approval and the normal Epic plan-review and acceptance flow.
 
 ## Ordered Tasks
 
