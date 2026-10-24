@@ -1,0 +1,52 @@
+{
+  "id": "EPIC-01M5N82S0J",
+  "rawId": "01M5N82S0J",
+  "slug": "externally-prepared-pi-execution-environments",
+  "title": "Support externally prepared Pi execution environments",
+  "createdAt": "2026-10-23T20:43:47.090Z",
+  "phase": "execution",
+  "branch": {
+    "state": "ready",
+    "name": "epic-01m5n82s0j-externally-prepared-pi-execution-environments",
+    "start": "main",
+    "target": "main",
+    "source": "generated"
+  },
+  "integrations": [
+    {
+      "role": "tracker",
+      "provider": "github",
+      "repository": {
+        "owner": "alex35mil",
+        "repo": "pi.nvim"
+      },
+      "planComment": {
+        "state": "published",
+        "token": "601e0d9c-d154-4890-b011-a76fb093e210",
+        "id": 6382137152,
+        "url": "https://github.com/alex35mil/pi.nvim/issues/21#issuecomment-6382137152"
+      },
+      "state": "bound",
+      "external": {
+        "issueNumber": 21
+      }
+    },
+    {
+      "role": "forge",
+      "provider": "github",
+      "repository": {
+        "owner": "alex35mil",
+        "repo": "pi.nvim"
+      },
+      "head": "epic-01m5n82s0j-externally-prepared-pi-execution-environments",
+      "target": "main",
+      "state": "intent"
+    }
+  ],
+  "authority": {
+    "kind": "tracker",
+    "provider": "github"
+  },
+  "entity": "epic",
+  "taskTarget": "epic"
+}
