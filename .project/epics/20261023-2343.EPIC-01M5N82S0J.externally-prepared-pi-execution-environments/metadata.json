@@ -48,5 +48,5 @@
     "provider": "github"
   },
   "entity": "epic",
-  "taskTarget": "epic"
+  "taskTarget": "default"
 }
