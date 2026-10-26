@@ -1,5 +1,4 @@
 {
-    "artifacts": "versioned",
     "branches": { "format": "identifier-title" },
     "reviews": { "userConfirmationAfter": 3 }
 }
