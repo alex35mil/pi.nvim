@@ -42,7 +42,8 @@ Chat.__index = Chat
 
 local Config = require("pi.config")
 local Notify = require("pi.notify")
-local CommandsCache = require("pi.cache.commands")
+local CommandCatalog = require("pi.cache.commands")
+local Workspace = require("pi.workspace")
 local SlashCommands = require("pi.commands").SlashCommands
 local Layout = require("pi.ui.chat.layout")
 local Attention = require("pi.attention")
@@ -510,7 +511,7 @@ function Chat:_is_extension_command(text)
     if not name then
         return false
     end
-    for _, command in ipairs(CommandsCache.list()) do
+    for _, command in ipairs(CommandCatalog.for_tab(self._tab):list()) do
         if command.name == name and command.source == "extension" then
             return true
         end
@@ -552,7 +553,7 @@ function Chat:_capture_submission()
     ---@type pi.SubmittedMessage
     local submission = {
         text = text,
-        expanded_text = Mentions.expand(text),
+        expanded_text = Mentions.expand(text, Workspace.for_tab(self._tab)),
         attachments = attachment_items,
         images = attachment_items and self._attachments:get() or nil,
     }

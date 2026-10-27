@@ -145,6 +145,9 @@
 ---@field _handler fun(msg: pi.RpcEvent)?
 ---@field _pending table<string, fun(msg: pi.RpcEvent)>
 ---@field _tab pi.TabId
+---@field _workspace string Directory pi is launched in.
+---@field _commands pi.CommandCatalog Command catalog updated by `ctx.set_commands()`.
+---@field _log_path string Per-connection RPC debug log.
 ---@field _req_id integer
 ---@field _stdout_buf string
 ---@field _stopping boolean
@@ -154,13 +157,16 @@ Rpc.__index = Rpc
 local Config = require("pi.config")
 local Cli = require("pi.cli")
 local Notify = require("pi.notify")
-local CommandsCache = require("pi.cache.commands")
 
 local DEBUG_OVERRIDE = nil ---@type boolean?
 
---- Per-project log state: tracks which log files have been reset this session.
+--- Log files reset since debug was last enabled.
 ---@type table<string, boolean>
 local log_reset_done = {}
+
+--- Live connections, so toggling debug can reset every running session's log.
+---@type table<pi.Rpc, true>
+local live = setmetatable({}, { __mode = "k" })
 
 local function debug_enabled()
     if DEBUG_OVERRIDE ~= nil then
@@ -169,15 +175,22 @@ local function debug_enabled()
     return Config.options.debug
 end
 
---- Cached at module load time (main loop safe).
-local log_path ---@type string
-do
-    local cwd = vim.fn.getcwd()
-    local slug = cwd:gsub("^/", ""):gsub("/", "--")
+--- Root directory for RPC debug logs.
+---@return string
+function Rpc.log_dir()
+    return vim.fn.stdpath("log") .. "/pi"
+end
+
+--- Log path for a connection: one directory per workspace, one file per tab.
+---@param workspace string
+---@param tab pi.TabId
+---@return string
+local function log_path_for(workspace, tab)
+    local slug = workspace:gsub("^/", ""):gsub("/", "--")
     if slug == "" then
         slug = "root"
     end
-    log_path = vim.fn.stdpath("log") .. "/pi/" .. slug .. "/rpc.log"
+    return Rpc.log_dir() .. "/" .. slug .. "/rpc-tab" .. tab .. ".log"
 end
 
 --- Recursively create directories (libuv-safe, no vim.fn).
@@ -208,9 +221,10 @@ local function reset_log(path)
     log_reset_done[path] = true
 end
 
+---@param log_path string
 ---@param tag string
 ---@param msg table|string
-local function log(tag, msg)
+local function log(log_path, tag, msg)
     if not debug_enabled() then
         return
     end
@@ -227,26 +241,29 @@ local function log(tag, msg)
     file:close()
 end
 
+--- Adapter context for one connection; `set_commands` updates only its catalog.
+---@param commands pi.CommandCatalog
 ---@return pi.RpcAdapterContext
-local function adapter_context()
+local function adapter_context(commands)
     return {
-        set_commands = function(commands)
-            if type(commands) ~= "table" then
+        set_commands = function(list)
+            if type(list) ~= "table" then
                 vim.schedule(function()
                     Notify.error("RPC ctx.set_commands expects a command list table")
                 end)
                 return
             end
-            CommandsCache.set(commands)
+            commands:set(list)
         end,
     }
 end
 
 ---@param mapper function
 ---@param msg table
+---@param ctx pi.RpcAdapterContext
 ---@return table?
-local function map_event(mapper, msg)
-    local ok, mapped = pcall(mapper, vim.deepcopy(msg), adapter_context())
+local function map_event(mapper, msg, ctx)
+    local ok, mapped = pcall(mapper, vim.deepcopy(msg), ctx)
     if not ok then
         vim.schedule(function()
             Notify.error("RPC map_event error: " .. tostring(mapped))
@@ -273,9 +290,10 @@ end
 
 ---@param mapper function
 ---@param cmd table
+---@param ctx pi.RpcAdapterContext
 ---@return table?
-local function map_command(mapper, cmd)
-    local ok, mapped = pcall(mapper, cmd, adapter_context())
+local function map_command(mapper, cmd, ctx)
+    local ok, mapped = pcall(mapper, cmd, ctx)
     if not ok then
         vim.schedule(function()
             Notify.error("RPC map_command error: " .. tostring(mapped))
@@ -304,30 +322,41 @@ end
 local warned = {}
 
 ---@param tab pi.TabId
+---@param workspace string directory pi is launched in
+---@param commands pi.CommandCatalog catalog that `ctx.set_commands()` updates
 ---@return pi.Rpc
-function Rpc.new(tab)
+function Rpc.new(tab, workspace, commands)
     local self = setmetatable({}, Rpc)
     self._job_id = nil
     self._handler = nil
     self._pending = {}
     self._tab = tab
+    self._workspace = workspace
+    self._commands = commands
+    self._log_path = log_path_for(workspace, tab)
     self._req_id = 1
     self._stdout_buf = ""
     self._stopping = false
     return self
 end
 
+---@param tag string
+---@param msg table|string
+function Rpc:_log(tag, msg)
+    log(self._log_path, tag, msg)
+end
+
 ---@param msg pi.RpcEvent
 function Rpc:_dispatch(msg)
     local event_mapper = Config.options.rpc and Config.options.rpc.map_event
     if type(event_mapper) == "function" then
-        msg = map_event(event_mapper, msg) --[[@as pi.RpcEvent]]
+        msg = map_event(event_mapper, msg, adapter_context(self._commands)) --[[@as pi.RpcEvent]]
     end
     if not msg or not msg.type then
         return
     end
 
-    log("incoming", msg)
+    self:_log("incoming", msg)
 
     if self._handler then
         self._handler(msg)
@@ -349,6 +378,7 @@ function Rpc:start()
     self._stopping = false
     local cmd = Cli.command()
     self._job_id = vim.fn.jobstart(cmd, {
+        cwd = self._workspace,
         on_stdout = function(_, data)
             self:_on_stdout(data)
         end,
@@ -366,6 +396,7 @@ function Rpc:start()
         self._job_id = nil
         return false
     end
+    live[self] = true
     return true
 end
 
@@ -384,7 +415,7 @@ function Rpc:send(cmd, callback)
 
     local command_mapper = Config.options.rpc and Config.options.rpc.map_command
     if type(command_mapper) == "function" then
-        cmd = map_command(command_mapper, cmd) --[[@as pi.RpcCommand]]
+        cmd = map_command(command_mapper, cmd, adapter_context(self._commands)) --[[@as pi.RpcCommand]]
     end
     if not cmd then
         return false
@@ -393,7 +424,7 @@ function Rpc:send(cmd, callback)
     if callback then
         self._pending[cmd.id] = callback
     end
-    log("outgoing", cmd)
+    self:_log("outgoing", cmd)
     vim.fn.chansend(self._job_id, vim.json.encode(cmd) .. "\n")
     return true
 end
@@ -404,6 +435,7 @@ function Rpc:set_handler(fn)
 end
 
 function Rpc:stop()
+    live[self] = nil
     if self._job_id then
         self._stopping = true
         vim.fn.jobstop(self._job_id)
@@ -433,7 +465,7 @@ function Rpc:_on_stdout(data)
                 self:_dispatch(msg)
             else
                 local err = tostring(msg)
-                log("ERROR", "Failed to decode: " .. err .. " | " .. line)
+                self:_log("ERROR", "Failed to decode: " .. err .. " | " .. line)
                 vim.schedule(function()
                     Notify.warn("Failed to decode RPC message: " .. err)
                 end)
@@ -456,6 +488,7 @@ end
 
 ---@param code integer
 function Rpc:_on_exit(code)
+    live[self] = nil
     local expected = self._stopping
     self._job_id = nil
     self._stdout_buf = ""
@@ -464,25 +497,30 @@ function Rpc:_on_exit(code)
     self:_dispatch({ type = "_process_exit", code = code, expected = expected })
 end
 
+--- Toggle debug logging. Turning it on resets every running connection's log;
+--- connections started later begin with a fresh log of their own.
 function Rpc.toggle_debug()
     DEBUG_OVERRIDE = not debug_enabled()
     if debug_enabled() then
-        reset_log(log_path)
-        Notify.info("Debug ON -> " .. log_path)
+        log_reset_done = {}
+        for rpc in pairs(live) do
+            reset_log(rpc._log_path)
+        end
+        Notify.info("Debug ON -> " .. Rpc.log_dir())
     else
         Notify.info("Debug OFF")
     end
 end
 
 ---@param event_type string
-function Rpc.log_unhandled(event_type)
+function Rpc:log_unhandled(event_type)
     if warned[event_type] then
         return
     end
 
     warned[event_type] = true
 
-    log("UNHANDLED", event_type)
+    self:_log("UNHANDLED", event_type)
 
     if debug_enabled() then
         vim.schedule(function()

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-10-27
+
+- **BREAKING:** Remove the `agent_dir` option; `setup()` now raises an error when it is set. pi.nvim asks pi for its session folder, so set `PI_CODING_AGENT_DIR` (read by pi) to change the agent directory.
+- **FIXED:** Continue and resume list the folder the running pi reports, honoring `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, and pi's `sessionDir` setting; a pi without persistent sessions is reported instead of listed.
+- **FIXED:** Keep slash-command lists per tab, so one tab's pi no longer replaces another tab's completion, highlighting, or startup block.
+- **CHANGED:** `ctx.set_commands()` in `rpc.map_event` / `rpc.map_command` updates only the connection whose event or command is being mapped.
+- **CHANGED:** Each tab's pi starts in the tab's directory (`:tcd`, otherwise global) instead of a window-local `:lcd` directory, and file completion, mentions, diff review, edit previews, and session lookup stay on that directory after a later `:cd`.
+- **CHANGED:** `:PiContinue` and `:PiResume` start pi first in a tab without one; `:PiResume` stops that pi again when it finds no sessions or the picker is cancelled.
+- **CHANGED:** `pi.changed_files()` returns absolute paths.
+- **CHANGED:** Write RPC debug logs per tab under `stdpath("log")/pi/<workspace-slug>/rpc-tab<N>.log`.
+
 ## 2026-10-23
 
 - **FIXED:** Keep Markdown fences in collapsed tool previews and unfinished messages from changing later chat formatting, with shared boundary handling for backtick and tilde fences.

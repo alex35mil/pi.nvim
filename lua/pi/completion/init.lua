@@ -1,7 +1,8 @@
 --- Shared matching logic for @-mention and /command completion sources.
 
 local FilesCache = require("pi.cache.files")
-local CommandsCache = require("pi.cache.commands")
+local CommandCatalog = require("pi.cache.commands")
+local Workspace = require("pi.workspace")
 
 local M = {}
 
@@ -27,7 +28,8 @@ end
 ---@param make_item fun(path: string, kind: "file"|"dir", is_fuzzy: boolean): table
 ---@return table[]
 function M.complete_files(prefix, make_item)
-    local project_files = FilesCache.list()
+    -- Completion runs with the pi prompt buffer current; it lists the owning session's workspace.
+    local project_files = FilesCache.list(Workspace.for_tab(Workspace.prompt_tab()))
     local items = {}
     local seen_dirs = {}
     local prefix_matched = {}
@@ -69,7 +71,7 @@ end
 ---@param make_item fun(cmd: pi.SlashCommand, is_fuzzy: boolean): table
 ---@return table[]
 function M.complete_commands(prefix, make_item)
-    local commands = CommandsCache.list()
+    local commands = CommandCatalog.for_buf():list()
     if prefix == "" then
         local items = {}
         for _, cmd in ipairs(commands) do

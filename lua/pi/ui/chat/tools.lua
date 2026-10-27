@@ -1,6 +1,7 @@
 --- Tool call rendering for chat history.
 
 local Fences = require("pi.ui.chat.fences")
+local Workspace = require("pi.workspace")
 
 local M = {}
 
@@ -662,7 +663,7 @@ local renderers = {
 
             local content = nil
             if path then
-                local abs = vim.fn.fnamemodify(path, ":p")
+                local abs = Workspace.resolve(Workspace.for_tab(history._tab), path)
                 for _, b in ipairs(vim.api.nvim_list_bufs()) do
                     if vim.api.nvim_buf_is_loaded(b) and vim.api.nvim_buf_get_name(b) == abs then
                         content = table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), "\n")
@@ -750,7 +751,7 @@ local renderers = {
                 if history._replaying then
                     return
                 end
-                local abs_path = vim.fn.fnamemodify(path, ":p")
+                local abs_path = Workspace.resolve(Workspace.for_tab(history._tab), path)
                 local original
                 for _, b in ipairs(vim.api.nvim_list_bufs()) do
                     if vim.api.nvim_buf_is_loaded(b) and vim.api.nvim_buf_get_name(b) == abs_path then

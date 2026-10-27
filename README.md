@@ -109,7 +109,7 @@ https://github.com/user-attachments/assets/c8535554-ea69-4ea9-8098-6b63185bd410
 </details>
 
 <details>
-<summary>Continue or resume past sessions for the current working directory</summary>
+<summary>Continue or resume past sessions for the tab's workspace</summary>
 
 https://github.com/user-attachments/assets/d2d595db-e11d-40b7-87b0-5124867e160e
 </details>
@@ -186,7 +186,7 @@ require("pi").setup({
 2. Run `:Pi`.
 3. Type a prompt and press `<CR>`.
 4. Mention files with `@path/to/file` or `@path/to/file#L12-20`.
-5. Use `:PiContinue` or `:PiResume` to revisit earlier sessions for the current working directory.
+5. Use `:PiContinue` or `:PiResume` to revisit earlier sessions for the tab's workspace (see [Workspace and storage](#workspace-and-storage)).
 
 ## Configuration
 
@@ -206,11 +206,8 @@ require("pi").setup({
         map_command = nil, -- fun(cmd, ctx): cmd|nil
         map_event = nil, -- fun(msg, ctx): msg|nil
     },
-    -- Enable RPC debug logging to `stdpath("log")/pi/<session>/rpc.log`.
+    -- Enable RPC debug logging to `stdpath("log")/pi/<workspace-slug>/rpc-tab<N>.log`.
     debug = false,
-    -- Override the π agent directory used for session lookup.
-    -- Defaults to $PI_CODING_AGENT_DIR or ~/.pi/agent.
-    agent_dir = nil,
     -- Preferred models for cycling and :PiSelectModel dialog.
     -- Each entry is either a string (exact ID) or a table:
     --   { match = "opus", latest = true }
@@ -595,7 +592,7 @@ The file content itself is **not inlined**. Pi assumes the agent has a `read` to
 1. **Inlined code has no context.** Dropping a snippet into the prompt strips it from its surroundings — the agent loses imports, neighboring functions, the rest of the file, the rest of the project. A reference, on the other hand, lets the agent open the file itself and decide how much context it actually needs.
 2. **Mentions are usually woven into a sentence.** A typical prompt looks like _"check if the usage of `Foo` defined at @path/to/foo.rs#L5 makes sense in the function at @path/to/fn.rs#L120-150"_. If every mention expanded into an inline code block, the sentence would fall apart and the agent would have to reconstruct what referred to what. Keeping mentions as references preserves the natural flow of the prompt.
 
-Mentions are validated against the filesystem at send time. Paths are resolved relative to the current working directory. Anything that doesn't resolve to an existing file or directory is sent through unchanged, so a stray `@todo` in your message stays a stray `@todo`.
+Mentions are validated against the filesystem at send time. Paths are resolved relative to the tab's workspace, the directory pi runs in (see [Workspace and storage](#workspace-and-storage)). Anything that doesn't resolve to an existing file or directory is sent through unchanged, so a stray `@todo` in your message stays a stray `@todo`.
 
 Trailing punctuation works the way you'd expect: `(@lua/pi/init.lua)` and `Look at @lua/pi/init.lua.` both expand cleanly without dragging the punctuation into the path.
 
@@ -687,7 +684,7 @@ The π prompt buffer ships with completion for both `@mentions` and `/commands` 
 
 This is the default Vim user-defined completion key. It will:
 
-- Complete `@path` mentions against project files (resolved relative to the current working directory).
+- Complete `@path` mentions against project files (resolved relative to the tab's workspace).
 - Complete `/commands` against the backend's command list — but only when the cursor is on the first line of the prompt and that line starts with `/`.
 
 The completion popup shows source metadata for `/commands` (`extension`, `prompt`, `skill`) and the command description when available.
@@ -788,7 +785,7 @@ require("pi").setup({
 })
 ```
 
-`ctx.set_commands()` updates pi.nvim's shared slash-command cache, the same cache populated by upstream `get_commands` responses. It affects completion, prompt decorators, and command-aware chat behavior. It does not re-render the already-visible startup block.
+`ctx.set_commands()` replaces the slash-command list of the connection whose event or command is being mapped, the same list populated by that connection's upstream `get_commands` responses. Other tabs keep their own lists. It affects that tab's completion, prompt decorators, and command-aware chat behavior. It does not re-render the already-visible startup block.
 
 </details>
 
@@ -1518,21 +1515,18 @@ Typical setup binds both in the prompt buffer: cycle on a fast key (e.g. `<M-t>`
 
 pi.nvim keeps **one live session per Neovim tabpage**. Two different tabs give you two independent conversations with their own history, prompt buffer, attachments, model, and thinking level. Closing the tab tears the session down, and nothing bleeds across tabs. This is the natural unit of work in Neovim, and it maps cleanly to "one agent per task" — e.g. one tab for an exploratory refactor and another for feature implementation, each with their own context.
 
-#### Storage and scoping
+#### Workspace and storage
 
-Session files are JSONL documents stored under:
+Each tab's pi runs in that tab's **workspace**: its tab-local directory (`:tcd`), otherwise Neovim's global working directory. A window-local `:lcd` directory doesn't decide where pi starts. The workspace is captured when pi starts and stays fixed for that connection: file completion, `@`-mentions, diff review, edit previews, and continue/resume all use it, even if Neovim's directory changes later (`:cd`, `autochdir`, a root plugin). To work on another project, use another tab, or stop pi and start it again.
 
-```
-<agent_dir>/sessions/<encoded-cwd>/*.jsonl
-```
+pi.nvim doesn't compute where sessions are stored. It asks the running pi and lists the folder pi reports for its current session file, so pi's own settings are honored:
 
-where `<agent_dir>` is resolved in this order:
+1. `--session-dir <dir>` in `cli.args`
+2. `$PI_CODING_AGENT_SESSION_DIR`
+3. pi's `sessionDir` setting
+4. the default: `<agent dir>/sessions/<encoded-workspace>/`, where the agent directory is `$PI_CODING_AGENT_DIR` or `~/.pi/agent`
 
-1. `agent_dir` in `require("pi").setup(...)`
-2. `$PI_CODING_AGENT_DIR` environment variable
-3. `~/.pi/agent` (default)
-
-Crucially, sessions are **scoped to the current working directory**. Sessions started in `~/Dev/project-a` are only visible to continue/resume when pi.nvim is running from the same directory. This matches how you'd actually want it: you don't want to accidentally resume an unrelated project's conversation just because you opened a chat in a new tab.
+Sessions are **scoped to the workspace**: when a custom folder holds several projects' sessions, continue and resume only show the ones recorded for this tab's workspace. If pi runs without persistent sessions (for example `--no-session` in `cli.args`), continue and resume say so instead of listing anything.
 
 #### Starting, continuing, resuming
 
@@ -1541,8 +1535,8 @@ There are three ways to open a chat — each honors the usual `layout=side|float
 | Command | Lua | What it does |
 | --- | --- | --- |
 | `:Pi` | `pi.show()` / `pi.toggle()` | Open the chat. If the current tab has no session yet, starts a fresh conversation. |
-| `:PiContinue` | `pi.continue_session()` | Load the **most recent** session for the current cwd. Skips the session currently live in another tab, so you can continue a different one. |
-| `:PiResume` | `pi.resume_session()` | Open a picker listing **all past sessions for the current cwd**, with their display names, timestamps, and message counts. |
+| `:PiContinue` | `pi.continue_session()` | Load the **most recent** session for the tab's workspace. Starts pi first when the tab has none; with no previous session, that pi stays open as a fresh chat. Skips the session currently live in another tab, so you can continue a different one. |
+| `:PiResume` | `pi.resume_session()` | Open a picker listing **all past sessions for the tab's workspace**, with their display names, timestamps, and message counts. Starts pi first when the tab has none, so the picker appears once pi is up; if that pi finds no sessions or you cancel the picker, it is stopped again. |
 
 And mid-session management:
 
@@ -1706,18 +1700,18 @@ There are two ways to enable it:
 Logs are written to:
 
 ```
-<stdpath("log")>/pi/<cwd-slug>/rpc.log
+<stdpath("log")>/pi/<workspace-slug>/rpc-tab<N>.log
 ```
 
-where `<cwd-slug>` is the current working directory with `/` replaced by `--`. On a typical Linux setup that's something like `~/.local/state/nvim/log/pi/Users--you--Dev--myproject/rpc.log`. The log is **reset** every time debug is enabled, so each session starts with a clean transcript.
+where `<workspace-slug>` is the tab's workspace with `/` replaced by `--`, and `<N>` is the tab, so concurrent tabs never share a file. On a typical Linux setup that's something like `~/.local/state/nvim/log/pi/Users--you--Dev--myproject/rpc-tab1.log`. Enabling debug with `:PiToggleDebug` **resets** the logs of running sessions and reports the log directory; a session started later begins with a fresh log of its own.
 
 The log contains every RPC command pi.nvim sends and every event it receives, including any unhandled event types (useful when the pi protocol evolves and pi.nvim hasn't caught up yet). Tailing the file in another terminal while reproducing the bug is usually the fastest way to pinpoint where things diverge:
 
 ```sh
-tail -f ~/.local/state/nvim/log/pi/*/rpc.log
+tail -f ~/.local/state/nvim/log/pi/*/rpc-tab*.log
 ```
 
-When filing an issue, attaching the relevant section of `rpc.log` is by far the most useful thing you can include.
+When filing an issue, attaching the relevant section of the RPC log is by far the most useful thing you can include.
 
 #### Process lifecycle
 
@@ -1736,21 +1730,21 @@ A rough triage checklist for common symptoms:
 | Symptom | First thing to check |
 | --- | --- |
 | `:Pi` does nothing / reports no executable | `:checkhealth pi` — is `bin` resolvable? |
-| Chat opens but never gets a response | Enable debug logging and watch `rpc.log` — are commands going out? Are events coming back? |
+| Chat opens but never gets a response | Enable debug logging and watch the tab's RPC log — are commands going out? Are events coming back? |
 | Diff review doesn't open on edit/write | Is a permission extension loaded? See [Diff review](#diff-review). |
 | Extension UI request ignored | Check the extension's `widgetKey` / method — is it something pi.nvim knows how to route? See [Extensions & custom rendering](#extensions--custom-rendering). |
 | Slash command not highlighted | The command cache may not be populated yet (fetched on first chat open, refreshed every 30 seconds). |
-| Session doesn't continue with `:PiContinue` | Are you in the same cwd as when the session was started? Sessions are cwd-scoped — see [Sessions](#sessions). |
-| Statusline component shows stale data | The statusline is pushed from RPC events; if they stopped flowing, `rpc.log` will show the gap. |
-| Unhandled event warning | pi.nvim doesn't yet know about a new event type the backend is sending. Please [open an issue](https://github.com/alex35mil/pi.nvim/issues) with the event name and a snippet of `rpc.log`. |
+| Session doesn't continue with `:PiContinue` | Sessions are scoped to the workspace pi started in. Is the tab's `:tcd` (or global) directory the one the session was started in? After changing directory, stop pi and start it again, or use another tab — see [Workspace and storage](#workspace-and-storage). |
+| Statusline component shows stale data | The statusline is pushed from RPC events; if they stopped flowing, the RPC log will show the gap. |
+| Unhandled event warning | pi.nvim doesn't yet know about a new event type the backend is sending. Please [open an issue](https://github.com/alex35mil/pi.nvim/issues) with the event name and a snippet of the RPC log. |
 
 ## Commands
 
 | Command | Description |
 | --- | --- |
 | `:Pi [layout=side\|float]` | Open or toggle the chat in the current tab |
-| `:PiContinue [layout=side\|float]` | Continue the most recent session for the current working directory |
-| `:PiResume [layout=side\|float]` | Pick and resume a past session for the current working directory |
+| `:PiContinue [layout=side\|float]` | Continue the most recent session for the tab's workspace |
+| `:PiResume [layout=side\|float]` | Pick and resume a past session for the tab's workspace |
 | `:PiToggleChat` | Toggle chat visibility |
 | `:PiToggleLayout` | Switch between side and float layout |
 | `:PiAbort` | Abort the current agent operation |
@@ -1790,12 +1784,12 @@ pi.is_visible()               -- boolean: is the chat shown in the current tab?
 pi.layout()                   -- "side" | "float" | nil
 
 -- Sessions
-pi.continue_session(opts?)    -- load the most recent session for the current cwd
-pi.resume_session(opts?)      -- pick a past session for the current cwd
+pi.continue_session(opts?)    -- load the most recent session for the tab's workspace
+pi.resume_session(opts?)      -- pick a past session for the tab's workspace
 pi.new_session()              -- start a fresh conversation in the current tab
 pi.set_session_name(name?)    -- set the session display name; without an arg, opens a dialog
 pi.compact(instructions?)     -- manually compact the current session (optional guidance)
-pi.changed_files()            -- string[]: files modified by edit/write tools this session
+pi.changed_files()            -- string[]: absolute paths of files modified by edit/write tools this session
 
 -- Agent control
 pi.abort()                    -- cancel the current agent turn, keep the session alive

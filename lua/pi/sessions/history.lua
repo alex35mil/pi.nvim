@@ -1,6 +1,12 @@
+--- Saved-session listing for the default session store.
+---
+--- The session folder is never computed here: it is the folder pi reports for
+--- its current session file, so pi's own `--session-dir`,
+--- `PI_CODING_AGENT_SESSION_DIR`, and `sessionDir` resolution is honored.
+
 local M = {}
 
-local Config = require("pi.config")
+local Workspace = require("pi.workspace")
 
 ---@class pi.SessionInfo
 ---@field id string            session id from header
@@ -9,52 +15,7 @@ local Config = require("pi.config")
 ---@field modified number      file mtime (for sorting)
 ---@field first_message string first user message (truncated)
 ---@field name? string         display name from session_info entry
-
---- Resolve the pi agent directory.
----@return string
-local function get_agent_dir()
-    if Config.options.agent_dir then
-        return Config.options.agent_dir
-    end
-    local env = vim.env.PI_CODING_AGENT_DIR
-    if env and env ~= "" then
-        return env
-    end
-    return vim.fn.expand("~/.pi/agent")
-end
-
----@param ... string
----@return string
-local function join_path(...)
-    local parts = { ... }
-    local path = parts[1] or ""
-    local sep = package.config:sub(1, 1)
-    for i = 2, #parts do
-        local part = parts[i] or ""
-        if part ~= "" then
-            path = path:gsub("[\\/]+$", "") .. sep .. part:gsub("^[\\/]+", "")
-        end
-    end
-    return path
-end
-
---- Encode a cwd path into the directory name format pi uses.
---- e.g. "/Users/Alex/Dev/project" → "--Users-Alex-Dev-project--"
---- e.g. "C:\\Users\\Alex\\Dev\\project" → "--C--Users-Alex-Dev-project--"
----@param cwd string
----@return string
-local function encode_cwd(cwd)
-    local encoded = cwd:gsub("^[\\/]", ""):gsub("[\\/:]", "-")
-    return "--" .. encoded .. "--"
-end
-
---- Get the sessions directory for the current cwd.
----@return string
-function M.get_sessions_dir()
-    local agent_dir = get_agent_dir()
-    local cwd = vim.fn.getcwd()
-    return join_path(agent_dir, "sessions", encode_cwd(cwd))
-end
+---@field cwd? string          working directory recorded in the header
 
 --- Parse a .jsonl session file: read header + first user message.
 ---@param path string
@@ -115,21 +76,28 @@ local function parse_session_file(path)
         modified = vim.fn.getftime(path),
         first_message = first_message,
         name = name,
+        cwd = type(header.cwd) == "string" and header.cwd ~= "" and header.cwd or nil,
     }
 end
 
---- List all sessions for the current cwd, sorted by modified time (newest first).
+--- List a session folder's sessions for a workspace, newest first.
+--- A folder may be shared by several projects (custom session dirs), so only
+--- sessions recorded for the workspace are kept. Paths are compared with
+--- symlinks resolved, because pi records its real working directory.
+--- Sessions whose header records no directory are kept.
+---@param dir string session folder reported by pi
+---@param workspace string session workspace
 ---@return pi.SessionInfo[]
-function M.list()
-    local dir = M.get_sessions_dir()
-    ---@type string[]
-    local files = vim.fn.glob(join_path(dir, "*.jsonl"), false, true)
+function M.list(dir, workspace)
+    local real_workspace = Workspace.realpath(workspace)
     ---@type pi.SessionInfo[]
     local sessions = {}
-    for _, file in ipairs(files) do
-        local info = parse_session_file(file)
-        if info then
-            sessions[#sessions + 1] = info
+    for name, kind in vim.fs.dir(dir) do
+        if kind == "file" and name:match("%.jsonl$") then
+            local info = parse_session_file(vim.fs.joinpath(dir, name))
+            if info and (not info.cwd or Workspace.realpath(info.cwd) == real_workspace) then
+                sessions[#sessions + 1] = info
+            end
         end
     end
     table.sort(sessions, function(a, b)

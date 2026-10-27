@@ -476,7 +476,7 @@ function M.invoke(command)
     session.rpc:send({ type = "prompt", message = command })
 end
 
---- Return the list of file paths modified by edit/write tools during the current session.
+--- Return the absolute paths of files modified by edit/write tools during the current session.
 --- Returns an empty table if no session is active or no files have been changed.
 ---@return string[]
 function M.changed_files()

@@ -454,13 +454,17 @@ local function set_note_sign_mark(buf, row, text, priority)
 end
 
 --- Open a diff review for a tool call.
+--- Relative tool paths resolve against `opts.workspace`, the directory pi runs in.
 ---@param payload { prompt: string, toolName: string, toolInput: table }
 ---@param callback fun(result: string) Called with json-encoded review result, or "Reject" for no-note rejection/backcompat
----@param opts? { timeout?: integer, on_timeout?: fun() }
+---@param opts { workspace: string, timeout?: integer, on_timeout?: fun() }
 function M.open(payload, callback, opts)
-    opts = opts or {}
     local input = payload.toolInput
-    local path = abs(input.path)
+    local workspace = opts.workspace
+    local path = type(input.path) == "string"
+            and input.path ~= ""
+            and abs(require("pi.workspace").resolve(workspace, input.path))
+        or nil
     if not path then
         callback("Reject")
         return
@@ -1531,8 +1535,8 @@ function M.open(payload, callback, opts)
             responded = false
             return
         end
-        require("pi.cache.files").invalidate()
-        reload_buf_for_file(vim.fn.fnamemodify(path, ":p"))
+        require("pi.cache.files").invalidate(workspace)
+        reload_buf_for_file(path)
         close_review_tab()
 
         if modified then
