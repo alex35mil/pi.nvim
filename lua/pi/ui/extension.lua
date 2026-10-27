@@ -6,7 +6,6 @@ local Attention = require("pi.attention")
 local Notify = require("pi.notify")
 local Config = require("pi.config")
 local Startup = require("pi.startup")
-local CommandsCache = require("pi.cache.commands")
 
 ---@param session pi.Session
 ---@param msg pi.RpcEvent
@@ -67,7 +66,7 @@ function M.handle(session, msg)
             -- list() may be stale if the initial fetch hasn't completed yet;
             -- fetch_commands_and_show_startup_block will re-render once it does.
             session.chat:show_startup_block({
-                sections = Startup.build_startup_sections(session, CommandsCache.list()),
+                sections = Startup.build_startup_sections(session, session.commands:list()),
                 errors = session.system_errors,
             })
             return

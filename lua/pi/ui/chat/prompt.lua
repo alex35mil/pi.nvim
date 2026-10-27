@@ -69,6 +69,8 @@ function Prompt.new(tab, attachments)
     vim.bo[self._buf].swapfile = false
     vim.bo[self._buf].bufhidden = "hide"
     vim.api.nvim_buf_set_name(self._buf, name)
+    -- Lets completion and decorators find the session that owns this prompt.
+    vim.b[self._buf][require("pi.workspace").PROMPT_TAB_VAR] = tab
 
     vim.bo[self._buf].completefunc = "v:lua.require'pi.completion.omnifunc'.completefunc"
     Decorators.attach(self._buf)

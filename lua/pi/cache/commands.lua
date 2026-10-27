@@ -1,4 +1,7 @@
---- Slash-command cache — combines pi.nvim actions with commands fetched over Pi RPC.
+--- Slash-command catalogs — pi.nvim actions combined with commands fetched over Pi RPC.
+---
+--- Each session owns one catalog, so commands fetched by one tab's pi never
+--- replace another tab's completion, highlighting, or startup data.
 
 ---@class pi.SourceInfo
 ---@field path string absolute file path to the command source
@@ -13,67 +16,86 @@
 ---@field source "extension"|"prompt"|"skill"|"pi.nvim"
 ---@field sourceInfo? pi.SourceInfo structured source metadata from pi RPC
 
-local M = {}
+---@class pi.CommandCatalog
+---@field _commands pi.SlashCommand[]
+---@field _fetched boolean
+---@field _last_fetch_time number
+local Catalog = {}
+Catalog.__index = Catalog
 
 local SlashCommands = require("pi.commands").SlashCommands
 
----@type pi.SlashCommand[]
-local cache = SlashCommands.list()
-
----@type boolean
-local fetched = false
-
----@type number
-local last_fetch_time = 0
-
 local REFETCH_INTERVAL_NS = 30e9 -- 30 seconds
 
---- Replace the cached command list.
+--- Create a catalog holding only pi.nvim's built-in commands.
+---@return pi.CommandCatalog
+function Catalog.new()
+    local self = setmetatable({}, Catalog)
+    self._commands = SlashCommands.list()
+    self._fetched = false
+    self._last_fetch_time = 0
+    return self
+end
+
+--- Catalog for a tab's live session, or a built-ins-only catalog when the tab has none.
+---@param tab pi.TabId
+---@return pi.CommandCatalog
+function Catalog.for_tab(tab)
+    local session = require("pi.sessions.manager").get_for_tab(tab)
+    if session then
+        return session.commands
+    end
+    return Catalog.new()
+end
+
+--- Catalog for the session owning a pi prompt buffer (current buffer by default).
+---@param buf? integer
+---@return pi.CommandCatalog
+function Catalog.for_buf(buf)
+    return Catalog.for_tab(require("pi.workspace").prompt_tab(buf))
+end
+
+--- Replace the backend command list, keeping pi.nvim's built-in names reserved.
 ---@param commands pi.SlashCommand[]
-function M.set(commands)
-    cache = SlashCommands.list()
+function Catalog:set(commands)
+    local list = SlashCommands.list()
     local reserved = {}
-    for _, command in ipairs(cache) do
+    for _, command in ipairs(list) do
         reserved[command.name] = true
     end
     for _, command in ipairs(commands) do
         if not reserved[command.name] then
-            cache[#cache + 1] = command
+            list[#list + 1] = command
         end
     end
-    fetched = true
+    self._commands = list
+    self._fetched = true
 end
 
---- Get the cached command list (may be empty if not yet fetched).
+--- Current command list (built-ins only until the first fetch completes).
 ---@return pi.SlashCommand[]
-function M.list()
-    return cache
+function Catalog:list()
+    return self._commands
 end
 
---- Whether commands have been fetched at least once.
+--- Whether backend commands have been received at least once.
 ---@return boolean
-function M.is_ready()
-    return fetched
+function Catalog:is_ready()
+    return self._fetched
 end
 
---- Clear the cache so the next access triggers a fresh fetch.
-function M.invalidate()
-    cache = SlashCommands.list()
-    fetched = false
-end
-
---- Fetch commands from an RPC session and update the cache.
+--- Fetch commands over RPC and update this catalog.
 ---@param rpc pi.Rpc
 ---@param callback? fun(commands: pi.SlashCommand[])
-function M.fetch(rpc, callback)
-    last_fetch_time = vim.uv.hrtime()
+function Catalog:fetch(rpc, callback)
+    self._last_fetch_time = vim.uv.hrtime()
     rpc:send({ type = "get_commands" }, function(msg)
         if msg.success and msg.data and msg.data.commands then
-            M.set(msg.data.commands)
+            self:set(msg.data.commands)
         end
         if callback then
             vim.schedule(function()
-                callback(cache)
+                callback(self._commands)
             end)
         end
     end)
@@ -81,10 +103,9 @@ end
 
 --- Refetch commands if enough time has passed since the last fetch.
 ---@param rpc pi.Rpc
-function M.refresh(rpc)
-    local now = vim.uv.hrtime()
-    if now - last_fetch_time >= REFETCH_INTERVAL_NS then
-        M.fetch(rpc)
+function Catalog:refresh(rpc)
+    if vim.uv.hrtime() - self._last_fetch_time >= REFETCH_INTERVAL_NS then
+        self:fetch(rpc)
     end
 end
 
@@ -92,14 +113,14 @@ end
 --- Skills are also matched by their short name (after "skill:").
 ---@param prefix string typed text after /
 ---@return pi.SlashCommand[]
-function M.match(prefix)
+function Catalog:match(prefix)
     if prefix == "" then
-        return cache
+        return self._commands
     end
     local lprefix = prefix:lower()
     ---@type pi.SlashCommand[]
     local matches = {}
-    for _, cmd in ipairs(cache) do
+    for _, cmd in ipairs(self._commands) do
         local lname = cmd.name:lower()
         if lname:sub(1, #lprefix) == lprefix then
             matches[#matches + 1] = cmd
@@ -113,4 +134,4 @@ function M.match(prefix)
     return matches
 end
 
-return M
+return Catalog

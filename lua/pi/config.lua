@@ -183,7 +183,7 @@
 ---@field args string[] Extra startup args for every RPC process. pi.nvim filters args that conflict with RPC mode.
 
 ---@class pi.RpcAdapterContext
----@field set_commands fun(commands: pi.SlashCommand[]) Replace the shared slash-command cache.
+---@field set_commands fun(commands: pi.SlashCommand[]) Replace the slash-command list of the connection whose event or command is being mapped.
 
 ---@class pi.RpcConfig
 ---@field map_command? fun(cmd: table, ctx: pi.RpcAdapterContext): table? Map or drop outbound RPC commands.
@@ -192,7 +192,6 @@
 ---@class pi.Options
 ---@field cli pi.CliConfig
 ---@field rpc pi.RpcConfig
----@field agent_dir? string Override the π agent directory (default: $PI_CODING_AGENT_DIR or ~/.pi/agent)
 ---@field debug boolean Enable RPC debug logging to stdpath("log")/pi/<session>/rpc.log
 ---@field models? pi.ModelEntry[] Preferred models for cycling and :PiSelectModel
 ---@field spinner pi.SpinnerPreset|string[]|{ refresh_rate?: integer, frames: string[] } preset name or custom
@@ -228,7 +227,6 @@ local defaults = {
         map_command = nil,
         map_event = nil,
     },
-    agent_dir = nil,
     debug = false,
     models = nil,
     spinner = "robot",
@@ -365,6 +363,16 @@ M.options = vim.deepcopy(defaults)
 function M.setup(opts)
     if opts and opts.bin ~= nil then
         error("pi.nvim: `bin` was removed; use `cli = { bin = ... }`", 2)
+    end
+    -- Removed option: not part of pi.Options any more, so read it untyped.
+    if
+        opts and (opts --[[@as table]]).agent_dir ~= nil
+    then
+        error(
+            "pi.nvim: `agent_dir` was removed; pi.nvim now asks pi for its session folder. "
+                .. "Set the PI_CODING_AGENT_DIR environment variable (read by pi) to change the agent directory",
+            2
+        )
     end
 
     -- Stash user verbs before deep-extend mangles the list.

@@ -4,6 +4,7 @@ local M = {}
 
 local Notify = require("pi.notify")
 local Decorators = require("pi.ui.chat.decorators")
+local Workspace = require("pi.workspace")
 
 --- Punctuation pattern for characters that may follow an @-mention
 --- but are not part of the path (e.g. `(@file)` or `@file.`).
@@ -28,16 +29,18 @@ end
 --- `@path/to/file#L10-20` → `[file: path/to/file, lines: 10-20]`
 --- `@path/to/dir/` → `[directory: path/to/dir/]`
 --- No file content is inlined — the agent has Read tool.
+--- Relative paths are checked against the session's workspace, where pi resolves them.
 ---@param text string
+---@param workspace string
 ---@return string
-function M.expand(text)
+function M.expand(text, workspace)
     local result = text:gsub("@(%S+)", function(ref)
         local clean, trailing = M.strip_trailing(ref)
         local path, range = clean:match("^(.-)#L(%d+%-?%d*)$")
         if not path then
             path = clean
         end
-        local abs = vim.fn.fnamemodify(path, ":p")
+        local abs = Workspace.resolve(workspace, path)
         if vim.fn.isdirectory(abs) == 1 then
             return "[directory: " .. path .. "]" .. trailing
         end
@@ -61,17 +64,17 @@ end
 ---@param opts? { focus?: boolean } default: focus = true
 function M.send(loc, opts)
     opts = opts or {}
-    local rel = vim.fn.fnamemodify(loc.path, ":.")
-    local mention = "@" .. rel
+    local session = require("pi.sessions.manager").get_or_create()
+    if not session then
+        return
+    end
+
+    local abs = vim.fn.fnamemodify(loc.path, ":p")
+    local mention = "@" .. Workspace.relative(session.workspace, abs)
     if loc.start_line and loc.end_line and loc.start_line ~= loc.end_line then
         mention = mention .. "#L" .. loc.start_line .. "-" .. loc.end_line
     elseif loc.start_line then
         mention = mention .. "#L" .. loc.start_line
-    end
-
-    local session = require("pi.sessions.manager").get_or_create()
-    if not session then
-        return
     end
     if opts.focus ~= false then
         session.chat:ensure_shown_and_focus_prompt()

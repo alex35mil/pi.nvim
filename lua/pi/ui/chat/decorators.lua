@@ -3,7 +3,8 @@
 local M = {}
 
 local FilesCache = require("pi.cache.files")
-local CommandsCache = require("pi.cache.commands")
+local CommandCatalog = require("pi.cache.commands")
+local Workspace = require("pi.workspace")
 
 local ns = vim.api.nvim_create_namespace("pi-prompt-decorators")
 
@@ -20,13 +21,14 @@ end
 function M.update(buf)
     vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local tab = Workspace.prompt_tab(buf)
 
     -- /command highlight — first line, starting with /
     if lines[1] and lines[1]:byte(1) == 47 then -- /
         local cmd_token = lines[1]:match("^(/%S+)")
         if cmd_token then
             local name = cmd_token:sub(2)
-            local matches = CommandsCache.match(name)
+            local matches = CommandCatalog.for_tab(tab):match(name)
             for _, cmd in ipairs(matches) do
                 if cmd.name == name then
                     vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, {
@@ -40,6 +42,7 @@ function M.update(buf)
     end
 
     -- @mention highlights
+    local workspace = Workspace.for_tab(tab)
     for row, line in ipairs(lines) do
         local col = 1
         while col <= #line do
@@ -51,7 +54,7 @@ function M.update(buf)
             local clean = Mentions.strip_trailing(ref)
             finish = start + #clean -- adjust end to exclude punctuation
             local path = parse_path(clean)
-            if FilesCache.exists(path) then
+            if FilesCache.exists(workspace, path) then
                 vim.api.nvim_buf_set_extmark(buf, ns, row - 1, start - 1, {
                     end_col = finish,
                     hl_group = "PiMention",

@@ -13,12 +13,16 @@
 
 ---@class pi.Session
 ---@field tab pi.TabId
+---@field workspace string Directory pi was launched in; fixed for the life of this connection.
+---@field commands pi.CommandCatalog Slash commands of this connection.
+---@field session_dir? string Folder of pi's current session file, from `get_state`.
+---@field persistent? boolean False when pi reports no session file (e.g. `--no-session`); nil until known.
 ---@field rpc pi.Rpc
 ---@field chat pi.Chat
 ---@field attention pi.SessionAttention
 ---@field startup_announcements table<string, pi.StartupAnnouncement> Extension startup data (keys ending with `:startup`) shown in the system preamble. Process-level: persists across session switches.
 ---@field system_errors pi.SystemErrorEntry[]
----@field changed_files table<string, true> Set of file paths modified by edit/write tools during the current session.
+---@field changed_files table<string, true> Set of absolute file paths modified by edit/write tools during the current session.
 ---@field _pending_file_change_args? table<string, table> Pending tool args by tool call id for file-changing tools.
 ---@field _compaction_rebuilding? boolean True while compacted messages are being fetched/replayed.
 ---@field _compaction_event_queue? pi.RpcEvent[] Events received while compacted messages are being fetched/replayed.
@@ -36,7 +40,8 @@ local Notify = require("pi.notify")
 local Attention = require("pi.attention")
 local Dialog = require("pi.ui.dialog")
 local Extension = require("pi.ui.extension")
-local CommandsCache = require("pi.cache.commands")
+local CommandCatalog = require("pi.cache.commands")
+local Workspace = require("pi.workspace")
 local Tools = require("pi.ui.chat.tools")
 
 ---@class pi.StartupSection
@@ -54,7 +59,7 @@ end
 --- Fetch commands and render the startup block on a session's chat.
 ---@param session pi.Session
 local function fetch_commands_and_show_startup_block(session)
-    CommandsCache.fetch(session.rpc, function(commands)
+    session.commands:fetch(session.rpc, function(commands)
         show_startup_block(session, commands)
     end)
 end
@@ -132,7 +137,7 @@ end
 local function track_changed_file(session, args)
     local path = get_changed_file_path(args)
     if path then
-        session.changed_files[path] = true
+        session.changed_files[Workspace.resolve(session.workspace, path)] = true
     end
 end
 
@@ -177,18 +182,42 @@ function M.refresh_stats(session)
     end)
 end
 
+--- Record where pi keeps this connection's sessions, from a `get_state` result.
+---@param session pi.Session
+---@param state table
+local function record_session_storage(session, state)
+    local file = state.sessionFile
+    if type(file) == "string" and file ~= "" then
+        session.session_dir = vim.fs.dirname(file)
+        session.persistent = true
+    else
+        session.session_dir = nil
+        session.persistent = false
+    end
+end
+
 --- Fetch current state and accounting for the status line.
 ---@param session pi.Session
-function M.refresh_state(session)
-    session.rpc:send({ type = "get_state" }, function(res)
+---@param on_state? fun(ok: boolean, state?: table) Called (scheduled) after the state is applied.
+function M.refresh_state(session, on_state)
+    local sent = session.rpc:send({ type = "get_state" }, function(res)
         vim.schedule(function()
             if res.success then
+                record_session_storage(session, res.data or {})
                 session.chat:update_state(res.data)
             else
                 Notify.warn(res.error or "Failed to fetch session state")
             end
+            if on_state then
+                on_state(res.success == true, res.success and (res.data or {}) or nil)
+            end
         end)
     end)
+    if not sent and on_state then
+        vim.schedule(function()
+            on_state(false)
+        end)
+    end
     M.refresh_stats(session)
 end
 
@@ -218,7 +247,7 @@ local function handle_event(session, msg)
         chat:on_agent_end()
     elseif t == "agent_settled" then
         chat:on_agent_settled(msg.aborted == true)
-        CommandsCache.refresh(session.rpc)
+        session.commands:refresh(session.rpc)
         M.refresh_state(session)
     elseif t == "thinking_level_changed" or t == "session_info_changed" then
         M.refresh_state(session)
@@ -389,7 +418,7 @@ local function handle_event(session, msg)
     elseif ignored_events[t] then
         return true
     else
-        Rpc.log_unhandled(t)
+        session.rpc:log_unhandled(t)
         return false
     end
 
@@ -429,6 +458,13 @@ function M.get()
     return sessions[tab]
 end
 
+--- Get the session for a tab. Returns nil if none exists.
+---@param tab pi.TabId
+---@return pi.Session?
+function M.get_for_tab(tab)
+    return sessions[tab]
+end
+
 --- List all active sessions.
 ---@return pi.Session[]
 function M.list()
@@ -456,7 +492,9 @@ function M.get_or_create(opts)
         return session
     end
 
-    local rpc = Rpc.new(tab)
+    local workspace = Workspace.tab_cwd(tab)
+    local commands = CommandCatalog.new()
+    local rpc = Rpc.new(tab, workspace, commands)
 
     if not rpc:start() then
         Notify.error("Failed to start process")
@@ -477,6 +515,8 @@ function M.get_or_create(opts)
     ---@type pi.Session
     session = {
         tab = tab,
+        workspace = workspace,
+        commands = commands,
         rpc = rpc,
         chat = chat,
         attention = { pending = {} },
@@ -730,7 +770,7 @@ rebuild_after_compaction = function(session, _result, will_retry)
             session.changed_files = {}
             session._pending_file_change_args = nil
             session.chat:clear_for_compaction_rebuild()
-            show_startup_block(session, CommandsCache.list())
+            show_startup_block(session, session.commands:list())
             replay_messages(session, messages)
             M.refresh_state(session)
             vim.schedule(function()
@@ -789,7 +829,7 @@ local function load_session(session, session_path)
 
                 local messages = (res.data or {}).messages or {}
                 -- Fetch commands, show startup block, then replay.
-                CommandsCache.fetch(session.rpc, function(commands)
+                session.commands:fetch(session.rpc, function(commands)
                     show_startup_block(session, commands)
                     replay_messages(session, messages)
                     session.chat:ensure_shown_and_focus_prompt()
@@ -811,17 +851,47 @@ local function load_session(session, session_path)
     end
 end
 
+--- Saved sessions of a connection's pi, or nil (after notifying) when pi has none to list.
+---@param session pi.Session
+---@return pi.SessionInfo[]?
+local function list_saved_sessions(session)
+    if session.persistent == false then
+        Notify.info("This pi has no persistent sessions (for example, it runs with --no-session)")
+        return nil
+    end
+    if not session.session_dir then
+        Notify.error("Pi did not report its session folder")
+        return nil
+    end
+    return require("pi.sessions.history").list(session.session_dir, session.workspace)
+end
+
+---@param sessions_list pi.SessionInfo[]
 ---@param current_session_file? string
 ---@return string?
-local function find_continue_session_path(current_session_file)
-    local History = require("pi.sessions.history")
-    local sessions_list = History.list()
-    for _, session in ipairs(sessions_list) do
-        if session.path ~= current_session_file then
-            return session.path
+local function find_continue_session_path(sessions_list, current_session_file)
+    for _, info in ipairs(sessions_list) do
+        if info.path ~= current_session_file then
+            return info.path
         end
     end
     return nil
+end
+
+--- Tear down a session that a session lookup started, keeping any recovered draft.
+---@param session pi.Session
+local function discard_started_session(session)
+    if sessions[session.tab] ~= session then
+        return
+    end
+    if session.chat:has_draft() then
+        recovered_drafts[session.tab] = session.chat:snapshot_draft()
+    end
+    Attention.clear_session(session)
+    session.rpc:stop()
+    session.chat:hide()
+    session.chat:clear()
+    sessions[session.tab] = nil
 end
 
 ---@param session pi.Session
@@ -851,65 +921,91 @@ local function show_no_previous_sessions(session)
     session.chat:ensure_shown_and_focus_prompt()
 end
 
---- Continue the most recent session for the current cwd.
+--- Continue the most recent saved session of the current tab's pi.
+--- Starts pi first when the tab has none, because only a running pi knows its
+--- session folder. With no previous session, the fresh pi stays open as a new chat.
 ---@param opts? pi.SessionCreateOpts
 function M.continue_session(opts)
-    local session = M.get()
+    local existing = M.get()
+    local session = existing or M.get_or_create(opts)
     if not session then
-        local session_path = find_continue_session_path(nil)
-        session = M.get_or_create(opts)
-        if not session then
+        return
+    end
+
+    M.refresh_state(session, function(ok, state)
+        if sessions[session.tab] ~= session then
             return
         end
+        if not ok or not state then
+            if not existing then
+                session.chat:ensure_shown_and_focus_prompt()
+            end
+            return
+        end
+        if existing and not is_empty_session_state(session, state) then
+            return
+        end
+
+        local sessions_list = list_saved_sessions(session)
+        if not sessions_list then
+            session.chat:ensure_shown_and_focus_prompt()
+            return
+        end
+        local session_path = find_continue_session_path(sessions_list, state.sessionFile)
         if not session_path then
             show_no_previous_sessions(session)
             return
         end
+
         session.chat:show({ loading = true })
         load_session(session, session_path)
-        return
-    end
-
-    local sent = session.rpc:send({ type = "get_state" }, function(res)
-        vim.schedule(function()
-            if M.get() ~= session then
-                return
-            end
-            if not res.success then
-                Notify.error(res.error or "Failed to fetch session state")
-                return
-            end
-
-            local state = res.data or {}
-            if not is_empty_session_state(session, state) then
-                return
-            end
-
-            local session_path = find_continue_session_path(state.sessionFile)
-            if not session_path then
-                show_no_previous_sessions(session)
-                return
-            end
-
-            session.chat:show({ loading = true })
-            load_session(session, session_path)
-        end)
     end)
-    if not sent then
-        Notify.error("Failed to fetch session state")
-    end
 end
 
---- Show a picker to resume a past session.
+--- Show a picker to resume a past session of the current tab's pi.
+--- Starts pi first when the tab has none; that pi is stopped again when no
+--- sessions exist or the picker is cancelled. An already running pi is kept.
 ---@param opts? pi.SessionCreateOpts
 function M.resume_session(opts)
-    local History = require("pi.sessions.history")
-    local sessions_list = History.list()
-    if #sessions_list == 0 then
-        Notify.info("No sessions found")
+    local existing = M.get()
+    local session = existing or M.get_or_create(opts)
+    if not session then
         return
     end
 
+    local function give_up()
+        if not existing then
+            discard_started_session(session)
+        end
+    end
+
+    M.refresh_state(session, function(ok)
+        if sessions[session.tab] ~= session then
+            return
+        end
+        if not ok then
+            give_up()
+            return
+        end
+        local sessions_list = list_saved_sessions(session)
+        if not sessions_list then
+            give_up()
+            return
+        end
+        if #sessions_list == 0 then
+            Notify.info("No sessions found")
+            give_up()
+            return
+        end
+        M._pick_session(session, sessions_list, give_up)
+    end)
+end
+
+--- Picker over saved sessions; loads the chosen one into `session`.
+---@param session pi.Session
+---@param sessions_list pi.SessionInfo[]
+---@param on_cancel fun()
+function M._pick_session(session, sessions_list, on_cancel)
     ---@class pi.SessionSelectItem
     ---@field session pi.SessionInfo
     ---@field file string
@@ -992,11 +1088,11 @@ function M.resume_session(opts)
             },
         },
     }, function(item)
-        if not item then
+        if sessions[session.tab] ~= session then
             return
         end
-        local session = M.get_or_create(opts)
-        if not session then
+        if not item then
+            on_cancel()
             return
         end
         session.chat:show({ loading = true })

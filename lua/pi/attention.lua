@@ -288,6 +288,7 @@ local function build_entry(session, msg)
                     Diff.open(payload, function(result)
                         send_response(session, { type = "extension_ui_response", id = id, value = result })
                     end, {
+                        workspace = session.workspace,
                         timeout = timeout,
                         on_timeout = function()
                             notify_expired("diff")
