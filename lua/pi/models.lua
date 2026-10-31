@@ -203,17 +203,20 @@ function M.select(session)
             end
 
             vim.schedule(function()
-                Dialog.select({ title = "Select model", options = labels, initial_index = initial_index }, function(choice)
-                    if not choice then
-                        return
-                    end
-                    for i, l in ipairs(labels) do
-                        if l == choice then
-                            M.set(session, models[i])
+                Dialog.select(
+                    { title = "Select model", options = labels, initial_index = initial_index },
+                    function(choice)
+                        if not choice then
                             return
                         end
+                        for i, l in ipairs(labels) do
+                            if l == choice then
+                                M.set(session, models[i])
+                                return
+                            end
+                        end
                     end
-                end)
+                )
             end)
         end)
     end)

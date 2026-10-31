@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-31
+
+- **BREAKING:** Move the top-level `cli` setting to `process.cli`; `setup()` now raises an error when `cli` is set. Replace `cli = { bin = ..., args = ... }` with `process = { cli = { bin = ..., args = ... } }`.
+- **ADDED:** Run a tab's pi in a container or OS-level sandbox through a trusted JSON workspace descriptor (`.pi.nvim.json`), with path mapping for diff review, previews, changed files, mentions, and sessions. See "Execution environments" in the README and `examples/container`.
+- **ADDED:** `process.descriptor` settings (`path`, `trusted_paths`) and `process.stop` settings (`grace_ms`, `on_failure`, `report_failures_on_start`).
+- **CHANGED:** Stopping pi (`:PiStop`, tab closure, Neovim exit) closes its input first and force-stops it only after `process.stop.grace_ms` (default 5 seconds), or a workspace descriptor's own `process.stop.grace_ms` (up to 60 seconds). Neovim exit waits for all running pis once, for the longest of their grace periods, and failed stops are reported, including the last RPC log entries when debug logging is on.
+- **CHANGED:** `:Pi`, `:PiContinue`, `:PiResume`, and `pi.send_mention()` start pi asynchronously, since starting may first ask whether to trust a descriptor.
+
 ## 2026-10-27
 
 - **BREAKING:** Remove the `agent_dir` option; `setup()` now raises an error when it is set. pi.nvim asks pi for its session folder, so set `PI_CODING_AGENT_DIR` (read by pi) to change the agent directory.

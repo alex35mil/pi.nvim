@@ -1,7 +1,23 @@
 --- Tool call rendering for chat history.
 
 local Fences = require("pi.ui.chat.fences")
-local Workspace = require("pi.workspace")
+
+--- Host path for a tool's file path in this history's session, or nil when it
+--- can't be resolved (unmapped, or pi's working directory not verified yet).
+---@param history pi.ChatHistory
+---@param path string
+---@return string?
+local function tool_host_path(history, path)
+    local session = require("pi.sessions.manager").get_for_tab(history._tab)
+    if not session then
+        return nil
+    end
+    local host, refusal = session.execution:tool_path(path)
+    if not host then
+        session.execution:report_unresolved(path, assert(refusal))
+    end
+    return host
+end
 
 local M = {}
 
@@ -662,8 +678,8 @@ local renderers = {
             end
 
             local content = nil
-            if path then
-                local abs = Workspace.resolve(Workspace.for_tab(history._tab), path)
+            local abs = path and tool_host_path(history, path)
+            if abs then
                 for _, b in ipairs(vim.api.nvim_list_bufs()) do
                     if vim.api.nvim_buf_is_loaded(b) and vim.api.nvim_buf_get_name(b) == abs then
                         content = table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), "\n")
@@ -751,7 +767,10 @@ local renderers = {
                 if history._replaying then
                     return
                 end
-                local abs_path = Workspace.resolve(Workspace.for_tab(history._tab), path)
+                local abs_path = tool_host_path(history, path)
+                if not abs_path then
+                    return
+                end
                 local original
                 for _, b in ipairs(vim.api.nvim_list_bufs()) do
                     if vim.api.nvim_buf_is_loaded(b) and vim.api.nvim_buf_get_name(b) == abs_path then

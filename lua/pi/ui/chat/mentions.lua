@@ -29,11 +29,15 @@ end
 --- `@path/to/file#L10-20` → `[file: path/to/file, lines: 10-20]`
 --- `@path/to/dir/` → `[directory: path/to/dir/]`
 --- No file content is inlined — the agent has Read tool.
---- Relative paths are checked against the session's workspace, where pi resolves them.
+--- Relative paths are checked against the session's workspace, where pi
+--- resolves them. Absolute paths are translated to the path pi sees. A path
+--- pi can't reach through the mapping (absolute, or relative with `..` out of
+--- the workspace) is reported and left unexpanded.
 ---@param text string
 ---@param workspace string
+---@param execution? pi.Execution session's execution; nil = local pi
 ---@return string
-function M.expand(text, workspace)
+function M.expand(text, workspace, execution)
     local result = text:gsub("@(%S+)", function(ref)
         local clean, trailing = M.strip_trailing(ref)
         local path, range = clean:match("^(.-)#L(%d+%-?%d*)$")
@@ -41,18 +45,36 @@ function M.expand(text, workspace)
             path = clean
         end
         local abs = Workspace.resolve(workspace, path)
-        if vim.fn.isdirectory(abs) == 1 then
-            return "[directory: " .. path .. "]" .. trailing
-        end
-        if vim.fn.filereadable(abs) ~= 1 then
+        local is_dir = vim.fn.isdirectory(abs) == 1
+        if not is_dir and vim.fn.filereadable(abs) ~= 1 then
             return nil
+        end
+        local shown = path
+        if execution then
+            local absolute = vim.startswith(vim.fs.normalize(path), "/")
+            local reachable
+            if absolute then
+                reachable = execution:to_exec(abs)
+            else
+                reachable = execution:relative_to_host(path) == abs
+            end
+            if not reachable then
+                Notify.warn("pi: @" .. path .. " is outside the mapped workspace; sent as plain text")
+                return nil
+            end
+            if absolute then
+                shown = reachable --[[@as string]]
+            end
+        end
+        if is_dir then
+            return "[directory: " .. shown .. "]" .. trailing
         end
         local expansion
         if range then
             local label = range:find("-") and "lines" or "line"
-            expansion = "[file: " .. path .. ", " .. label .. ": " .. range .. "]"
+            expansion = "[file: " .. shown .. ", " .. label .. ": " .. range .. "]"
         else
-            expansion = "[file: " .. path .. "]"
+            expansion = "[file: " .. shown .. "]"
         end
         return expansion .. trailing
     end)
@@ -64,11 +86,17 @@ end
 ---@param opts? { focus?: boolean } default: focus = true
 function M.send(loc, opts)
     opts = opts or {}
-    local session = require("pi.sessions.manager").get_or_create()
-    if not session then
-        return
-    end
+    require("pi.sessions.manager").get_or_create(nil, function(session)
+        if session then
+            M._insert(session, loc, opts)
+        end
+    end)
+end
 
+---@param session pi.Session
+---@param loc { path: string, start_line?: integer, end_line?: integer }
+---@param opts { focus?: boolean }
+function M._insert(session, loc, opts)
     local abs = vim.fn.fnamemodify(loc.path, ":p")
     local mention = "@" .. Workspace.relative(session.workspace, abs)
     if loc.start_line and loc.end_line and loc.start_line ~= loc.end_line then

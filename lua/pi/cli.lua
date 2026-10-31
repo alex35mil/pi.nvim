@@ -47,8 +47,8 @@ end
 
 ---@return string
 function M.bin()
-    local cli = Config.options.cli or {}
-    return cli.bin or "pi"
+    local opts = Config.options.process.cli
+    return opts.bin or "pi"
 end
 
 ---@param args any
@@ -84,8 +84,8 @@ end
 
 ---@return string[]
 function M.args()
-    local cli = Config.options.cli or {}
-    return M.filter_args(cli.args)
+    local opts = Config.options.process.cli
+    return M.filter_args(opts.args)
 end
 
 ---@return string[]

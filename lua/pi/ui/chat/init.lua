@@ -539,6 +539,13 @@ function Chat:_reconcile_prompt(submission, disposition)
     end
 end
 
+--- Execution of this chat's live session, if any.
+---@return pi.Execution?
+function Chat:_execution()
+    local session = require("pi.sessions.manager").get_for_tab(self._tab)
+    return session and session.execution or nil
+end
+
 --- Capture locally owned input before clearing the editor.
 ---@return pi.SubmittedMessage?
 function Chat:_capture_submission()
@@ -553,7 +560,7 @@ function Chat:_capture_submission()
     ---@type pi.SubmittedMessage
     local submission = {
         text = text,
-        expanded_text = Mentions.expand(text, Workspace.for_tab(self._tab)),
+        expanded_text = Mentions.expand(text, Workspace.for_tab(self._tab), self:_execution()),
         attachments = attachment_items,
         images = attachment_items and self._attachments:get() or nil,
     }

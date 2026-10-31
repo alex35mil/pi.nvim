@@ -454,17 +454,27 @@ local function set_note_sign_mark(buf, row, text, priority)
 end
 
 --- Open a diff review for a tool call.
---- Relative tool paths resolve against `opts.workspace`, the directory pi runs in.
+--- The tool's path is resolved through the session's execution: relative paths
+--- against its workspace, absolute ones through its path mapping. A path that
+--- can't be resolved is reported and the edit rejected, never redirected to an
+--- unrelated host file.
 ---@param payload { prompt: string, toolName: string, toolInput: table }
 ---@param callback fun(result: string) Called with json-encoded review result, or "Reject" for no-note rejection/backcompat
----@param opts { workspace: string, timeout?: integer, on_timeout?: fun() }
+---@param opts { workspace: string, execution: pi.Execution, timeout?: integer, on_timeout?: fun() }
 function M.open(payload, callback, opts)
     local input = payload.toolInput
     local workspace = opts.workspace
-    local path = type(input.path) == "string"
-            and input.path ~= ""
-            and abs(require("pi.workspace").resolve(workspace, input.path))
-        or nil
+    if type(input.path) ~= "string" or input.path == "" then
+        callback("Reject")
+        return
+    end
+    local host, refusal = opts.execution:tool_path(input.path)
+    if not host then
+        opts.execution:report_unresolved(input.path, assert(refusal))
+        callback("Reject")
+        return
+    end
+    local path = abs(host)
     if not path then
         callback("Reject")
         return

@@ -1,0 +1,14 @@
+{
+    "process": {
+        "kind": "spawned",
+        "cmd": [
+            "docker", "run", "--rm", "-i",
+            "-v", "${{WORKSPACE}}:${{WORKSPACE}}",
+            "-w", "${{WORKSPACE}}",
+            "-e", "ANTHROPIC_API_KEY",
+            "pi-sandbox",
+            "pi", "--mode", "rpc", "--session-dir", "${{WORKSPACE}}/.pi/sessions"
+        ]
+    },
+    "paths": { "workspace": "${{WORKSPACE}}" }
+}
