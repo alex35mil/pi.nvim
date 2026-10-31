@@ -15,7 +15,9 @@ function M.fuzzy_match(query, target)
     for ti = 1, #target do
         if target:byte(ti) == query:byte(qi) then
             qi = qi + 1
-            if qi > ql then return true end
+            if qi > ql then
+                return true
+            end
         end
     end
     return false

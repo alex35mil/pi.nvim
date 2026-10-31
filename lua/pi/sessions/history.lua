@@ -6,8 +6,6 @@
 
 local M = {}
 
-local Workspace = require("pi.workspace")
-
 ---@class pi.SessionInfo
 ---@field id string            session id from header
 ---@field path string          absolute path to .jsonl file
@@ -80,22 +78,21 @@ local function parse_session_file(path)
     }
 end
 
---- List a session folder's sessions for a workspace, newest first.
+--- List a host session folder's sessions, newest first.
 --- A folder may be shared by several projects (custom session dirs), so only
---- sessions recorded for the workspace are kept. Paths are compared with
---- symlinks resolved, because pi records its real working directory.
---- Sessions whose header records no directory are kept.
----@param dir string session folder reported by pi
----@param workspace string session workspace
+--- sessions whose recorded working directory belongs to the workspace are
+--- kept: `belongs(cwd)` decides, translating pi's path to the host when pi
+--- runs elsewhere. Sessions whose header records no directory are kept.
+---@param dir string host path of the session folder
+---@param belongs fun(cwd: string): boolean
 ---@return pi.SessionInfo[]
-function M.list(dir, workspace)
-    local real_workspace = Workspace.realpath(workspace)
+function M.list(dir, belongs)
     ---@type pi.SessionInfo[]
     local sessions = {}
     for name, kind in vim.fs.dir(dir) do
         if kind == "file" and name:match("%.jsonl$") then
             local info = parse_session_file(vim.fs.joinpath(dir, name))
-            if info and (not info.cwd or Workspace.realpath(info.cwd) == real_workspace) then
+            if info and (not info.cwd or belongs(info.cwd)) then
                 sessions[#sessions + 1] = info
             end
         end

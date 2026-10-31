@@ -34,6 +34,10 @@ function M.setup(opts)
     require("pi.sessions.manager").setup_autocmds()
     require("pi.commands").NvimCommands.setup()
     require("pi.ui.winfix").setup()
+    -- Cleanup failures saved during the last Neovim exit.
+    vim.schedule(function()
+        require("pi.execution.cleanup").report_saved_failures()
+    end)
 end
 
 --- Show the chat and focus the prompt. Creates a session if none exists.
@@ -46,10 +50,11 @@ function M.show(opts)
         return
     end
 
-    local session = Sessions.get_or_create(opts)
-    if session then
-        session.chat:ensure_shown_and_focus_prompt()
-    end
+    Sessions.get_or_create(opts, function(session)
+        if session then
+            session.chat:ensure_shown_and_focus_prompt()
+        end
+    end)
 end
 
 --- Toggle the chat. If a layout is given and the chat is visible in another
@@ -59,10 +64,11 @@ function M.toggle(opts)
     local Sessions = require("pi.sessions.manager")
     local existing = Sessions.get()
     if not existing then
-        local session = Sessions.get_or_create(opts)
-        if session then
-            session.chat:ensure_shown_and_focus_prompt()
-        end
+        Sessions.get_or_create(opts, function(session)
+            if session then
+                session.chat:ensure_shown_and_focus_prompt()
+            end
+        end)
         return
     end
 

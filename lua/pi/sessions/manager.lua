@@ -14,6 +14,7 @@
 ---@class pi.Session
 ---@field tab pi.TabId
 ---@field workspace string Directory pi was launched in; fixed for the life of this connection.
+---@field execution pi.Execution How pi was launched and how its paths map to the host.
 ---@field commands pi.CommandCatalog Slash commands of this connection.
 ---@field session_dir? string Folder of pi's current session file, from `get_state`.
 ---@field persistent? boolean False when pi reports no session file (e.g. `--no-session`); nil until known.
@@ -42,6 +43,9 @@ local Dialog = require("pi.ui.dialog")
 local Extension = require("pi.ui.extension")
 local CommandCatalog = require("pi.cache.commands")
 local Workspace = require("pi.workspace")
+local Execution = require("pi.execution")
+local Descriptor = require("pi.execution.descriptor")
+local ExecState = require("pi.execution.state")
 local Tools = require("pi.ui.chat.tools")
 
 ---@class pi.StartupSection
@@ -136,8 +140,14 @@ end
 ---@param args table?
 local function track_changed_file(session, args)
     local path = get_changed_file_path(args)
-    if path then
-        session.changed_files[Workspace.resolve(session.workspace, path)] = true
+    if not path then
+        return
+    end
+    local host, refusal = session.execution:tool_path(path)
+    if host then
+        session.changed_files[host] = true
+    else
+        session.execution:report_unresolved(path, assert(refusal))
     end
 end
 
@@ -188,11 +198,14 @@ end
 local function record_session_storage(session, state)
     local file = state.sessionFile
     if type(file) == "string" and file ~= "" then
+        -- As pi sees it; translated to the host when listing.
         session.session_dir = vim.fs.dirname(file)
         session.persistent = true
+        session.execution:set_session_file(file)
     else
         session.session_dir = nil
         session.persistent = false
+        session.execution:set_session_file(nil)
     end
 end
 
@@ -479,25 +492,20 @@ function M.list()
     return result
 end
 
---- Get or create a session for the current tab.
----@param opts? pi.SessionCreateOpts
+---@type table<pi.TabId, fun(session: pi.Session?)[]>
+local creating = {}
+
+--- Start a session for a tab with a resolved execution.
+---@param tab pi.TabId
+---@param workspace string
+---@param execution pi.Execution
+---@param opts pi.SessionCreateOpts
 ---@return pi.Session?
-function M.get_or_create(opts)
-    opts = opts or {}
-
-    local tab = current_tab()
-
-    local session = sessions[tab]
-    if session then
-        return session
-    end
-
-    local workspace = Workspace.tab_cwd(tab)
+local function start_session(tab, workspace, execution, opts)
     local commands = CommandCatalog.new()
-    local rpc = Rpc.new(tab, workspace, commands)
+    local rpc = Rpc.new(tab, workspace, commands, execution:launch())
 
     if not rpc:start() then
-        Notify.error("Failed to start process")
         return nil
     end
 
@@ -513,9 +521,10 @@ function M.get_or_create(opts)
     local chat = Chat.new(tab, layout, agent)
 
     ---@type pi.Session
-    session = {
+    local session = {
         tab = tab,
         workspace = workspace,
+        execution = execution,
         commands = commands,
         rpc = rpc,
         chat = chat,
@@ -546,6 +555,128 @@ function M.get_or_create(opts)
     return session
 end
 
+--- Ask before starting local pi in a workspace that used a descriptor.
+---@param workspace string
+---@param cb fun(confirmed: boolean)
+local function confirm_local_after_descriptor(workspace, cb)
+    Dialog.select({
+        title = "pi descriptor missing",
+        message = "This workspace used a pi descriptor before, but it's gone:\n"
+            .. Descriptor.path(workspace)
+            .. "\n\nStart pi locally on this machine instead?",
+        options = { "Start local Pi", "Cancel" },
+    }, function(choice)
+        cb(choice == "Start local Pi")
+    end)
+end
+
+--- Prompt replaceable for tests.
+M._confirm_local_after_descriptor = confirm_local_after_descriptor
+
+--- Get the current tab's session, creating it when needed. Creation resolves
+--- the workspace's descriptor first, which may prompt, so the result arrives
+--- through `cb` (nil when nothing was started).
+---@param opts? pi.SessionCreateOpts
+---@param cb fun(session: pi.Session?)
+function M.get_or_create(opts, cb)
+    opts = opts or {}
+    local tab = current_tab()
+
+    local session = sessions[tab]
+    if session then
+        cb(session)
+        return
+    end
+    if creating[tab] then
+        table.insert(creating[tab], cb)
+        return
+    end
+    creating[tab] = { cb }
+
+    local workspace = Workspace.tab_cwd(tab)
+
+    ---@param created pi.Session?
+    local function finish(created)
+        local waiters = creating[tab] or {}
+        creating[tab] = nil
+        for _, waiter in ipairs(waiters) do
+            waiter(created)
+        end
+    end
+
+    ---@param execution pi.Execution
+    local function launch(execution)
+        if not vim.api.nvim_tabpage_is_valid(tab) then
+            finish(nil)
+            return
+        end
+        finish(start_session(tab, workspace, execution, opts))
+    end
+
+    Descriptor.resolve(workspace, function(result)
+        local kind = result.kind
+        if kind == "local" then
+            launch(Execution.new_local(workspace))
+        elseif kind == "descriptor" then
+            launch(Execution.new_descriptor(workspace, result.spec, result.path))
+        elseif kind == "missing_after_use" then
+            M._confirm_local_after_descriptor(workspace, function(confirmed)
+                if not confirmed then
+                    finish(nil)
+                    return
+                end
+                local ok, err = ExecState.clear_workspace(Workspace.realpath(workspace))
+                if not ok then
+                    Notify.error("Could not clear the descriptor record: " .. tostring(err))
+                    finish(nil)
+                    return
+                end
+                launch(Execution.new_local(workspace))
+            end)
+        elseif kind == "cancelled" then
+            Notify.info("pi wasn't started: the workspace descriptor isn't trusted")
+            finish(nil)
+        elseif kind == "error" then
+            Notify.error("pi wasn't started: " .. result.message)
+            finish(nil)
+        else
+            error("unknown execution resolution: " .. tostring(kind))
+        end
+    end)
+end
+
+--- Notify about a stop that didn't end cleanly.
+---@param report pi.StopReport
+local function notify_stop_report(report)
+    local what = ({
+        exit = "exited with code " .. tostring(report.code),
+        timeout = "didn't stop in time and was force-stopped",
+        forced = "was force-stopped",
+    })[report.outcome] or report.outcome
+    local lines = {
+        ("pi launch `%s` %s (%s, %s)"):format(
+            report.command,
+            what,
+            report.workspace,
+            report.descriptor and ("descriptor " .. report.descriptor) or "local pi"
+        ),
+    }
+    vim.list_extend(lines, report.stderr)
+    Notify.warn(table.concat(lines, "\n"))
+end
+
+--- Stop a session's launch in the background and report a stop that didn't end cleanly.
+---@param session pi.Session
+local function stop_launch(session)
+    session.rpc:stop(function(report)
+        if report then
+            vim.schedule(function()
+                notify_stop_report(report)
+            end)
+        end
+    end)
+end
+
 --- Remove and clean up a session for the current tab.
 function M.stop()
     local tab = current_tab()
@@ -558,7 +689,7 @@ function M.stop()
         recovered_drafts[tab] = session.chat:snapshot_draft()
     end
     Attention.clear_session(session)
-    session.rpc:stop()
+    stop_launch(session)
     session.chat:hide()
     session.chat:clear()
 
@@ -851,22 +982,63 @@ local function load_session(session, session_path)
     end
 end
 
---- Saved sessions of a connection's pi, or nil (after notifying) when pi has none to list.
+--- A saved session in the picker or for continue. `path` is the session file
+--- as pi sees it (what `switch_session` receives); `file` is the same file
+--- on the host, for preview and delete.
+---@class pi.StoredSession
+---@field path string
+---@field file string
+---@field id string
+---@field timestamp string
+---@field name? string
+---@field first_message string
+
+--- Saved sessions of a connection's pi, newest first, or nil (after notifying)
+--- when pi has none the host can list. Reads the folder pi reports, through the
+--- connection's path mapping when pi runs in a separate filesystem.
 ---@param session pi.Session
----@return pi.SessionInfo[]?
+---@return pi.StoredSession[]?
 local function list_saved_sessions(session)
     if session.persistent == false then
         Notify.info("This pi has no persistent sessions (for example, it runs with --no-session)")
         return nil
     end
-    if not session.session_dir then
+    local session_dir = session.session_dir
+    if not session_dir then
         Notify.error("Pi did not report its session folder")
         return nil
     end
-    return require("pi.sessions.history").list(session.session_dir, session.workspace)
+    local execution = session.execution
+    local host_dir = execution:to_host(session_dir)
+    if not host_dir then
+        Notify.error(
+            ("pi's session folder %s isn't reachable from the host; map it in the descriptor's `paths.mounts` (%s)"):format(
+                session_dir,
+                execution:label()
+            )
+        )
+        return nil
+    end
+    local infos = require("pi.sessions.history").list(host_dir, function(cwd)
+        return execution:is_workspace_cwd(cwd)
+    end)
+    ---@type pi.StoredSession[]
+    local items = {}
+    for _, info in ipairs(infos) do
+        local rel = info.path:sub(#host_dir + 2)
+        items[#items + 1] = {
+            path = vim.fs.joinpath(session_dir, rel),
+            file = info.path,
+            id = info.id,
+            timestamp = info.timestamp,
+            name = info.name,
+            first_message = info.first_message,
+        }
+    end
+    return items
 end
 
----@param sessions_list pi.SessionInfo[]
+---@param sessions_list pi.StoredSession[]
 ---@param current_session_file? string
 ---@return string?
 local function find_continue_session_path(sessions_list, current_session_file)
@@ -888,7 +1060,7 @@ local function discard_started_session(session)
         recovered_drafts[session.tab] = session.chat:snapshot_draft()
     end
     Attention.clear_session(session)
-    session.rpc:stop()
+    stop_launch(session)
     session.chat:hide()
     session.chat:clear()
     sessions[session.tab] = nil
@@ -927,38 +1099,37 @@ end
 ---@param opts? pi.SessionCreateOpts
 function M.continue_session(opts)
     local existing = M.get()
-    local session = existing or M.get_or_create(opts)
-    if not session then
-        return
-    end
-
-    M.refresh_state(session, function(ok, state)
-        if sessions[session.tab] ~= session then
+    M.get_or_create(opts, function(session)
+        if not session then
             return
         end
-        if not ok or not state then
-            if not existing then
-                session.chat:ensure_shown_and_focus_prompt()
+        M.refresh_state(session, function(ok, state)
+            if sessions[session.tab] ~= session then
+                return
             end
-            return
-        end
-        if existing and not is_empty_session_state(session, state) then
-            return
-        end
+            if not ok or not state then
+                if not existing then
+                    session.chat:ensure_shown_and_focus_prompt()
+                end
+                return
+            end
+            if existing and not is_empty_session_state(session, state) then
+                return
+            end
 
-        local sessions_list = list_saved_sessions(session)
-        if not sessions_list then
-            session.chat:ensure_shown_and_focus_prompt()
-            return
-        end
-        local session_path = find_continue_session_path(sessions_list, state.sessionFile)
-        if not session_path then
-            show_no_previous_sessions(session)
-            return
-        end
-
-        session.chat:show({ loading = true })
-        load_session(session, session_path)
+            local sessions_list = list_saved_sessions(session)
+            if not sessions_list then
+                session.chat:ensure_shown_and_focus_prompt()
+                return
+            end
+            local session_path = find_continue_session_path(sessions_list, state.sessionFile)
+            if not session_path then
+                show_no_previous_sessions(session)
+                return
+            end
+            session.chat:show({ loading = true })
+            load_session(session, session_path)
+        end)
     end)
 end
 
@@ -968,54 +1139,55 @@ end
 ---@param opts? pi.SessionCreateOpts
 function M.resume_session(opts)
     local existing = M.get()
-    local session = existing or M.get_or_create(opts)
-    if not session then
-        return
-    end
+    M.get_or_create(opts, function(session)
+        if not session then
+            return
+        end
 
-    local function give_up()
-        if not existing then
-            discard_started_session(session)
+        local function give_up()
+            if not existing then
+                discard_started_session(session)
+            end
         end
-    end
 
-    M.refresh_state(session, function(ok)
-        if sessions[session.tab] ~= session then
-            return
-        end
-        if not ok then
-            give_up()
-            return
-        end
-        local sessions_list = list_saved_sessions(session)
-        if not sessions_list then
-            give_up()
-            return
-        end
-        if #sessions_list == 0 then
-            Notify.info("No sessions found")
-            give_up()
-            return
-        end
-        M._pick_session(session, sessions_list, give_up)
+        M.refresh_state(session, function(ok)
+            if sessions[session.tab] ~= session then
+                return
+            end
+            if not ok then
+                give_up()
+                return
+            end
+            local sessions_list = list_saved_sessions(session)
+            if not sessions_list then
+                give_up()
+                return
+            end
+            if #sessions_list == 0 then
+                Notify.info("No sessions found")
+                give_up()
+                return
+            end
+            M._pick_session(session, sessions_list, give_up)
+        end)
     end)
 end
 
 --- Picker over saved sessions; loads the chosen one into `session`.
 ---@param session pi.Session
----@param sessions_list pi.SessionInfo[]
+---@param sessions_list pi.StoredSession[]
 ---@param on_cancel fun()
 function M._pick_session(session, sessions_list, on_cancel)
     ---@class pi.SessionSelectItem
-    ---@field session pi.SessionInfo
-    ---@field file string
+    ---@field session pi.StoredSession
+    ---@field file string Host file, for snacks.nvim's preview and delete.
 
     ---@type pi.SessionSelectItem[]
     local items = {}
-    for i, session in ipairs(sessions_list) do
+    for i, stored in ipairs(sessions_list) do
         items[i] = {
-            session = session,
-            file = session.path,
+            session = stored,
+            file = stored.file,
         }
     end
 
@@ -1110,7 +1282,7 @@ function M.cleanup()
     for tab, session in pairs(sessions) do
         if not valid_tabs[tab] then
             Attention.clear_session(session)
-            session.rpc:stop()
+            stop_launch(session)
             sessions[tab] = nil
         end
     end
@@ -1135,8 +1307,8 @@ function M.setup_autocmds()
         callback = function()
             for _, session in pairs(sessions) do
                 Attention.clear_session(session)
-                session.rpc:stop()
             end
+            require("pi.execution.cleanup").stop_all_on_exit()
         end,
     })
 

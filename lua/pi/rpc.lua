@@ -147,16 +147,49 @@
 ---@field _tab pi.TabId
 ---@field _workspace string Directory pi is launched in.
 ---@field _commands pi.CommandCatalog Command catalog updated by `ctx.set_commands()`.
+---@field _launch pi.Launch Command and environment to start.
 ---@field _log_path string Per-connection RPC debug log.
 ---@field _req_id integer
 ---@field _stdout_buf string
 ---@field _stopping boolean
+---@field _stop? pi.RpcStopState In-flight stop request.
+---@field _exit_code? integer Exit code once the process has exited.
+---@field _stderr_tail string[] Last stderr lines, kept for cleanup reports.
 local Rpc = {}
 Rpc.__index = Rpc
 
+--- What to start for a connection: local pi or a workspace descriptor's command.
+---@class pi.Launch
+---@field cmd string[] Complete argument list.
+---@field env? table<string, string> Variables added to the inherited environment.
+---@field descriptor? string Real path of the descriptor it came from; nil for local pi.
+---@field stop_grace_ms? integer Grace period for this launch; nil = `process.stop.grace_ms`.
+
+--- Outcome of a stop that didn't end cleanly.
+---@alias pi.StopOutcome
+---| "exit" # exited with a non-zero code after its input closed
+---| "timeout" # still running when the grace period ended; force-stopped
+---| "forced" # still running when Neovim's exit budget ended; force-stopped
+
+---@class pi.StopReport
+---@field outcome pi.StopOutcome
+---@field code? integer
+---@field command string
+---@field workspace string
+---@field descriptor? string Descriptor the launch came from; nil for local pi.
+---@field stderr string[]
+---@field log? string
+---@field log_tail? string[] Last RPC log entries at the time of the stop (debug logging on); kept because the log is reset when the tab starts pi again.
+
+---@class pi.RpcStopState
+---@field timer? uv.uv_timer_t
+---@field forced? pi.StopOutcome Set when the stop had to force the process down.
+---@field callback? fun(report: pi.StopReport?)
+
 local Config = require("pi.config")
-local Cli = require("pi.cli")
 local Notify = require("pi.notify")
+
+local STDERR_TAIL = 20
 
 local DEBUG_OVERRIDE = nil ---@type boolean?
 
@@ -239,6 +272,39 @@ local function log(log_path, tag, msg)
     local json = type(msg) == "string" and msg or vim.json.encode(msg)
     file:write(string.format("[%s] [%s] %s\n\n\n", ts, tag, json))
     file:close()
+end
+
+--- Last log entries kept in a cleanup report, and the length each is cut to
+--- (entries can be whole command catalogs).
+local LOG_TAIL_ENTRIES = 10
+local LOG_TAIL_ENTRY_CHARS = 300
+
+--- Last entries of a connection's log, newest last, each shortened.
+---@param path string
+---@return string[]?
+local function read_log_tail(path)
+    local file = io.open(path, "r")
+    if not file then
+        return nil
+    end
+    local size = file:seek("end") or 0
+    file:seek("set", math.max(0, size - 256 * 1024))
+    local content = file:read("*a") or ""
+    file:close()
+    ---@type string[]
+    local entries = {}
+    for line in vim.gsplit(content, "\n", { plain = true }) do
+        if line:match("^%[%d%d:%d%d:%d%d%] %[") then
+            if #line > LOG_TAIL_ENTRY_CHARS then
+                line = line:sub(1, LOG_TAIL_ENTRY_CHARS) .. "…"
+            end
+            entries[#entries + 1] = line
+            if #entries > LOG_TAIL_ENTRIES then
+                table.remove(entries, 1)
+            end
+        end
+    end
+    return entries
 end
 
 --- Adapter context for one connection; `set_commands` updates only its catalog.
@@ -324,8 +390,9 @@ local warned = {}
 ---@param tab pi.TabId
 ---@param workspace string directory pi is launched in
 ---@param commands pi.CommandCatalog catalog that `ctx.set_commands()` updates
+---@param launch pi.Launch command and environment to start
 ---@return pi.Rpc
-function Rpc.new(tab, workspace, commands)
+function Rpc.new(tab, workspace, commands, launch)
     local self = setmetatable({}, Rpc)
     self._job_id = nil
     self._handler = nil
@@ -333,11 +400,41 @@ function Rpc.new(tab, workspace, commands)
     self._tab = tab
     self._workspace = workspace
     self._commands = commands
+    self._launch = launch
     self._log_path = log_path_for(workspace, tab)
     self._req_id = 1
     self._stdout_buf = ""
     self._stopping = false
+    self._stderr_tail = {}
     return self
+end
+
+--- Name of the launched command, for reports.
+---@return string
+function Rpc:command_name()
+    return vim.fs.basename(self._launch.cmd[1] or "?")
+end
+
+--- Last stderr lines of the launch.
+---@return string[]
+function Rpc:stderr_tail()
+    return vim.deepcopy(self._stderr_tail)
+end
+
+---@param outcome pi.StopOutcome
+---@param code? integer
+---@return pi.StopReport
+function Rpc:_report(outcome, code)
+    return {
+        outcome = outcome,
+        code = code,
+        command = self:command_name(),
+        workspace = self._workspace,
+        descriptor = self._launch.descriptor,
+        stderr = self:stderr_tail(),
+        log = debug_enabled() and self._log_path or nil,
+        log_tail = debug_enabled() and read_log_tail(self._log_path) or nil,
+    }
 end
 
 ---@param tag string
@@ -376,9 +473,16 @@ function Rpc:start()
     end
     self._stdout_buf = ""
     self._stopping = false
-    local cmd = Cli.command()
-    self._job_id = vim.fn.jobstart(cmd, {
+    self._exit_code = nil
+    self._stderr_tail = {}
+    -- An empty Lua table reaches jobstart as a list, which it rejects; pass env only when set.
+    local env = self._launch.env
+    if env and next(env) == nil then
+        env = nil
+    end
+    self._job_id = vim.fn.jobstart(self._launch.cmd, {
         cwd = self._workspace,
+        env = env,
         on_stdout = function(_, data)
             self:_on_stdout(data)
         end,
@@ -392,7 +496,7 @@ function Rpc:start()
         stderr_buffered = false,
     })
     if self._job_id <= 0 then
-        Notify.error("Failed to start process. Is 'pi' installed?")
+        Notify.error("Failed to start " .. self:command_name() .. ". Is it installed and executable?")
         self._job_id = nil
         return false
     end
@@ -404,7 +508,7 @@ end
 ---@param callback? fun(msg: pi.RpcEvent)
 ---@return boolean
 function Rpc:send(cmd, callback)
-    if not self._job_id then
+    if not self._job_id or self._stopping then
         Notify.error("Process not running")
         return false
     end
@@ -434,20 +538,137 @@ function Rpc:set_handler(fn)
     self._handler = fn
 end
 
-function Rpc:stop()
-    live[self] = nil
-    if self._job_id then
-        self._stopping = true
-        vim.fn.jobstop(self._job_id)
-        self._job_id = nil
+--- Grace period for this launch when it stops: the descriptor's, otherwise the configured one.
+---@return integer
+function Rpc:grace_ms()
+    if self._launch.stop_grace_ms then
+        return self._launch.stop_grace_ms
     end
-    self._stdout_buf = ""
+    -- Validated by `Config.setup()`.
+    return Config.options.process.stop.grace_ms
+end
+
+--- Ask the launch to stop: close its input (pi's orderly shutdown, and the
+--- wrapper's cue to clean up), wait up to the grace period, then force it.
+--- `callback` runs once the process has exited, with a report when the stop
+--- didn't end cleanly (non-zero exit or forced), otherwise nil.
+---@param callback? fun(report: pi.StopReport?)
+function Rpc:stop(callback)
     self._pending = {}
+    if not self._job_id then
+        if callback then
+            callback(nil)
+        end
+        return
+    end
+    if self._stop then
+        -- Already stopping; chain the new callback.
+        local previous = self._stop.callback
+        self._stop.callback = function(report)
+            if previous then
+                previous(report)
+            end
+            if callback then
+                callback(report)
+            end
+        end
+        return
+    end
+
+    self._stopping = true
+    self._stop = { callback = callback }
+    pcall(vim.fn.chanclose, self._job_id, "stdin")
+
+    local timer = assert(vim.uv.new_timer())
+    self._stop.timer = timer
+    timer:start(
+        self:grace_ms(),
+        0,
+        vim.schedule_wrap(function()
+            if self._job_id and self._stop then
+                self._stop.forced = "timeout"
+                vim.fn.jobstop(self._job_id)
+            end
+        end)
+    )
+end
+
+--- Stop every live launch at once and wait for all of them within one shared
+--- budget, the longest grace period among them (Neovim exit). Launches still
+--- running when it ends are force-stopped.
+--- Blocks; returns a report per launch whose stop didn't end cleanly.
+---@return pi.StopReport[]
+function Rpc.stop_all_blocking()
+    ---@type pi.Rpc[]
+    local rpcs = {}
+    for rpc in pairs(live) do
+        if rpc._job_id then
+            rpcs[#rpcs + 1] = rpc
+        end
+    end
+    if #rpcs == 0 then
+        return {}
+    end
+
+    local ids = {}
+    local budget = 0
+    for i, rpc in ipairs(rpcs) do
+        budget = math.max(budget, rpc:grace_ms())
+        rpc._stopping = true
+        rpc._pending = {}
+        if rpc._stop and rpc._stop.timer then
+            rpc._stop.timer:stop()
+            rpc._stop.timer:close()
+            rpc._stop.timer = nil
+        end
+        pcall(vim.fn.chanclose, rpc._job_id, "stdin")
+        ids[i] = rpc._job_id
+    end
+
+    -- Wait for each job against one shared deadline. A single multi-job
+    -- `jobwait` can return before the timeout once an earlier job in the list
+    -- exits, leaving later, slower jobs to be force-stopped early.
+    local deadline = vim.uv.hrtime() + budget * 1e6
+    ---@type integer[]
+    local results = {}
+    for i, id in ipairs(ids) do
+        local remaining = math.max(0, math.floor((deadline - vim.uv.hrtime()) / 1e6))
+        results[i] = vim.fn.jobwait({ id }, remaining)[1]
+    end
+    ---@type pi.StopReport[]
+    local reports = {}
+    for i, rpc in ipairs(rpcs) do
+        local status = results[i]
+        if status == -1 then
+            -- Still running: force it down; its cleanup may be cut short.
+            pcall(vim.fn.jobstop, ids[i])
+            reports[#reports + 1] = rpc:_report("forced")
+        else
+            local code = status >= 0 and status or rpc._exit_code
+            if code and code ~= 0 then
+                reports[#reports + 1] = rpc:_report("exit", code)
+            end
+        end
+        live[rpc] = nil
+    end
+    return reports
+end
+
+--- Number of live launches.
+---@return integer
+function Rpc.live_count()
+    local n = 0
+    for rpc in pairs(live) do
+        if rpc._job_id then
+            n = n + 1
+        end
+    end
+    return n
 end
 
 ---@return boolean
 function Rpc:is_running()
-    return self._job_id ~= nil
+    return self._job_id ~= nil and not self._stopping
 end
 
 ---@param data string[]?
@@ -481,7 +702,15 @@ function Rpc:_on_stderr(data)
     end
     for _, line in ipairs(data) do
         if line ~= "" then
-            self:_dispatch({ type = "_stderr", message = line })
+            local tail = self._stderr_tail
+            tail[#tail + 1] = line
+            if #tail > STDERR_TAIL then
+                table.remove(tail, 1)
+            end
+            -- While stopping, stderr is kept for the report, not shown as chat errors.
+            if not self._stopping then
+                self:_dispatch({ type = "_stderr", message = line })
+            end
         end
     end
 end
@@ -490,11 +719,28 @@ end
 function Rpc:_on_exit(code)
     live[self] = nil
     local expected = self._stopping
+    local stop = self._stop
+    self._stop = nil
+    self._exit_code = code
     self._job_id = nil
     self._stdout_buf = ""
     self._pending = {}
     self._stopping = false
+    if stop and stop.timer then
+        stop.timer:stop()
+        stop.timer:close()
+    end
     self:_dispatch({ type = "_process_exit", code = code, expected = expected })
+    if stop and stop.callback then
+        ---@type pi.StopReport?
+        local report = nil
+        if stop.forced then
+            report = self:_report(stop.forced)
+        elseif code ~= 0 then
+            report = self:_report("exit", code)
+        end
+        stop.callback(report)
+    end
 end
 
 --- Toggle debug logging. Turning it on resets every running connection's log;

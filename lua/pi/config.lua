@@ -189,8 +189,34 @@
 ---@field map_command? fun(cmd: table, ctx: pi.RpcAdapterContext): table? Map or drop outbound RPC commands.
 ---@field map_event? fun(msg: table, ctx: pi.RpcAdapterContext): table? Map or drop inbound RPC events.
 
----@class pi.Options
+---@class pi.CleanupFailureReport
+---@field workspace string Workspace the launch ran in.
+---@field descriptor? string Descriptor the launch came from; nil for local pi.
+---@field command string Name of the launched command (first argument).
+---@field outcome "exit"|"timeout"|"forced" Non-zero exit, did not stop in time, or force-stopped.
+---@field code? integer Exit code, when the process exited.
+---@field stderr string[] Last stderr lines of the launch.
+---@field log? string RPC debug log of the connection, when debug logging was on.
+---@field log_tail? string[] Last entries of that log at the time of the stop (shortened), since the log is reset when the tab starts pi again.
+
+---@class pi.DescriptorConfig
+---@field path string Descriptor path relative to the tab's workspace.
+---@field trusted_paths string[] Directories whose descriptors need no prompt on a workspace's first use.
+
+---@class pi.StopConfig
+---@field grace_ms integer How long a stopping pi may take after its input closes; a descriptor's `process.stop.grace_ms` overrides it for that workspace. Neovim exit waits once, for the longest among running pis.
+---@field on_failure? fun(report: pi.CleanupFailureReport) Called for cleanup failures during Neovim exit.
+---@field report_failures_on_start boolean Save exit cleanup failures and show them on the next start.
+
+--- This tab's Pi process: how it's started locally (`cli`), how a workspace
+--- describes it instead (`descriptor`), and how pi.nvim stops a Pi it started (`stop`).
+---@class pi.ProcessConfig
 ---@field cli pi.CliConfig
+---@field descriptor pi.DescriptorConfig
+---@field stop pi.StopConfig
+
+---@class pi.Options
+---@field process pi.ProcessConfig
 ---@field rpc pi.RpcConfig
 ---@field debug boolean Enable RPC debug logging to stdpath("log")/pi/<session>/rpc.log
 ---@field models? pi.ModelEntry[] Preferred models for cycling and :PiSelectModel
@@ -219,9 +245,20 @@ math.randomseed(os.time())
 
 ---@type pi.Options
 local defaults = {
-    cli = {
-        bin = "pi",
-        args = {},
+    process = {
+        cli = {
+            bin = "pi",
+            args = {},
+        },
+        descriptor = {
+            path = ".pi.nvim.json",
+            trusted_paths = {},
+        },
+        stop = {
+            grace_ms = 5000,
+            on_failure = nil,
+            report_failures_on_start = true,
+        },
     },
     rpc = {
         map_command = nil,
@@ -362,9 +399,14 @@ M.options = vim.deepcopy(defaults)
 ---@param opts? pi.Options
 function M.setup(opts)
     if opts and opts.bin ~= nil then
-        error("pi.nvim: `bin` was removed; use `cli = { bin = ... }`", 2)
+        error("pi.nvim: `bin` was removed; use `process = { cli = { bin = ... } }`", 2)
     end
-    -- Removed option: not part of pi.Options any more, so read it untyped.
+    -- Removed or moved options: not part of pi.Options any more, so read them untyped.
+    if
+        opts and (opts --[[@as table]]).cli ~= nil
+    then
+        error("pi.nvim: `cli` moved to `process.cli`; use `process = { cli = { bin = ..., args = ... } }`", 2)
+    end
     if
         opts and (opts --[[@as table]]).agent_dir ~= nil
     then
@@ -383,6 +425,16 @@ function M.setup(opts)
     end
 
     M.options = vim.tbl_deep_extend("force", defaults, opts or {})
+
+    local grace = M.options.process.stop.grace_ms
+    if type(grace) ~= "number" or grace ~= math.floor(grace) or grace < 0 then
+        error(
+            ("pi.nvim: `process.stop.grace_ms` must be a non-negative integer (milliseconds), got %s"):format(
+                vim.inspect(grace)
+            ),
+            2
+        )
+    end
 
     -- Resolve verbs: merge or replace based on use_defaults.
     if user_verbs then

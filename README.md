@@ -34,6 +34,7 @@ Use the [pi coding agent](https://pi.dev) without leaving Neovim.
     - [Models](#models)
     - [Thinking](#thinking)
     - [Sessions](#sessions)
+    - [Execution environments](#execution-environments)
     - [Extensions & custom rendering](#extensions--custom-rendering)
     - [Health & debugging](#health--debugging)
 - [Commands](#commands)
@@ -195,11 +196,34 @@ All options are optional. These are the defaults:
 ```lua
 ---@type pi.Options
 require("pi").setup({
-    -- pi CLI invocation. Extra args are inserted before `--mode rpc`.
-    -- Args that conflict with RPC mode (`--mode`, `--print`, `--help`, etc.) are ignored.
-    cli = {
-        bin = "pi",
-        args = {},
+    -- This tab's pi process: how it's started locally, how a workspace describes
+    -- it instead, and how pi.nvim stops a pi it started. See "Execution environments".
+    process = {
+        -- Local pi. Extra args are inserted before `--mode rpc`.
+        -- Args that conflict with RPC mode (`--mode`, `--print`, `--help`, etc.) are ignored.
+        -- Not used for a workspace descriptor's command.
+        cli = {
+            bin = "pi",
+            args = {},
+        },
+        -- Workspace descriptors (containers, sandboxes).
+        descriptor = {
+            -- Descriptor path relative to the tab's workspace.
+            path = ".pi.nvim.json",
+            -- Directories whose descriptors need no trust prompt on a workspace's first use.
+            trusted_paths = {}, -- e.g. { "~/Worktrees" }
+        },
+        -- Stopping a pi that pi.nvim started (local or from a descriptor).
+        stop = {
+            -- How long a stopping pi may take after its input closes, in ms.
+            -- A descriptor's `process.stop.grace_ms` overrides it for that workspace; when Neovim
+            -- exits, it waits once for the longest grace among running pis.
+            grace_ms = 5000,
+            -- Called for each cleanup failure during Neovim exit: fun(report).
+            on_failure = nil,
+            -- Save cleanup failures during Neovim exit and show them on the next start.
+            report_failures_on_start = true,
+        },
     },
     -- Optional protocol adapter hooks for non-upstream-compatible RPC backends.
     rpc = {
@@ -390,15 +414,19 @@ require("pi").setup({
 
 `pi.nvim` runs pi in RPC mode and does not currently implement the TUI's interactive project trust prompt or save trust decisions. It uses pi's non-interactive defaults, which means project-local settings, resources, packages, extensions, and project `.agents/skills` are not loaded.
 
-To trust project-local pi files when using `pi.nvim`, either pass pi's trust flag through `cli.args`:
+To trust project-local pi files when using `pi.nvim`, either pass pi's trust flag through `process.cli.args`:
 
 ```lua
 require("pi").setup({
-    cli = {
-        args = { "--approve" },
+    process = {
+        cli = {
+            args = { "--approve" },
+        },
     },
 })
 ```
+
+`process.cli.args` applies to local pi only. A [workspace descriptor](#execution-environments) runs its own command exactly as given, so add `--approve` to its `cmd` if you need it there.
 
 or set the global pi default in `~/.pi/agent/settings.json`:
 
@@ -719,7 +747,7 @@ Other completion plugins can usually bridge the built-in `completefunc` via thei
 
 #### Adapting non-upstream RPC backends
 
-pi.nvim targets upstream pi RPC. If you point `cli.bin` at a fork with a different protocol, use `rpc.map_command` / `rpc.map_event` to translate in user config instead of patching pi.nvim core.
+pi.nvim targets upstream pi RPC. If you point `process.cli.bin` at a fork with a different protocol, use `rpc.map_command` / `rpc.map_event` to translate in user config instead of patching pi.nvim core.
 
 <details>
 <summary>Example: adapt `omp` command-list compatibility</summary>
@@ -744,7 +772,7 @@ local function strip_ansi(text)
 end
 
 require("pi").setup({
-    cli = { bin = "omp" },
+    process = { cli = { bin = "omp" } },
     rpc = {
         map_command = function(cmd)
             if cmd.type == "get_commands" then
@@ -1521,12 +1549,12 @@ Each tab's pi runs in that tab's **workspace**: its tab-local directory (`:tcd`)
 
 pi.nvim doesn't compute where sessions are stored. It asks the running pi and lists the folder pi reports for its current session file, so pi's own settings are honored:
 
-1. `--session-dir <dir>` in `cli.args`
+1. `--session-dir <dir>` in `process.cli.args`
 2. `$PI_CODING_AGENT_SESSION_DIR`
 3. pi's `sessionDir` setting
 4. the default: `<agent dir>/sessions/<encoded-workspace>/`, where the agent directory is `$PI_CODING_AGENT_DIR` or `~/.pi/agent`
 
-Sessions are **scoped to the workspace**: when a custom folder holds several projects' sessions, continue and resume only show the ones recorded for this tab's workspace. If pi runs without persistent sessions (for example `--no-session` in `cli.args`), continue and resume say so instead of listing anything.
+Sessions are **scoped to the workspace**: when a custom folder holds several projects' sessions, continue and resume only show the ones recorded for this tab's workspace. If pi runs without persistent sessions (for example `--no-session` in `process.cli.args`), continue and resume say so instead of listing anything.
 
 #### Starting, continuing, resuming
 
@@ -1545,7 +1573,7 @@ And mid-session management:
 | `:PiNewSession` | `pi.new_session()` | Discard the current session in this tab and start a fresh one. Extensions can cancel this via the `session_before_switch` hook (e.g. to warn about unsaved draft state). |
 | `:PiClear` | `pi.new_session()` | Clear the chat by starting a fresh session. The previous conversation remains available through `:PiResume`. |
 | `:PiSessionName [name]` | `pi.set_session_name(name?)` | Set a human-readable display name for the current session. Without an argument, opens a dialog to type one. Without any argument and via the API, returns the current name. Names appear in the `:PiResume` picker so you can identify long-running conversations at a glance. |
-| `:PiStop` | `pi.stop()` | Tear down the current session, killing the backing `pi --mode rpc` process. When the process has already exited, keep the recovered draft for the next `:Pi` in the same tab. Different from `:PiToggleChat`, which just hides the windows while the session keeps running. |
+| `:PiStop` | `pi.stop()` | Tear down the current session and stop the backing pi process (see [Stopping](#stopping)). When the process has already exited, keep the recovered draft for the next `:Pi` in the same tab. Different from `:PiToggleChat`, which just hides the windows while the session keeps running. |
 
 #### Compaction
 
@@ -1561,6 +1589,117 @@ Long sessions eventually run into the model's context window limit. pi delegates
 Manual compaction can't run while the agent is streaming — wait for the current turn to finish (or abort it) first. Message submits during compaction are buffered locally. When Pi isn't automatically resuming a turn, pi.nvim sends a leading prompt and releases the remaining messages as steering/follow-up inputs once Pi confirms it started or queued that prompt. Input handled without a model turn lets the next buffered message become the prompt. If the leading prompt is rejected, it and the still-unsent buffer return to the prompt for editing. Summary retries keep their progress and errors visible.
 
 After successful compaction, pi.nvim renders a collapsed summary block in chat history. Focus the block and press `<Tab>` to expand the backend-generated summary.
+
+### Execution environments
+
+By default each tab's pi runs locally: `process.cli.bin` + `process.cli.args` + `--mode rpc`, in the tab's workspace. A workspace can instead say how to start pi somewhere else, such as a container on a worktree or an OS-level sandbox, through a **descriptor**: a JSON file at `process.descriptor.path` (default `.pi.nvim.json`) in the tab's workspace. `:Pi`, `:PiContinue`, `:PiResume`, and keymaps then work as usual, with pi running where the descriptor says.
+
+pi.nvim doesn't prepare environments. Creating worktrees or containers, building images, and other per-machine setup belong to your own tooling, which writes the descriptor and can point its command at a wrapper script of yours.
+
+#### Descriptor
+
+An OS-level sandbox runs pi on your machine's own filesystem, so it needs only the command. For example, with [nono](https://nono.sh):
+
+```json
+{
+    "process": {
+        "kind": "spawned",
+        "cmd": ["nono", "run", "--profile", "pi-local", "--allow-cwd", "--", "pi", "--mode", "rpc"]
+    }
+}
+```
+
+The sandbox profile must grant pi's agent folder (`~/.pi/agent`, or `$PI_CODING_AGENT_DIR`) and whatever credentials your providers and extensions use. pi keeps its sessions in its usual folder.
+
+A container has its own filesystem, so it also declares `paths`. Mounting the workspace at the same path as on the host keeps paths identical on both sides:
+
+```json
+{
+    "process": {
+        "kind": "spawned",
+        "cmd": [
+            "docker", "run", "--rm", "-i",
+            "-v", "${{WORKSPACE}}:${{WORKSPACE}}",
+            "-w", "${{WORKSPACE}}",
+            "-e", "ANTHROPIC_API_KEY",
+            "pi-sandbox",
+            "pi", "--mode", "rpc", "--session-dir", "${{WORKSPACE}}/.pi/sessions"
+        ]
+    },
+    "paths": { "workspace": "${{WORKSPACE}}" }
+}
+```
+
+[`examples/container`](examples/container) has this descriptor with a Dockerfile and instructions. When pi sees the workspace elsewhere, map it, plus any other mounted folder:
+
+```json
+"paths": {
+    "workspace": "/workspace",
+    "mounts": [{ "host": ".pi/sessions", "path": "/sessions" }]
+}
+```
+
+Fields:
+
+- **`process`** (required): this workspace's pi process. It mirrors the [`process` setup options](#configuration): where both name the same setting, the descriptor's value overrides the `setup()` one for this workspace.
+  - **`kind`** (required): `"spawned"`, meaning pi.nvim starts the command and owns the process. It's the only supported kind; `"attached"`, for a pi your own tooling started that pi.nvim only connects to, is planned.
+  - **`cmd`** (required): the command as an array of arguments, run without a shell. pi.nvim adds nothing, so it must start pi with `--mode rpc`. For shell features, spell it out: `["sh", "-c", "…"]`.
+  - **`env`** (optional): string variables added to the command's environment. The command also inherits Neovim's environment. Inside a container, pi sees a variable only if the command forwards it (`-e NAME`).
+  - **`stop.grace_ms`** (optional): how long this pi may take to clean up after its input closes, overriding the `setup()` option `process.stop.grace_ms` for this workspace. An integer from 0 to 60000 (milliseconds); the cap keeps a descriptor from stalling Neovim's exit indefinitely.
+- **`paths`** (optional): declare it when pi runs in a separate filesystem, such as a container, even if folders are mounted at the same paths. Omit it when pi runs on your machine's filesystem.
+  - **`workspace`** (required): the absolute path where the workspace appears to pi.
+  - **`mounts`** (optional): other folders as `{ "host", "path" }`. `path` is absolute; `host` is absolute or relative to the workspace.
+
+`${{WORKSPACE}}` expands to the tab's workspace in `process.cmd`, `process.env`, and `paths`, always as part of a single argument, so paths with spaces are safe. The double braces are never valid shell syntax, so they can't clash with anything meant for a shell or tool. Placeholder names are uppercase and case-sensitive; any other `${{…}}` (including `${{workspace}}`), or a `${{` without its closing `}}`, is rejected as a likely typo.
+
+Other `$` forms depend on who reads the field:
+
+- In `process.cmd` and `process.env`, `$VAR`, `${VAR}`, and `${VAR:-default}` reach the command unchanged, for example a shell in `["sh", "-c", "…"]`.
+- In `paths`, pi.nvim reads the value itself and nothing would expand a variable, so any other `$` is rejected, and so is a leading `~`. Use absolute paths or `${{WORKSPACE}}`.
+
+Unknown fields and wrong types are reported naming the field, and nothing starts.
+
+The command must start pi in the workspace as pi sees it (`paths.workspace`, or the workspace itself without `paths`); a container sets this with `-w`. pi.nvim checks it against the working directory recorded in pi's session file before resolving pi's relative file paths. pi writes that file after the first message, so until then relative paths from pi's tools are refused, as is any relative path when the recorded directory doesn't match.
+
+The descriptor is read once, when a tab first needs pi. Changes apply to the next start.
+
+#### Trust
+
+A descriptor runs a command on your machine, so it's used only when you trust it. On first use pi.nvim asks: **Allow** records it in Neovim's trust database (`:help trust`) and starts pi; **View** opens it read-only; **Deny** records it as denied. Any later change to the file asks again. A denied descriptor is reported on every attempt until you change it with `:trust`.
+
+Descriptors under a directory in `process.descriptor.trusted_paths` (for example where your tooling creates worktrees) skip the prompt on a workspace's first use only. Changes after that still ask, and an explicit deny always wins.
+
+When a descriptor is untrusted, invalid, or fails, pi.nvim says why and starts nothing; it never falls back to local pi. A workspace without a descriptor runs local pi as usual, unless it used one before: then pi.nvim asks before starting local pi, and confirming forgets that the workspace used one. This stops an agent from switching its own workspace to your host by deleting the descriptor.
+
+#### Paths
+
+Without `paths`, pi shares your filesystem and every path it reports is used as given. With `paths`, pi.nvim translates between pi's paths and your machine's for diff review, edit previews, `pi.changed_files()`, absolute `@`-mentions, and session switching. A path outside the mapping is refused rather than guessed, so an edit to `/etc/hosts` inside a container never opens your own `/etc/hosts`.
+
+Continue and resume list the session folder the running pi reports, translated through the mapping. Keep the sessions in a mounted folder (inside the workspace, or listed in `mounts`), or pi.nvim reports that the folder isn't reachable.
+
+#### Stopping
+
+`:PiStop`, closing the tab, and quitting Neovim stop every pi the same way, local or not: pi.nvim closes pi's input, which is pi's signal to shut down cleanly and gives a wrapper time to clean up (for example `docker run --rm` removing the container), waits up to its grace period (the descriptor's `process.stop.grace_ms`, otherwise the `setup()` option `process.stop.grace_ms`), then force-stops it.
+
+- `:PiStop` and closing the tab stop in the background. A non-zero exit, timeout, or forced stop is reported with the workspace, descriptor, and pi's last stderr lines.
+- Quitting Neovim stops all running pis at once and waits for them within one shared budget: the longest grace period among them. Cleanup still running after that is force-stopped and may be left unfinished. Crashes, `kill -9`, and frontends that skip Neovim's exit hooks don't run this at all.
+
+Notifications can't be seen while Neovim quits, so cleanup failures then are saved and shown the next time pi.nvim starts. With `debug = true`, a failure also keeps the last entries of that pi's RPC log, because the log itself is reset when the tab starts pi again. For an immediate alert, set `process.stop.on_failure`. It receives `{ workspace, descriptor?, command, outcome = "exit"|"timeout"|"forced", code?, stderr, log?, log_tail? }`; on macOS, for example:
+
+```lua
+process = {
+    stop = {
+        on_failure = function(report)
+            vim.system({
+                "osascript", "-e",
+                ("display notification %q with title \"pi cleanup failed\""):format(report.workspace),
+            }):wait()
+        end,
+    },
+},
+```
+
+If your callback covers it, set `process.stop.report_failures_on_start = false` to skip the startup warning. Failures then reach only the callback, so with no callback (or one that errors) they go unreported.
 
 ### Extensions & custom rendering
 
@@ -1686,7 +1825,7 @@ Run it any time you suspect something is off with the install:
 :checkhealth pi
 ```
 
-If the executable isn't found, either install pi or set `cli = { bin = "/absolute/path/to/pi" }` in `setup()`.
+If the executable isn't found, either install pi or set `process = { cli = { bin = "/absolute/path/to/pi" } }` in `setup()`.
 
 #### RPC debug logging
 
@@ -1715,13 +1854,13 @@ When filing an issue, attaching the relevant section of the RPC log is by far th
 
 #### Process lifecycle
 
-Each π session owns an underlying `pi --mode rpc` subprocess. One tab = one session = one process. The lifecycle is:
+Each π session owns an underlying `pi --mode rpc` process: local pi, or the command a [workspace descriptor](#execution-environments) names. One tab = one session = one process. The lifecycle is:
 
 - **Spawned** lazily, the first time you open the chat in a tab (via `:Pi`, `:PiContinue`, `:PiResume`, `pi.toggle()`, etc.). There is no background daemon; nothing runs until you ask for it.
 - **Alive** as long as the tab is alive. Hiding the chat (`:PiToggleChat`) or switching away from the tab does **not** stop the process — the session keeps running in the background, and any queued [attention](#attention--dialogs) requests keep being tracked.
-- **Torn down** on `TabClosed` for the owning tab, or on `VimLeavePre` for all sessions at once. pi.nvim sends the appropriate shutdown, waits briefly, and lets the child exit cleanly.
-- **Stopped explicitly** via `:PiStop` / `pi.stop()` — kills the RPC process for the current tab's session immediately and closes the chat windows. Use this when you want to reclaim resources without closing the tab, or to force a clean restart (a subsequent `:Pi` will spawn a fresh process).
-- **Aborted** via `:PiAbort` / `pi.abort()` — cancels whatever the agent is currently doing mid-turn but keeps the session and process alive, so you can immediately send a new prompt. Different from `:PiStop`: abort stops the _agent_, stop kills the _process_.
+- **Torn down** on `TabClosed` for the owning tab, or on `VimLeavePre` for all sessions at once, following the [stop contract](#stopping): pi.nvim closes pi's input, waits up to the grace period, then force-stops it. On Neovim exit all sessions share one wait.
+- **Stopped explicitly** via `:PiStop` / `pi.stop()` — closes the chat windows at once and stops the process in the background through the same [stop contract](#stopping). Use this when you want to reclaim resources without closing the tab, or to force a clean restart (a subsequent `:Pi` will spawn a fresh process).
+- **Aborted** via `:PiAbort` / `pi.abort()` — cancels whatever the agent is currently doing mid-turn but keeps the session and process alive, so you can immediately send a new prompt. Different from `:PiStop`: abort stops the _agent_, stop ends the _process_.
 
 #### What to check when something's wrong
 
@@ -1793,7 +1932,7 @@ pi.changed_files()            -- string[]: absolute paths of files modified by e
 
 -- Agent control
 pi.abort()                    -- cancel the current agent turn, keep the session alive
-pi.stop()                     -- kill the RPC process and close the chat for the current tab
+pi.stop()                     -- close the chat and stop pi for the current tab (close input, wait the grace period, then force-stop)
 
 -- Prompt input
 pi.send_mention(args?, opts?) -- insert an @-mention for the current buffer / selection
