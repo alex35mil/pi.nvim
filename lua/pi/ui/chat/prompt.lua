@@ -251,6 +251,29 @@ function Prompt:focus(cb)
     end)
 end
 
+--- Focus the prompt in insert mode at the end of a buffer line.
+--- Sets the cursor directly instead of using `_resume_insert`, which only
+--- WinEnter clears and would linger when the prompt is already current.
+---@param row integer 1-based line
+function Prompt:focus_line_end(row)
+    if not self._win or not vim.api.nvim_win_is_valid(self._win) then
+        return
+    end
+    local win = self._win
+    vim.api.nvim_set_current_win(win)
+    -- Entering the window queues the WinEnter handler's plain `startinsert`;
+    -- place the cursor after it so the end-of-line position wins.
+    vim.schedule(function()
+        if not vim.api.nvim_win_is_valid(win) or vim.api.nvim_get_current_win() ~= win then
+            return
+        end
+        row = math.min(row, vim.api.nvim_buf_line_count(self._buf))
+        local line = vim.api.nvim_buf_get_lines(self._buf, row - 1, row, false)[1] or ""
+        vim.api.nvim_win_set_cursor(win, { row, #line })
+        vim.cmd("startinsert!")
+    end)
+end
+
 ---@return string
 function Prompt:text()
     if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then

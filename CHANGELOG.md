@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-01
+
+- **ADDED:** `pi.show({ draft = "..." })` opens the chat with text pre-filled in the prompt, focused in insert mode at the end of the text and never sent. Existing prompt text is kept below it; a cancelled or failed start discards it. See "Pre-filling the prompt" in the README.
+- **FIXED:** A chat that finished starting or loading after you switched tabs (for example during a descriptor trust prompt) opened its windows in the other tab; it now opens when you return to its own tab.
+
 ## 2026-10-31
 
 - **BREAKING:** Move the top-level `cli` setting to `process.cli`; `setup()` now raises an error when `cli` is set. Replace `cli = { bin = ..., args = ... }` with `process = { cli = { bin = ..., args = ... } }`.
