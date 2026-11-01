@@ -1566,6 +1566,24 @@ There are three ways to open a chat — each honors the usual `layout=side|float
 | `:PiContinue` | `pi.continue_session()` | Load the **most recent** session for the tab's workspace. Starts pi first when the tab has none; with no previous session, that pi stays open as a fresh chat. Skips the session currently live in another tab, so you can continue a different one. |
 | `:PiResume` | `pi.resume_session()` | Open a picker listing **all past sessions for the tab's workspace**, with their display names, timestamps, and message counts. Starts pi first when the tab has none, so the picker appears once pi is up; if that pi finds no sessions or you cancel the picker, it is stopped again. |
 
+A chat always opens in the tab that asked for it. If you switch tabs while pi is starting or a session is loading (for example while a descriptor trust prompt is open), nothing opens in the other tab; the chat appears when you go back to its tab.
+
+##### Pre-filling the prompt
+
+`pi.show()` can open the chat with text already in the prompt, for example a kickoff command for a freshly created agent tab:
+
+```lua
+require("pi").show({ layout = "float", draft = "/task #12 (Epic #5) " })
+```
+
+- The text is **never sent**. Review it, keep typing, then press `<CR>` yourself.
+- The prompt is focused in insert mode with the cursor at the end of the draft. Trailing spaces are kept, so you can continue right after a command.
+- If the prompt already has text (something you typed, or a draft recovered after a crash), it's kept: the draft goes first, then a blank line, then the existing text.
+- When the tab has no session yet, the draft is placed once pi has started in that tab, even if you switched tabs in the meantime. If starting is cancelled or fails, the draft is discarded and not kept for a later `:Pi`.
+- While the draft is in the prompt, queued attention requests wait like they do for any typed draft (see [Auto-open on prompt focus](#auto-open-on-prompt-focus)).
+
+`draft` is only accepted by `pi.show()`; `:Pi`, `pi.toggle()`, `pi.continue_session()`, and `pi.resume_session()` don't take it.
+
 And mid-session management:
 
 | Command | Lua | What it does |
@@ -1915,7 +1933,7 @@ local pi = require("pi")
 pi.setup(opts?)
 
 -- Chat lifecycle
-pi.show(opts?)                -- open the chat; opts: { layout = "side"|"float" }
+pi.show(opts?)                -- open the chat; opts: { layout = "side"|"float", draft = "text to pre-fill, never sent" }
 pi.toggle(opts?)              -- open or hide the chat
 pi.toggle_chat()              -- hide/show the chat windows for the current tab
 pi.toggle_layout(cb?)         -- swap side ↔ float; cb runs after the swap completes

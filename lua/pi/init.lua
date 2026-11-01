@@ -40,18 +40,39 @@ function M.setup(opts)
     end)
 end
 
+---@class pi.ShowOpts: pi.SessionCreateOpts
+---@field draft? string Text to place in the prompt ahead of any existing text. Never submitted.
+
 --- Show the chat and focus the prompt. Creates a session if none exists.
----@param opts? pi.SessionCreateOpts
+--- With `draft`, the text goes into the requesting tab's prompt once its
+--- session exists; it is discarded when starting the session fails or is cancelled.
+---@param opts? pi.ShowOpts
 function M.show(opts)
+    opts = opts or {}
+    local layout = opts.layout
+    local draft = opts.draft
+    if draft == "" then
+        draft = nil
+    end
+
     local Sessions = require("pi.sessions.manager")
     local existing = Sessions.get()
     if existing then
-        show_chat(existing.chat, opts and opts.layout or nil)
+        if draft then
+            existing.chat:show_with_draft(draft, layout)
+        else
+            show_chat(existing.chat, layout)
+        end
         return
     end
 
-    Sessions.get_or_create(opts, function(session)
-        if session then
+    Sessions.get_or_create({ layout = layout }, function(session)
+        if not session then
+            return
+        end
+        if draft then
+            session.chat:show_with_draft(draft)
+        else
             session.chat:ensure_shown_and_focus_prompt()
         end
     end)

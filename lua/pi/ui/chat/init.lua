@@ -37,6 +37,8 @@
 ---@field _inflight_prompt? pi.SubmittedMessage
 ---@field _attachments pi.ChatAttachments
 ---@field _zen pi.Zen
+---@field _deferred_actions fun()[] Window actions waiting for the chat's tab to become current.
+---@field _deferred_autocmd? integer TabEnter autocmd that runs `_deferred_actions`.
 local Chat = {}
 Chat.__index = Chat
 
@@ -87,7 +89,56 @@ function Chat.new(tab, mode, agent)
     self._last_turn_stop_reason = nil
     self._inflight_prompt = nil
     self._zen = Zen.new(self._prompt)
+    self._deferred_actions = {}
+    self._deferred_autocmd = nil
     return self
+end
+
+--- Drop window actions waiting for the chat's tab.
+function Chat:_clear_deferred()
+    self._deferred_actions = {}
+    if self._deferred_autocmd then
+        pcall(vim.api.nvim_del_autocmd, self._deferred_autocmd)
+        self._deferred_autocmd = nil
+    end
+end
+
+--- Run an action that opens or focuses chat windows only in the chat's own tab.
+--- Windows always open in the current tab, so when another tab is current the
+--- action waits until the user next enters the chat's tab.
+---@param action fun()
+function Chat:_in_own_tab(action)
+    if vim.api.nvim_get_current_tabpage() == self._tab then
+        action()
+        return
+    end
+    table.insert(self._deferred_actions, action)
+    if self._deferred_autocmd then
+        return
+    end
+    self._deferred_autocmd = vim.api.nvim_create_autocmd("TabEnter", {
+        desc = "Show π chat deferred until its tab is current",
+        callback = function()
+            if not vim.api.nvim_tabpage_is_valid(self._tab) then
+                self._deferred_actions = {}
+                self._deferred_autocmd = nil
+                return true
+            end
+            if vim.api.nvim_get_current_tabpage() ~= self._tab then
+                return false
+            end
+            local actions = self._deferred_actions
+            self._deferred_actions = {}
+            self._deferred_autocmd = nil
+            -- Leave the autocmd before opening windows.
+            vim.schedule(function()
+                for _, deferred in ipairs(actions) do
+                    self:_in_own_tab(deferred)
+                end
+            end)
+            return true
+        end,
+    })
 end
 
 function Chat:_set_keymaps()
@@ -233,6 +284,13 @@ end
 
 ---@param opts? pi.ChatShowOpts
 function Chat:show(opts)
+    self:_in_own_tab(function()
+        self:_show(opts)
+    end)
+end
+
+---@param opts? pi.ChatShowOpts
+function Chat:_show(opts)
     if not self._layout:show() then
         -- already shown
         self:refresh_prompt_attention()
@@ -261,6 +319,7 @@ function Chat:show_loading()
 end
 
 function Chat:hide()
+    self:_clear_deferred()
     if self._zen:is_active() then
         self._zen:exit()
     end
@@ -304,8 +363,10 @@ end
 
 ---@param mode pi.LayoutMode
 function Chat:set_layout(mode)
-    self._layout:set_mode(mode)
-    self:refresh_prompt_attention()
+    self:_in_own_tab(function()
+        self._layout:set_mode(mode)
+        self:refresh_prompt_attention()
+    end)
 end
 
 ---@return pi.LayoutMode
@@ -396,15 +457,43 @@ end
 
 ---@param cb? fun()
 function Chat:focus_prompt(cb)
-    vim.schedule(function()
-        self._prompt:focus(cb)
+    self:_in_own_tab(function()
+        vim.schedule(function()
+            self._prompt:focus(cb)
+        end)
     end)
 end
 
 function Chat:ensure_shown_and_focus_prompt()
-    self:show()
-    vim.schedule(function()
-        self._prompt:focus()
+    self:_in_own_tab(function()
+        self:_show()
+        vim.schedule(function()
+            self._prompt:focus()
+        end)
+    end)
+end
+
+--- Put text in the prompt ahead of any current draft, then show the chat and
+--- focus the prompt in insert mode at the end of that text. Never submits it.
+--- The text is placed right away; showing waits for the chat's own tab.
+---@param text string
+---@param layout? pi.LayoutMode
+function Chat:show_with_draft(text, layout)
+    self._prompt:restore_text(text)
+    local row = #vim.split(text, "\n", { plain = true })
+    self:_in_own_tab(function()
+        -- Switch first, like `set_layout`: on a hidden chat it opens the new
+        -- layout directly, so `_show` only refreshes instead of reopening.
+        if layout and self._layout:mode() ~= layout then
+            self._layout:set_mode(layout)
+            self:refresh_prompt_attention()
+        end
+        self:_show()
+        -- Scheduled after the plain `startinsert` that showing queues;
+        -- focus_line_end schedules again past the prompt's WinEnter handler.
+        vim.schedule(function()
+            self._prompt:focus_line_end(row)
+        end)
     end)
 end
 
