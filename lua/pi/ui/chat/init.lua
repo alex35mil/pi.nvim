@@ -1070,9 +1070,16 @@ function Chat:set_extension_status(key, value)
 end
 
 --- Render a custom block inline in the chat history.
+---@deprecated Returned by the deprecated `on_widget` hook; use `append_custom_entry`.
 ---@param block pi.CustomBlock
 function Chat:append_custom_block(block)
     self._history:append_custom_block(block)
+end
+
+--- Render an extension custom entry inline through `entry_renderers`.
+---@param entry pi.CustomEntry
+function Chat:append_custom_entry(entry)
+    self._history:append_custom_entry(entry)
 end
 
 ---@param summary string

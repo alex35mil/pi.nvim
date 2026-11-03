@@ -39,6 +39,7 @@
 ---@field _pending_queue pi.PendingQueueEntry[]
 ---@field _pending_queue_extmark_id integer?
 ---@field _replaying boolean
+---@field _rendered_entry_ids table<string, boolean> Custom entries rendered since the last clear.
 ---@field _agent_text_start_row integer?
 ---@field _current_turn_first_agent_response_extmark_id integer?
 ---@field _current_turn_last_agent_response_extmark_id integer?
@@ -105,6 +106,7 @@ History.__index = History
 
 local Ft = require("pi.filetypes")
 local Config = require("pi.config")
+local Notify = require("pi.notify")
 local Tools = require("pi.ui.chat.tools")
 local Fences = require("pi.ui.chat.fences")
 
@@ -437,6 +439,7 @@ function History.new(tab)
     self._pending_queue = {}
     self._pending_queue_extmark_id = nil
     self._replaying = false
+    self._rendered_entry_ids = {}
     self._agent_text_start_row = nil
     self._current_turn_first_agent_response_extmark_id = nil
     self._current_turn_last_agent_response_extmark_id = nil
@@ -1669,8 +1672,37 @@ function History:show_startup_block(opts)
     self:_render_startup_block(#self._startup_errors > 0 and not self._has_conversation_content)
 end
 
---- Render a custom block inline in the history.
+--- Append styled lines at the current insertion point.
 --- Each line is an array of chunks: { {text, hl?}, ... }.
+---@param lines pi.CustomBlockLine[]
+function History:_append_styled_lines(lines)
+    for _, line_chunks in ipairs(lines) do
+        -- Build the plain text for the buffer line
+        local parts = {} ---@type string[]
+        for _, chunk in ipairs(line_chunks) do
+            parts[#parts + 1] = chunk[1] or ""
+        end
+        local text = table.concat(parts)
+        local row = self:_append_lines({ text })
+
+        -- Apply chunk highlights
+        local col = 0
+        for _, chunk in ipairs(line_chunks) do
+            local chunk_text = chunk[1] or ""
+            local hl = chunk[2]
+            if hl and #chunk_text > 0 then
+                vim.api.nvim_buf_set_extmark(self._buf, ns, row, col, {
+                    end_col = col + #chunk_text,
+                    hl_group = hl,
+                })
+            end
+            col = col + #chunk_text
+        end
+    end
+end
+
+--- Render a custom block inline in the history.
+---@deprecated Returned by the deprecated `on_widget` hook; use `append_custom_entry`.
 ---@param block pi.CustomBlock
 function History:append_custom_block(block)
     vim.schedule(function()
@@ -1680,29 +1712,68 @@ function History:append_custom_block(block)
         if not block.content or #block.content == 0 then
             return
         end
-        for _, line_chunks in ipairs(block.content) do
-            -- Build the plain text for the buffer line
-            local parts = {} ---@type string[]
-            for _, chunk in ipairs(line_chunks) do
-                parts[#parts + 1] = chunk[1] or ""
-            end
-            local text = table.concat(parts)
-            local row = self:_append_lines({ text })
+        self:_append_styled_lines(block.content)
+    end)
+end
 
-            -- Apply chunk highlights
-            local col = 0
-            for _, chunk in ipairs(line_chunks) do
-                local chunk_text = chunk[1] or ""
-                local hl = chunk[2]
-                if hl and #chunk_text > 0 then
-                    vim.api.nvim_buf_set_extmark(self._buf, ns, row, col, {
-                        end_col = col + #chunk_text,
-                        hl_group = hl,
-                    })
-                end
-                col = col + #chunk_text
+--- Whether a renderer result is a list of lines of `{ text, hl_group? }` chunks.
+---@param lines any
+---@return boolean
+local function is_styled_lines(lines)
+    if type(lines) ~= "table" or not vim.islist(lines) then
+        return false
+    end
+    for _, line in ipairs(lines) do
+        if type(line) ~= "table" or not vim.islist(line) then
+            return false
+        end
+        for _, chunk in ipairs(line) do
+            if type(chunk) ~= "table" or type(chunk[1]) ~= "string" then
+                return false
+            end
+            if chunk[2] ~= nil and type(chunk[2]) ~= "string" then
+                return false
             end
         end
+    end
+    return true
+end
+
+--- Render an extension custom entry inline through its configured renderer
+--- (`entry_renderers[customType]`). Entries without a renderer, and entries
+--- already rendered since the last clear, render nothing.
+---@param entry pi.CustomEntry
+function History:append_custom_entry(entry)
+    if self._rendered_entry_ids[entry.id] then
+        return
+    end
+    self._rendered_entry_ids[entry.id] = true
+    vim.schedule(function()
+        if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
+            return
+        end
+        local renderer = Config.options.entry_renderers[entry.customType]
+        if not renderer then
+            return
+        end
+        local ok, lines = pcall(renderer, entry)
+        if not ok then
+            Notify.error(("entry_renderers[%q] error: %s"):format(entry.customType, tostring(lines)))
+            return
+        end
+        if lines == nil then
+            return
+        end
+        if not is_styled_lines(lines) then
+            Notify.error(
+                ("entry_renderers[%q] must return nil or a list of lines of { text, hl_group? } chunks, got: %s"):format(
+                    entry.customType,
+                    vim.inspect(lines, { depth = 3 })
+                )
+            )
+            return
+        end
+        self:_append_styled_lines(lines)
     end)
 end
 
@@ -2474,6 +2545,7 @@ function History:clear()
     self._status_extmark_id = nil
     self._pending_queue = {}
     self._pending_queue_extmark_id = nil
+    self._rendered_entry_ids = {}
     self._thinking_accum = nil
     self._thinking_blocks = {}
     self._tool_blocks = {}

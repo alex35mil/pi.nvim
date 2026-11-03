@@ -404,8 +404,13 @@ require("pi").setup({
         },
     },
 
-    -- Extension setWidget hook. Return a custom block to render inline
-    -- in history, or nil to ignore. Not called for `:startup` widgets.
+    -- Renderers for extension custom entries (`pi.appendEntry(customType, data)`),
+    -- keyed by customType. Each returns lines of { text, hl_group? } chunks
+    -- to render inline in history, or nil to render nothing.
+    entry_renderers = {},
+
+    -- Deprecated: use `entry_renderers`. Extension setWidget hook; return a
+    -- custom block to render inline in history, or nil to ignore.
     on_widget = nil,
 })
 ```
@@ -1389,7 +1394,7 @@ renders in the startup block as:
 
 This is the intended surface for extensions that want to show session-relevant state the user should see up-front (current mode, loaded rules, active hooks, etc.) without cluttering the conversation itself.
 
-Note the distinction from regular widgets: `setWidget` calls with keys that **don't** end in `:startup` are passed to your `on_widget` config hook instead and can be rendered inline in the history. See the [Extensions & custom rendering](#extensions--custom-rendering) section below for the inline widget path.
+To annotate the conversation itself (for example, which rules were loaded for a file the agent just read), use custom entries instead. See [Inline annotations via `entry_renderers`](#inline-annotations-via-entry_renderers).
 
 ### Tool blocks
 
@@ -1730,41 +1735,40 @@ pi.nvim is extension-aware. When pi runs under `--mode rpc`, extensions can addr
 | `notify` | `vim.notify` via the configured notify dispatcher |
 | `setStatus` | `state.extensions[key]` in the statusline state (readable by custom [statusline](#statusline) components) |
 | `setWidget` with key ending in `:startup` | [Startup block](#startup-block) announcement |
-| `setWidget` with any other key | Your `on_widget` config hook (see below) |
+| `setWidget` with any other key | Your deprecated `on_widget` config hook, if set (see [below](#deprecated-on_widget)); otherwise ignored |
 | `select` | Dialog or [diff review](#diff-review), depending on the payload |
 | `confirm` | Confirmation dialog |
 | `input` / `editor` | Input dialog |
 | `setTitle`, `set_editor_text` | Currently ignored (warned once) |
 
-Dialog-style methods (`select`, `confirm`, `input`, `editor`) flow through the [Attention & dialogs](#attention--dialogs) queue described above. This section focuses on the piece that hasn't been covered yet: `on_widget`.
+Dialog-style methods (`select`, `confirm`, `input`, `editor`) flow through the [Attention & dialogs](#attention--dialogs) queue described above. This section focuses on the piece that hasn't been covered yet: inline annotations in the conversation.
 
-#### Inline custom blocks via `on_widget`
+#### Inline annotations via `entry_renderers`
 
-> [!NOTE]
-> Conceptually, this is a hack. `setWidget` was designed in the upstream pi protocol as a way for extensions to surface UI widgets in the TUI, not as a general extension ↔ pi.nvim communication channel. pi.nvim piggybacks on it because it's currently the **best handle pi provides** for an extension to push arbitrary data into the client. If/when pi gets a dedicated extension-to-client message type, this mechanism will likely be revisited. For now, treat `on_widget` as the escape hatch where "extension wants to say something to pi.nvim" becomes possible at all.
+An extension annotates the conversation by appending a **custom entry** to the session with `pi.appendEntry(customType, data)`. pi saves it in the session file (it never enters the model's context) and sends it to pi.nvim as an `entry_appended` event. pi.nvim looks up `entry_renderers[customType]` and renders what it returns inline in the history:
 
-When an extension calls `ctx.ui.setWidget(key, lines)` with a key that **doesn't** end in `:startup`, pi.nvim passes it to your `on_widget` config function. The hook gets a chance to return a **custom block** that pi.nvim will render inline in the history — right at the point in the conversation where the extension fired.
+- **Live:** at the current insertion point, i.e. right where the extension fired, such as under the tool call that triggered it.
+- **On resume and after compaction:** in its saved position in the conversation, so annotations survive reopening a session.
+
+This mirrors `pi.registerEntryRenderer(customType, renderer)` in pi's terminal UI; an extension can register both, and each frontend renders the same entry its own way.
 
 The signature:
 
 ```lua
----@param key string            -- the widgetKey the extension sent
----@param lines string[]|nil    -- widgetLines (nil when the extension cleared the widget)
----@param placement string|nil  -- "aboveEditor" / "belowEditor" (as sent by the extension)
----@return pi.CustomBlock|nil
-function(key, lines, placement)
-    -- return a block, or nil to ignore this widget
+---@class pi.CustomEntry
+---@field id string
+---@field customType string        -- the customType the extension passed
+---@field data any                 -- the data the extension passed (decoded JSON)
+---@field timestamp string
+
+---@param entry pi.CustomEntry
+---@return pi.CustomBlockLine[]|nil
+function(entry)
+    -- return lines to render, or nil to render nothing
 end
 ```
 
-Return `nil` to ignore a widget and let it vanish quietly. Return a `pi.CustomBlock` to render it inline:
-
-```lua
----@class pi.CustomBlock
----@field target  "history"          -- only "history" is supported today
----@field block   "custom"           -- discriminator; always "custom"
----@field content pi.CustomBlockLine[]
-```
+Entries without a renderer are ignored. When a renderer raises an error or returns anything other than `nil` or a list of lines, pi.nvim reports it with `vim.notify` and skips the entry.
 
 A `pi.CustomBlockLine` is a list of styled chunks, and each chunk is a `{ text, hl_group? }` pair:
 
@@ -1778,49 +1782,42 @@ A `pi.CustomBlockLine` is a list of styled chunks, and each chunk is a `{ text, 
 
 #### Example
 
-Let's walk through a concrete case. My [rules extension](https://github.com/alex35mil/pi-af/tree/main/extensions/rules) discovers Markdown rule files under `~/.pi/agent/rules/` (global) and `<repo>/.agents/rules/` (project). Some rules are always-on — their bodies are injected into the system prompt on every turn. Others are **path-scoped**: they have a `paths:` glob list in the frontmatter and are only delivered when the agent reads a file that matches one of those globs. In that case the extension appends the rule body to the `read` tool result (so the agent sees it) _and_ fires a `setWidget("rules:load", [...rule paths])` so **you** can see, inline in the chat, which rules just got loaded for which file.
+Let's walk through a concrete case. My [rules extension](https://github.com/alex35mil/pi-af/tree/main/extensions/rules) discovers Markdown rule files under `~/.pi/agent/rules/` (global) and `<repo>/.agents/rules/` (project). Some rules are always-on — their bodies are injected into the system prompt on every turn. Others are **path-scoped**: they have a `paths:` glob list in the frontmatter and are only delivered when the agent reads a file that matches one of those globs. In that case the extension appends the rule body to the `read` tool result (so the agent sees it) _and_ appends a custom entry listing the **paths of the rule files** so **you** can see, inline in the chat, which rules just got loaded for which file:
 
-Without `on_widget`, that widget would simply be ignored by pi.nvim. With `on_widget`, it becomes a small annotation attached to the read tool call, telling you exactly which rules the agent now has in its context for the file it just read. It's the difference between trusting that the rules extension is doing its job and being able to _see_ it do its job.
-
-Here's the hook that turns that widget into an inline annotation:
-
-```lua
-require("pi").setup({
-    on_widget = function(key, lines)
-        if key == "rules:load" and lines then
-            local content = {}
-            for _, line in ipairs(lines) do
-                content[#content + 1] = {
-                    { "   ╰  rule: " .. line, "Comment" },
-                }
-            end
-            return {
-                target = "history",
-                block = "custom",
-                content = content,
-            }
-        end
-        return nil
-    end,
+```ts
+pi.appendEntry("rules:load", {
+    paths: [".agents/rules/lua.md", ".agents/rules/neovim.md"],
 })
 ```
 
-On the extension side, the rules extension watches tool calls (`read`, `edit`, `write`, etc.) and, when it matches a file against one of its rule definitions, fires a widget listing the **paths of the rule files** that apply:
+Here's the renderer that turns that entry into an annotation under the tool call:
 
-```ts
-ctx.ui.setWidget("rules:load", [
-    ".agents/rules/lua.md",
-    ".agents/rules/neovim.md",
-])
+```lua
+require("pi").setup({
+    entry_renderers = {
+        ["rules:load"] = function(entry)
+            local lines = {}
+            for _, path in ipairs(entry.data.paths) do
+                lines[#lines + 1] = {
+                    { "   ╰  rule: ", "Comment" },
+                    { path, "PiMention" },
+                }
+            end
+            return lines
+        end,
+    },
+})
 ```
 
-pi.nvim calls your `on_widget`, sees the returned block, and writes it into the history buffer at the current insertion point — so the list appears directly underneath the tool call that triggered it, making it obvious which rules the agent should have loaded for that particular file.
+It's the difference between trusting that the rules extension is doing its job and being able to _see_ it do its job — including when you resume the session later.
 
-The payload the extension sends is deliberately minimal (just rule file paths); turning that into a nicely-formatted inline block — prefix, icon, highlight — is entirely the job of `on_widget` on the Neovim side. Different users can present the same widget data however they want without the extension having to know anything about styling.
+The extension sends only data; prefix, icon, and highlights are entirely up to the renderer on the Neovim side, so different users can present the same entries however they want.
 
-#### Limitations
+#### Deprecated: `on_widget`
 
-Same upstream constraint as [Startup block](#startup-block): `setWidget` in RPC mode only carries string arrays. Styling and structure are added _in pi.nvim_ by your `on_widget` hook — the extension can't pre-style the output. Give `on_widget` everything it needs to make decisions (the `key` namespaces widgets from different extensions, and `lines` carries the payload) and do the formatting there.
+`on_widget` is deprecated and will be removed in a future release; when it is set, pi.nvim shows a one-time warning once Neovim has finished starting. It receives `ctx.ui.setWidget(key, lines, placement)` calls whose key doesn't end in `:startup` and returns a `pi.CustomBlock` (`{ target = "history", block = "custom", content = pi.CustomBlockLine[] }`) or `nil`. Widgets are transient, so these blocks are lost on resume and after compaction.
+
+To migrate, have the extension call `pi.appendEntry(customType, data)` instead of `ctx.ui.setWidget(key, lines)`, and move the hook's body into `entry_renderers[customType]`, returning the block's `content` lines directly. Other widgets (except `:startup` announcements) have no surface in pi.nvim once `on_widget` is gone; use `setStatus` for statusline values.
 
 ### Health & debugging
 
