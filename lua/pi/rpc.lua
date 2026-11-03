@@ -52,7 +52,7 @@
 ---| "abort"
 ---| "new_session"
 ---| "switch_session"
----| "get_messages"
+---| "get_entries"
 ---| "get_commands"
 ---| "get_state"
 ---| "get_session_stats"

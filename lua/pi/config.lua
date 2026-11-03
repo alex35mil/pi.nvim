@@ -172,7 +172,12 @@
 --- A line of styled chunks.
 ---@alias pi.CustomBlockLine pi.CustomBlockChunk[]
 
---- Return value from on_widget to render a custom block inline in history.
+--- Renders an extension custom entry (`pi.appendEntry(customType, data)`) inline in
+--- the history. Return lines of styled chunks, or nil / an empty list to render nothing.
+---@alias pi.EntryRenderer fun(entry: pi.CustomEntry): pi.CustomBlockLine[]?
+
+--- Return value from the deprecated on_widget hook to render a custom block inline in history.
+---@deprecated Use `entry_renderers` with `pi.appendEntry`.
 ---@class pi.CustomBlock
 ---@field target "history" Where to render the block.
 ---@field block "custom" Block type.
@@ -233,13 +238,15 @@
 ---@field zen pi.ZenConfig
 ---@field dialog pi.DialogConfig
 ---@field verbs pi.VerbsConfig Verb pairs for status messages, picked randomly per run
----@field on_widget? fun(key: string, lines: string[]?, placement: string?): pi.CustomBlock? Handle extension setWidget calls. Return a custom block to render inline in history, or nil to ignore. Not called for `:startup` widgets (keys ending with `:startup`), which are always stored as startup announcements and rendered in the system preamble.
+---@field entry_renderers table<string, pi.EntryRenderer> Renderers for extension custom entries, keyed by `customType`. Entries render inline in history live and when a session is resumed or rebuilt after compaction.
+---@field on_widget? fun(key: string, lines: string[]?, placement: string?): pi.CustomBlock? Deprecated: use `entry_renderers`. Handle extension setWidget calls. Return a custom block to render inline in history, or nil to ignore. Not called for `:startup` widgets (keys ending with `:startup`), which are always stored as startup announcements and rendered in the system preamble.
 
 ---@class pi.ConfigModule
 ---@field options pi.Options
 local M = {}
 
 local Os = require("pi.os")
+local Notify = require("pi.notify")
 
 math.randomseed(os.time())
 
@@ -390,8 +397,11 @@ local defaults = {
             { "Agently replacing you", "Agently replaced you" },
         },
     },
+    entry_renderers = {},
     on_widget = nil,
 }
+
+local on_widget_warned = false
 
 ---@type pi.Options
 M.options = vim.deepcopy(defaults)
@@ -425,6 +435,26 @@ function M.setup(opts)
     end
 
     M.options = vim.tbl_deep_extend("force", defaults, opts or {})
+
+    if M.options.on_widget ~= nil and not on_widget_warned then
+        on_widget_warned = true
+        -- Warn once startup has finished: a warning sent while init.lua runs is
+        -- overwritten by startup redraws, or goes out before a notification
+        -- plugin replaces vim.notify, and ends up visible only in :messages.
+        local function warn()
+            vim.schedule(function()
+                Notify.warn(
+                    "`on_widget` is deprecated; use `entry_renderers` with `pi.appendEntry` "
+                        .. "(see README: Deprecated: `on_widget`)"
+                )
+            end)
+        end
+        if vim.v.vim_did_enter == 1 then
+            warn()
+        else
+            vim.api.nvim_create_autocmd("VimEnter", { once = true, callback = warn })
+        end
+    end
 
     local grace = M.options.process.stop.grace_ms
     if type(grace) ~= "number" or grace ~= math.floor(grace) or grace < 0 then

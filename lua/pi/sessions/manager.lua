@@ -38,6 +38,7 @@ local Chat = require("pi.ui.chat")
 local Config = require("pi.config")
 local Startup = require("pi.startup")
 local Notify = require("pi.notify")
+local Entries = require("pi.sessions.entries")
 local Attention = require("pi.attention")
 local Dialog = require("pi.ui.dialog")
 local Extension = require("pi.ui.extension")
@@ -270,8 +271,9 @@ local function handle_event(session, msg)
             rebuild_after_compaction(session, entry, chat:is_streaming())
         elseif entry.type == "usage" or entry.type == "context_edit" then
             M.refresh_stats(session)
+        elseif entry.type == "custom" then
+            chat:append_custom_entry(entry --[[@as pi.CustomEntry]])
         end
-        -- Custom entry presentation belongs to the separate entry-rendering API.
     elseif t == "queue_update" then
         chat:on_queue_update(msg.steering or {}, msg.followUp or {})
     elseif t == "message_update" then
@@ -768,15 +770,35 @@ function M.new_session()
     end)
 end
 
---- Replay messages from get_messages response into chat.
+--- The message a replayed entry renders as, or nil when it renders none.
+--- Only the leading compaction contributes a summary, as in pi's session projection.
+---@param entry pi.SessionEntry
+---@param index integer position in the context entries
+---@return table?
+local function replay_message(entry, index)
+    if entry.type == "message" then
+        return type(entry.message) == "table" and entry.message or nil
+    elseif entry.type == "compaction" and index == 1 then
+        return { role = "compactionSummary", summary = entry.summary, tokensBefore = entry.tokensBefore }
+    end
+    return nil
+end
+
+--- Replay the active, compaction-aware session entries from a get_entries response into chat.
 ---@param session pi.Session
----@param messages table[]
-local function replay_messages(session, messages)
+---@param data { entries?: pi.SessionEntry[], leafId?: string|userdata }
+local function replay_entries(session, data)
     session.chat:set_replaying(true)
     local pending_agent_end = false
     local tool_call_args = {} ---@type table<string, table>
-    for _, msg in ipairs(messages) do
+    for index, entry in ipairs(Entries.context_entries(data.entries or {}, data.leafId)) do
+        local msg = replay_message(entry, index) or {}
         local role = msg.role
+        -- Custom entries render in place and never close the agent block: live,
+        -- the block closes only on agent_end, and user messages flush it below.
+        if entry.type == "custom" then
+            session.chat:append_custom_entry(entry --[[@as pi.CustomEntry]])
+        end
         -- Flush pending agent_end before a user message
         if pending_agent_end and role == "user" then
             session.chat:on_agent_end()
@@ -887,22 +909,22 @@ rebuild_after_compaction = function(session, _result, will_retry)
         session.chat:flush_compaction_queue(true)
     end
 
-    local sent = session.rpc:send({ type = "get_messages" }, function(res)
+    local sent = session.rpc:send({ type = "get_entries" }, function(res)
         vim.schedule(function()
             if not res.success then
-                local err = res.error or "Failed to load compacted session messages"
+                local err = res.error or "Failed to load compacted session entries"
                 Notify.error(err)
                 session.chat:on_error(err, { pad_top = true, pad_bottom = true })
                 finish_compaction_rebuild(session, not will_retry, will_retry)
                 return
             end
 
-            local messages = (res.data or {}).messages or {}
+            local data = res.data or {}
             session.changed_files = {}
             session._pending_file_change_args = nil
             session.chat:clear_for_compaction_rebuild()
             show_startup_block(session, session.commands:list())
-            replay_messages(session, messages)
+            replay_entries(session, data)
             M.refresh_state(session)
             vim.schedule(function()
                 finish_compaction_rebuild(session, not will_retry, will_retry)
@@ -914,7 +936,7 @@ rebuild_after_compaction = function(session, _result, will_retry)
     end
 end
 
---- Load a session by path: switch_session -> clear chat -> get_messages -> replay.
+--- Load a session by path: switch_session -> clear chat -> get_entries -> replay.
 ---@param session pi.Session
 ---@param session_path string
 local function load_session(session, session_path)
@@ -947,31 +969,31 @@ local function load_session(session, session_path)
             session.chat:show_loading()
         end)
 
-        local sent_messages = session.rpc:send({ type = "get_messages" }, function(res)
+        local sent_entries = session.rpc:send({ type = "get_entries" }, function(res)
             vim.schedule(function()
                 session.chat:clear_placeholder()
                 if not res.success then
-                    local err = res.error or "Failed to load session messages"
+                    local err = res.error or "Failed to load session entries"
                     Notify.error(err)
                     session.chat:on_error(err, { pad_top = true, pad_bottom = true })
                     session.chat:ensure_shown_and_focus_prompt()
                     return
                 end
 
-                local messages = (res.data or {}).messages or {}
+                local data = res.data or {}
                 -- Fetch commands, show startup block, then replay.
                 session.commands:fetch(session.rpc, function(commands)
                     show_startup_block(session, commands)
-                    replay_messages(session, messages)
+                    replay_entries(session, data)
                     session.chat:ensure_shown_and_focus_prompt()
                 end)
             end)
         end)
-        if not sent_messages then
+        if not sent_entries then
             vim.schedule(function()
                 session.chat:clear()
-                Notify.error("Failed to load session messages")
-                session.chat:on_error("Failed to load session messages", { pad_top = true, pad_bottom = true })
+                Notify.error("Failed to load session entries")
+                session.chat:on_error("Failed to load session entries", { pad_top = true, pad_bottom = true })
                 session.chat:ensure_shown_and_focus_prompt()
             end)
         end

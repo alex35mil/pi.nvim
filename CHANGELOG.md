@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-03
+
+- **ADDED:** `entry_renderers` renders extension custom entries (`pi.appendEntry(customType, data)`) inline in the chat, both live and when a session is resumed or rebuilt after compaction. See "Inline annotations via `entry_renderers`" in the README.
+- **DEPRECATED:** `on_widget`; pi.nvim warns once, after startup, when it is set. Have the extension call `pi.appendEntry` and move the hook into `entry_renderers`; see "Deprecated: `on_widget`" in the README.
+- **CHANGED:** Resume and the rebuild after compaction replay the active branch of the session's entries instead of its model messages, matching pi's terminal UI.
+
 ## 2026-11-01
 
 - **ADDED:** `pi.show({ draft = "..." })` opens the chat with text pre-filled in the prompt, focused in insert mode at the end of the text and never sent. Existing prompt text is kept below it; a cancelled or failed start discards it. See "Pre-filling the prompt" in the README.
