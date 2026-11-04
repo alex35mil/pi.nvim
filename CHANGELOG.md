@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-04
+
+- **CHANGED:** The README documents who owns what for each kind of descriptor launch, starting pi inside a container that's already running (with the forced-stop caveat for `docker exec`), running several workers for one project in separate tabs, and which Neovim exit paths run pi's stop cleanup. See "Who owns what", "Several workers for one project", and "Stopping" in the README.
+
 ## 2026-11-03
 
 - **ADDED:** `entry_renderers` renders extension custom entries (`pi.appendEntry(customType, data)`) inline in the chat, both live and when a session is resumed or rebuilt after compaction. See "Inline annotations via `entry_renderers`" in the README.
