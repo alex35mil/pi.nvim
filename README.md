@@ -1700,12 +1700,49 @@ Without `paths`, pi shares your filesystem and every path it reports is used as 
 
 Continue and resume list the session folder the running pi reports, translated through the mapping. Keep the sessions in a mounted folder (inside the workspace, or listed in `mounts`), or pi.nvim reports that the folder isn't reachable.
 
+#### Who owns what
+
+pi.nvim owns only the process it starts: the descriptor's `cmd`. Whether that process is just pi or also its environment is up to the command, and stopping never touches anything the command didn't start.
+
+| Where pi runs | Example command | Stopping ends | Keeps running |
+| --- | --- | --- | --- |
+| On your machine | `pi --mode rpc`, or a sandbox such as nono | pi | — |
+| In a new environment just for it | `docker run --rm -i … pi --mode rpc` | pi and its container | — |
+| In an environment that's already running | `docker exec -i <container> pi --mode rpc` | the pi it started | the container and its services |
+
+To start pi inside a container that's already running, such as a dev container with a database, exec into it:
+
+```json
+{
+    "process": {
+        "kind": "spawned",
+        "cmd": [
+            "docker", "exec", "-i",
+            "-w", "${{WORKSPACE}}",
+            "my-dev-container",
+            "pi", "--mode", "rpc", "--session-dir", "${{WORKSPACE}}/.pi/sessions"
+        ]
+    },
+    "paths": { "workspace": "${{WORKSPACE}}" }
+}
+```
+
+- The container must already mount the workspace, or a folder containing all your worktrees, at the path `paths` declares. A running container can't gain new mounts, and pi.nvim doesn't add any, so a worktree created after the container started is invisible inside it unless its parent folder was mounted.
+- Keep the session folder inside the mounted workspace (or another mounted folder listed in `paths.mounts`) so continue and resume can find saved conversations.
+- `:PiStop` closes pi's input, pi exits, and `docker exec` returns; the container keeps running. If pi hangs and the grace period runs out, pi.nvim force-stops the local `docker exec` process, but Docker doesn't pass that on to the process it started in the container, so the hung pi keeps running there. If you need that case covered, point `cmd` at a wrapper script of yours that, when it's terminated, also stops the pi it started inside the container (for example by recording that pi's process ID in the container and killing it with a second `docker exec`).
+
+#### Several workers for one project
+
+To run several pis on the same project at once, give each its own copy of the project (a worktree or clone) with its own descriptor, and open each in its own tab with `:tcd`. Each tab's pi, slash commands, file list, sessions, trust decision, and stop reports belong to that copy; stopping one tab's pi leaves the others running.
+
 #### Stopping
 
 `:PiStop`, closing the tab, and quitting Neovim stop every pi the same way, local or not: pi.nvim closes pi's input, which is pi's signal to shut down cleanly and gives a wrapper time to clean up (for example `docker run --rm` removing the container), waits up to its grace period (the descriptor's `process.stop.grace_ms`, otherwise the `setup()` option `process.stop.grace_ms`), then force-stops it.
 
 - `:PiStop` and closing the tab stop in the background. A non-zero exit, timeout, or forced stop is reported with the workspace, descriptor, and pi's last stderr lines.
-- Quitting Neovim stops all running pis at once and waits for them within one shared budget: the longest grace period among them. Cleanup still running after that is force-stopped and may be left unfinished. Crashes, `kill -9`, and frontends that skip Neovim's exit hooks don't run this at all.
+- Quitting Neovim stops all running pis at once and waits for them within one shared budget: the longest grace period among them. Cleanup still running after that is force-stopped and may be left unfinished.
+
+Quitting runs this cleanup whenever Neovim goes through its normal exit: `:qa` and other quit commands, closing the terminal window Neovim runs in, and `SIGHUP` or `SIGTERM` sent to Neovim. `kill -9`, crashes, and frontends that kill Neovim directly skip it, and anything their pis were running may be left behind.
 
 Notifications can't be seen while Neovim quits, so cleanup failures then are saved and shown the next time pi.nvim starts. With `debug = true`, a failure also keeps the last entries of that pi's RPC log, because the log itself is reset when the tab starts pi again. For an immediate alert, set `process.stop.on_failure`. It receives `{ workspace, descriptor?, command, outcome = "exit"|"timeout"|"forced", code?, stderr, log?, log_tail? }`; on macOS, for example:
 
