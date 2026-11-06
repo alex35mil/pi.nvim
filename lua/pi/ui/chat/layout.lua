@@ -106,11 +106,13 @@ end
 
 ---@param after_win integer
 function Layout:_open_attachments_in_side_layout(after_win)
-    local prev_win = vim.api.nvim_get_current_win()
-    vim.api.nvim_set_current_win(after_win)
-    vim.cmd("belowright " .. self._attachments:count() .. "split")
-    self._attachments_win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_buf(self._attachments_win, self._attachments:buf())
+    -- Opened without entering, so the current window keeps focus.
+    self._attachments_win = vim.api.nvim_open_win(self._attachments:buf(), false, {
+        split = "below",
+        win = after_win,
+        height = self._attachments:count(),
+    })
+    vim.wo[self._attachments_win].winhighlight = ""
     vim.wo[self._attachments_win].winfixheight = true
     vim.wo[self._attachments_win].winfixwidth = true
     vim.wo[self._attachments_win].signcolumn = "no"
@@ -122,8 +124,6 @@ function Layout:_open_attachments_in_side_layout(after_win)
     vim.wo[self._attachments_win].number = false
     vim.wo[self._attachments_win].relativenumber = false
     vim.wo[self._attachments_win].cursorline = false
-
-    vim.api.nvim_set_current_win(prev_win)
 end
 
 ---@param col integer
@@ -379,11 +379,17 @@ function Layout:_open_in_side_layout()
     local side_cfg = Config.resolve_side_layout()
     local panels = side_cfg.panels
     local w = resolve_side_width()
-    vim.cmd("botright " .. w .. "vsplit")
-
-    self._history_win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_buf(self._history_win, self._history:buf())
+    -- Windows open without entering, so the current window keeps focus.
+    -- A split copies the current window's options, which may be a caller's
+    -- float, so float-only highlights are cleared explicitly.
+    -- win = -1: top-level split on the far right, like `botright vsplit`.
+    self._history_win = vim.api.nvim_open_win(self._history:buf(), false, {
+        split = "right",
+        win = -1,
+        width = w,
+    })
     set_win_opts(self._history_win, function(win)
+        vim.wo[win].winhighlight = ""
         vim.wo[win].winfixwidth = true
         -- conceallevel=0: treesitter markdown can't conceal brackets/bold
         -- in tool output, so we don't need ``` fence wrappers.
@@ -396,10 +402,13 @@ function Layout:_open_in_side_layout()
 
     local prompt_winbar = panels.prompt.winbar
     local prompt_h = Prompt.HEIGHT + (prompt_winbar and 1 or 0)
-    vim.cmd("belowright " .. prompt_h .. "split")
-    self._prompt_win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_buf(self._prompt_win, self._prompt:buf())
+    self._prompt_win = vim.api.nvim_open_win(self._prompt:buf(), false, {
+        split = "below",
+        win = self._history_win,
+        height = prompt_h,
+    })
     set_win_opts(self._prompt_win, function(win)
+        vim.wo[win].winhighlight = ""
         vim.wo[win].winfixwidth = true
         vim.wo[win].winfixheight = true
         vim.wo[win].virtualedit = "onemore"
@@ -444,7 +453,7 @@ function Layout:_open_in_float_layout()
 
     self._prompt_win = vim.api.nvim_open_win(
         self._prompt:buf(),
-        true,
+        false,
         vim.tbl_deep_extend("force", {
             relative = "editor",
             width = width,
@@ -486,6 +495,8 @@ function Layout:on_resize()
     end
 end
 
+--- Open the windows in the current mode. Never changes the current window;
+--- callers that want the prompt focused focus it themselves.
 ---@return boolean opened true if a fresh open occurred
 function Layout:show()
     if self._history_win and vim.api.nvim_win_is_valid(self._history_win) then
@@ -525,36 +536,98 @@ function Layout:mode()
     return self._mode
 end
 
+---@alias pi.ChatWindowKind "history"|"prompt"|"attachments"
+
+--- Which chat window is current, if any.
+---@return pi.ChatWindowKind?
+function Layout:current_kind()
+    local current = vim.api.nvim_get_current_win()
+    if current == self:history_win() then
+        return "history"
+    elseif current == self:prompt_win() then
+        return "prompt"
+    elseif current == self:attachments_win() then
+        return "attachments"
+    end
+    return nil
+end
+
+---@param kind pi.ChatWindowKind
+---@return integer?
+function Layout:_win_of_kind(kind)
+    if kind == "history" then
+        return self:history_win()
+    elseif kind == "prompt" then
+        return self:prompt_win()
+    elseif kind == "attachments" then
+        return self:attachments_win()
+    end
+end
+
+---@param win integer
+---@param cursor integer[]
+local function set_cursor_clamped(win, cursor)
+    local line_count = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win))
+    pcall(vim.api.nvim_win_set_cursor, win, { math.min(cursor[1], line_count), cursor[2] })
+end
+
+--- Events suppressed while chat windows are swapped under the cursor, so the
+--- switch looks like one focus move from the old chat window to the new one.
+local SWITCH_EVENTIGNORE = "WinEnter,WinLeave,BufEnter,BufLeave"
+
+--- Rebuild the visible windows in another mode. The prompt cursor is kept.
+--- An outside window that was current stays current. A chat window that was
+--- current is replaced by the same kind of window in the new layout (the
+--- prompt when there's none), with the same cursor and mode; no enter/leave
+--- events fire for that swap. A hidden chat is opened in the new mode.
 ---@param mode pi.LayoutMode
 function Layout:set_mode(mode)
-    -- Save prompt cursor before tearing down windows.
+    local focused = self:current_kind()
+    local focused_cursor = focused and vim.api.nvim_win_get_cursor(0) or nil
     local prompt_cursor
     local pwin = self:prompt_win()
     if pwin then
         prompt_cursor = vim.api.nvim_win_get_cursor(pwin)
     end
 
-    self:hide()
-    self._mode = mode
-    self:show()
-    self._prompt:resize()
-    if self._attachments:count() > 0 then
-        self:_refresh_attachments()
-    end
+    local function rebuild()
+        self:hide()
+        self._mode = mode
+        self:show()
+        self._prompt:resize()
+        if self._attachments:count() > 0 then
+            self:_refresh_attachments()
+        end
 
-    -- Restore prompt cursor in the new window.
-    if prompt_cursor then
         pwin = self:prompt_win()
-        if pwin then
-            local line_count = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(pwin))
-            prompt_cursor[1] = math.min(prompt_cursor[1], line_count)
-            vim.api.nvim_win_set_cursor(pwin, prompt_cursor)
+        if prompt_cursor and pwin then
+            set_cursor_clamped(pwin, prompt_cursor)
+        end
+
+        if focused then
+            local target = self:_win_of_kind(focused)
+            if target then
+                vim.api.nvim_set_current_win(target)
+                set_cursor_clamped(target, focused_cursor)
+            elseif pwin then
+                vim.api.nvim_set_current_win(pwin)
+            end
         end
     end
-end
 
-function Layout:toggle()
-    self:set_mode(self._mode == "side" and "float" or "side")
+    if not focused then
+        -- Focus never moves, so other plugins see nothing to react to.
+        rebuild()
+        return
+    end
+
+    local eventignore = vim.o.eventignore
+    vim.o.eventignore = eventignore == "" and SWITCH_EVENTIGNORE or (eventignore .. "," .. SWITCH_EVENTIGNORE)
+    local ok, err = pcall(rebuild)
+    vim.o.eventignore = eventignore
+    if not ok then
+        error(err, 0)
+    end
 end
 
 ---@return boolean

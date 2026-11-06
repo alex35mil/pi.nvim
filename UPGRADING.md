@@ -1,5 +1,19 @@
 # Upgrading
 
+## `pi.toggle_layout` takes options (2026-11-06)
+
+`pi.toggle_layout` now takes the same options table as the new `pi.set_layout`. If you pass a callback, move it into `on_done`:
+
+```lua
+-- Before
+require("pi").toggle_layout(function(layout) ... end)
+
+-- After
+require("pi").toggle_layout({ on_done = function(layout) ... end })
+```
+
+The old form raises an error naming the replacement. `:PiToggleLayout` and `pi.toggle_layout()` without arguments need no change.
+
 ## pi 1.3.0
 
 pi.nvim does not change your backend settings or credentials. When upgrading an older backend:

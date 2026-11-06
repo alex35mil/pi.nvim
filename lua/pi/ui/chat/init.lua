@@ -191,37 +191,7 @@ function Chat:_set_keymaps()
     vim.api.nvim_create_autocmd("WinEnter", {
         buffer = pbuf,
         callback = function()
-            vim.schedule(function()
-                -- Guard: by the time this runs, focus may have moved elsewhere
-                local buf = vim.api.nvim_get_current_buf()
-                if buf ~= pbuf then
-                    return
-                end
-                Attention.dismiss_notification(self._tab)
-                self:_auto_dispatch_attention_on_prompt_focus()
-                if vim.api.nvim_get_current_buf() ~= pbuf then
-                    return
-                end
-                if vim.api.nvim_get_mode().mode ~= "i" then
-                    local resume = self._prompt._resume_insert
-                    if resume then
-                        self._prompt._resume_insert = nil
-                        if resume == "eol" then
-                            vim.cmd("startinsert!")
-                        elseif resume == "mid" then
-                            -- Mid-line: move cursor right to undo the
-                            -- InsertLeave left-shift, then enter insert.
-                            vim.cmd("normal! l")
-                            vim.cmd("startinsert")
-                        else
-                            -- bol: InsertLeave doesn't shift at col 0.
-                            vim.cmd("startinsert")
-                        end
-                    else
-                        vim.cmd("startinsert")
-                    end
-                end
-            end)
+            self:_on_prompt_focus()
         end,
     })
 
@@ -332,40 +302,129 @@ function Chat:on_resize()
     self:refresh_prompt_attention()
 end
 
----@param cb? fun()
-function Chat:toggle_layout(cb)
-    self._prompt._resume_insert = nil
-    self._layout:toggle()
-    self:refresh_prompt_attention()
-
-    -- Determine how to re-enter insert mode based on the normal-mode
-    -- cursor position after the switch.  InsertLeave shifts the cursor
-    -- left by 1 (except at col 0), so we compensate:
-    --   eol (on or past last char) → startinsert!  (A)
-    --   bol (col 0)                → startinsert   (no shift happened)
-    --   mid                        → normal! l + startinsert
-    local pwin = self._layout:prompt_win()
-    if pwin then
-        local cur = vim.api.nvim_win_get_cursor(pwin)
-        local line = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(pwin), cur[1] - 1, cur[1], false)[1] or ""
-        local last_col = math.max(0, #line - 1)
-        if cur[2] >= last_col then
-            self._prompt._resume_insert = "eol"
-        elseif cur[2] == 0 then
-            self._prompt._resume_insert = "bol"
-        else
-            self._prompt._resume_insert = "mid"
-        end
-    end
-
-    self:focus_prompt(cb)
+---@return boolean
+local function in_insert_mode()
+    local mode = vim.api.nvim_get_mode().mode
+    return mode:sub(1, 1) == "i" or mode:sub(1, 3) == "niI"
 end
 
+--- Work out how to re-enter insert mode at the prompt cursor.
+--- A normal-mode cursor sits one column left of where insert mode left it
+--- (InsertLeave shifts left, except at col 0), so it's compensated:
+---   eol (on or past last char) → startinsert!
+---   at_cursor (col 0)          → startinsert
+---   mid                        → normal! l + startinsert
+--- An insert-mode cursor is already exact: it resumes in place (at_cursor),
+--- and only a cursor past the last character counts as end of line.
+---@param was_insert boolean
+function Chat:_set_prompt_resume(was_insert)
+    local pwin = self._layout:prompt_win()
+    if not pwin then
+        self._prompt._resume_insert = nil
+        return
+    end
+    local cur = vim.api.nvim_win_get_cursor(pwin)
+    local line = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(pwin), cur[1] - 1, cur[1], false)[1] or ""
+    if was_insert then
+        self._prompt._resume_insert = cur[2] >= #line and "eol" or "at_cursor"
+    elseif cur[2] >= math.max(0, #line - 1) then
+        self._prompt._resume_insert = "eol"
+    elseif cur[2] == 0 then
+        self._prompt._resume_insert = "at_cursor"
+    else
+        self._prompt._resume_insert = "mid"
+    end
+end
+
+--- Enter insert mode in the current prompt, honouring the pending resume
+--- position. The pending position is always consumed.
+function Chat:_resume_prompt_insert()
+    local resume = self._prompt._resume_insert
+    self._prompt._resume_insert = nil
+    if vim.api.nvim_get_current_buf() ~= self._prompt:buf() or in_insert_mode() then
+        return
+    end
+    if resume == "eol" then
+        vim.cmd("startinsert!")
+    elseif resume == "mid" then
+        vim.cmd("normal! l")
+        vim.cmd("startinsert")
+    elseif resume == "at_cursor" or resume == nil then
+        vim.cmd("startinsert")
+    end
+end
+
+--- Handle the user arriving in the prompt: dismiss the attention
+--- notification, open pending attention when configured, and enter insert
+--- mode. Scheduled, so it runs after the window switch has fully settled
+--- (e.g. a stopinsert queued by the window that was left).
+function Chat:_on_prompt_focus()
+    vim.schedule(function()
+        -- Guard: by the time this runs, focus may have moved elsewhere
+        local pbuf = self._prompt:buf()
+        if vim.api.nvim_get_current_buf() ~= pbuf then
+            return
+        end
+        Attention.dismiss_notification(self._tab)
+        self:_auto_dispatch_attention_on_prompt_focus()
+        self:_resume_prompt_insert()
+    end)
+end
+
+---@class pi.ChatSetLayoutOpts
+---@field focus? boolean Focus the prompt in insert mode afterwards (default true)
+---@field on_done? fun() Runs after the switch (and, with focus, after insert mode is requested)
+
+--- Switch to a layout. With `focus`, the prompt ends up focused in insert
+--- mode. Without it, the current window and mode are kept; when the current
+--- window is a chat window, the same kind of window in the new layout takes
+--- its place. A hidden chat is shown; a chat already in `mode` isn't rebuilt.
 ---@param mode pi.LayoutMode
-function Chat:set_layout(mode)
+---@param opts? pi.ChatSetLayoutOpts
+function Chat:set_layout(mode, opts)
+    opts = opts or {}
+    local focus = opts.focus ~= false
+    local on_done = opts.on_done
     self:_in_own_tab(function()
-        self._layout:set_mode(mode)
-        self:refresh_prompt_attention()
+        local was_visible = self._layout:is_visible()
+        local rebuilt = not was_visible or self._layout:mode() ~= mode
+        local was_prompt_insert = self._layout:current_kind() == "prompt" and in_insert_mode()
+
+        if rebuilt then
+            self._prompt._resume_insert = nil
+            self._layout:set_mode(mode)
+            self:_set_keymaps()
+            self:refresh_prompt_attention()
+        end
+
+        if not focus then
+            if was_prompt_insert and self._layout:current_kind() == "prompt" then
+                self:_set_prompt_resume(true)
+                vim.schedule(function()
+                    self:_resume_prompt_insert()
+                end)
+            end
+            if on_done then
+                on_done()
+            end
+            return
+        end
+
+        if rebuilt and was_visible then
+            self:_set_prompt_resume(was_prompt_insert)
+        end
+        local pwin = self._layout:prompt_win()
+        if pwin and vim.api.nvim_get_current_win() == pwin then
+            -- Already current (kept across the switch): no WinEnter fires.
+            self:_on_prompt_focus()
+            if on_done then
+                vim.schedule(on_done)
+            end
+        else
+            vim.schedule(function()
+                self._prompt:focus(on_done)
+            end)
+        end
     end)
 end
 
@@ -466,10 +525,14 @@ end
 
 function Chat:ensure_shown_and_focus_prompt()
     self:_in_own_tab(function()
-        self:_show()
-        vim.schedule(function()
+        if self._layout:is_visible() then
+            self:_show()
             self._prompt:focus()
-        end)
+        else
+            -- Opening focuses the prompt itself; focusing again later would
+            -- pull focus back from a dialog opened on that first focus.
+            self:_show()
+        end
     end)
 end
 
@@ -481,6 +544,16 @@ end
 function Chat:show_with_draft(text, layout)
     self._prompt:restore_text(text)
     local row = #vim.split(text, "\n", { plain = true })
+    self:show_and_focus_at(row, nil, layout)
+end
+
+--- Show the chat (in `layout`, when given) and focus the prompt in insert
+--- mode with the cursor before byte `col` of `row` (nil: end of the line).
+--- Waits for the chat's own tab.
+---@param row integer 1-based line
+---@param col? integer 0-based byte column; nil for end of line
+---@param layout? pi.LayoutMode
+function Chat:show_and_focus_at(row, col, layout)
     self:_in_own_tab(function()
         -- Switch first, like `set_layout`: on a hidden chat it opens the new
         -- layout directly, so `_show` only refreshes instead of reopening.
@@ -490,9 +563,9 @@ function Chat:show_with_draft(text, layout)
         end
         self:_show()
         -- Scheduled after the plain `startinsert` that showing queues;
-        -- focus_line_end schedules again past the prompt's WinEnter handler.
+        -- focus_at schedules again past the prompt's WinEnter handler.
         vim.schedule(function()
-            self._prompt:focus_line_end(row)
+            self._prompt:focus_at(row, col)
         end)
     end)
 end

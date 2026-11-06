@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-06
+
+- **BREAKING:** `pi.toggle_layout(cb)` takes an options table: replace `pi.toggle_layout(cb)` with `pi.toggle_layout({ on_done = cb })`. Passing a function raises an error that names the new form. `:PiToggleLayout` and `pi.toggle_layout()` are unchanged. See [UPGRADING](UPGRADING.md).
+- **ADDED:** `pi.set_layout(mode, opts?)` switches the chat to a specific layout. With `focus = false`, the window you're in keeps focus and its mode, so pickers and other focus-sensitive UI can move π without closing. `pi.toggle_layout(opts?)` takes the same options. See "Switching layouts from Lua" in the README.
+- **CHANGED:** Opening or switching the chat no longer briefly moves focus through other windows, so `WinEnter`/`WinLeave` handlers in your config see one move straight to the π prompt.
+- **CHANGED:** With `attention.auto_open_on_prompt_focus` (the default), a pending attention request now also opens, and its notification is dismissed, when π focuses an empty prompt for you: `:Pi`, `pi.show()`, `:PiToggleLayout`, and returning from diff review. Before, only moving into the prompt yourself did this.
+- **FIXED:** `pi.send_mention()` inserts the mention before focusing the prompt, so a pending attention request no longer opens over it, and the cursor ends right after the mention.
+- **FIXED:** `:PiToggleLayout` from insert mode keeps the cursor exactly where it was; before, it could land one character to the right.
+
 ## 2026-11-04
 
 - **CHANGED:** The README documents who owns what for each kind of descriptor launch, starting pi inside a container that's already running (with the forced-stop caveat for `docker exec`), running several workers for one project in separate tabs, and which Neovim exit paths run pi's stop cleanup. See "Who owns what", "Several workers for one project", and "Stopping" in the README.
