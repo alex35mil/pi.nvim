@@ -11,8 +11,7 @@ local is_initialized = false
 ---@param mode? pi.LayoutMode
 local function show_chat(chat, mode)
     if mode and chat:layout() ~= mode then
-        chat:set_layout(mode)
-        chat:focus_prompt()
+        chat:set_layout(mode, { focus = true })
     else
         chat:ensure_shown_and_focus_prompt()
     end
@@ -96,8 +95,7 @@ function M.toggle(opts)
     local requested_layout = opts and opts.layout or nil
     if existing.chat:is_visible() then
         if requested_layout and existing.chat:layout() ~= requested_layout then
-            existing.chat:set_layout(requested_layout)
-            existing.chat:focus_prompt()
+            existing.chat:set_layout(requested_layout, { focus = true })
         else
             existing.chat:hide()
         end
@@ -128,22 +126,68 @@ function M.toggle_chat()
     session.chat:toggle()
 end
 
---- Toggle between side and float layout. No-op if no session exists.
---- If given, callback runs after pi has switched layouts, focused the new
---- prompt window, and requested insert mode.
----@param cb? fun(layout: pi.LayoutMode)
-function M.toggle_layout(cb)
+---@class pi.LayoutSwitchOpts
+---@field focus? boolean Focus the prompt in insert mode after switching (default true). false keeps the current window and mode.
+---@field on_done? fun(layout: pi.LayoutMode) Runs after the switch (and, with focus, after insert mode is requested).
+
+---@param opts any
+---@param fn_name string
+---@return pi.LayoutSwitchOpts
+local function check_layout_switch_opts(opts, fn_name)
+    if opts == nil then
+        return {}
+    end
+    if type(opts) == "function" and fn_name == "toggle_layout" then
+        error("pi.nvim: toggle_layout(cb) was replaced by toggle_layout({ on_done = cb })", 3)
+    end
+    if type(opts) ~= "table" then
+        error("pi.nvim: " .. fn_name .. "(opts) expects a table, got " .. type(opts), 3)
+    end
+    return opts
+end
+
+---@param session pi.Session
+---@param mode pi.LayoutMode
+---@param opts pi.LayoutSwitchOpts
+local function switch_layout(session, mode, opts)
+    local on_done = opts.on_done
+    session.chat:set_layout(mode, {
+        focus = opts.focus,
+        on_done = on_done and function()
+            on_done(session.chat:layout())
+        end or nil,
+    })
+end
+
+--- Switch the chat to a layout. No-op if no session exists. A hidden chat is
+--- shown in that layout; a chat already in it isn't rebuilt.
+--- With `focus = false`, the current window and mode are kept. If that window
+--- is a chat window, the same kind of window in the new layout replaces it.
+---@param mode pi.LayoutMode
+---@param opts? pi.LayoutSwitchOpts
+function M.set_layout(mode, opts)
+    opts = check_layout_switch_opts(opts, "set_layout")
+    if mode ~= "side" and mode ~= "float" then
+        require("pi.notify").error("set_layout: unknown layout " .. vim.inspect(mode) .. ' (expected "side" or "float")')
+        return
+    end
     local session = require("pi.sessions.manager").get()
     if not session then
         return
     end
-    if cb then
-        session.chat:toggle_layout(function()
-            cb(session.chat:layout())
-        end)
-    else
-        session.chat:toggle_layout()
+    switch_layout(session, mode, opts)
+end
+
+--- Switch between side and float layout. No-op if no session exists.
+--- Takes the same options as `set_layout`.
+---@param opts? pi.LayoutSwitchOpts
+function M.toggle_layout(opts)
+    opts = check_layout_switch_opts(opts, "toggle_layout")
+    local session = require("pi.sessions.manager").get()
+    if not session then
+        return
     end
+    switch_layout(session, session.chat:layout() == "side" and "float" or "side", opts)
 end
 
 --- Check whether the chat is currently visible.

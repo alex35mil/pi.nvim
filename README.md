@@ -142,7 +142,7 @@ Optional but useful:
 
 Run `:checkhealth pi` to verify.
 
-Upgrading from an older pi version? See the [upgrade guide](UPGRADING.md).
+Upgrading pi or pi.nvim across a breaking change? See the [upgrade guide](UPGRADING.md).
 
 ## Installation
 
@@ -576,6 +576,26 @@ The filetype names are stable — you can target them from your own `FileType` a
 
 Use `:PiToggleLayout` to swap `side` ↔ `float` without losing the conversation, and `:PiToggleChat` to hide and re-show the chat windows. Neither stops the agent. To actually shut down the underlying `pi --mode rpc` process for the current tab, use `:PiStop`.
 
+#### Switching layouts from Lua
+
+`pi.set_layout(mode, opts?)` switches to a specific layout, and `pi.toggle_layout(opts?)` switches to the other one. Both take the same options:
+
+- `focus` (default `true`): focus the prompt in insert mode afterwards, like `:PiToggleLayout`. With `focus = false`, the window you're in stays current, in the same mode. Use this from pickers and other UI that closes as soon as it loses focus.
+- `on_done(layout)`: runs once the switch is done (and, with `focus`, after insert mode is requested).
+
+```lua
+-- Open a file from a picker and move π aside, without stealing focus from the picker.
+require("pi").set_layout("side", { focus = false })
+```
+
+Details worth knowing:
+
+- **Chat window focused:** with `focus = false` in a π window (history, prompt, or attachments), the same window in the new layout takes over, with the cursor and mode unchanged. If the new layout has no attachments window, focus goes to the prompt.
+- **Hidden chat:** switching shows it in the requested layout.
+- **Already in that layout:** nothing is rebuilt. `focus = true` still focuses the prompt, and `focus = false` only runs `on_done`.
+- **No session in the current tab:** nothing happens, and `on_done` isn't called.
+- **Different tab:** the switch waits until you're back in the chat's tab.
+
 Each panel has a winbar with a title controlled by `panels.<panel>.title` (a string). In side layout, the winbar can be disabled per-panel with `layout.side.panels.<panel>.winbar = false`. Separately, `panels.<panel>.name = function(tab_id) return ... end` lets you compute the underlying buffer name per tab — useful for distinguishing multiple π conversations in `:buffers`, statuslines, or tab bars.
 
 ### Prompt
@@ -631,7 +651,7 @@ Trailing punctuation works the way you'd expect: `(@lua/pi/init.lua)` and `Look 
 
 While typing, `@mentions` are highlighted in the prompt buffer so you can see at a glance which references will expand.
 
-`:PiSendMention` inserts an `@mention` for the current buffer at the cursor position in the π prompt, opening the chat if needed. In normal mode it mentions the buffer as a whole; in visual mode (or with a `:'<,'>PiSendMention` range) it mentions just the selected lines. The command handles spacing around the insertion so you don't end up with double spaces or missing separators. It's also exposed as `pi.send_mention(args, opts)` from Lua — see the [Keymaps](#keymaps) example for typical bindings.
+`:PiSendMention` inserts an `@mention` for the current buffer at the cursor position in the π prompt, opening the chat if needed. In normal mode it mentions the buffer as a whole; in visual mode (or with a `:'<,'>PiSendMention` range) it mentions just the selected lines. The command handles spacing around the insertion so you don't end up with double spaces or missing separators, and leaves the cursor right after the mention so you can keep typing. It's also exposed as `pi.send_mention(args, opts)` from Lua — see the [Keymaps](#keymaps) example for typical bindings.
 
 > [!TIP]
 > Because `@mentions` expand to `[file: ..., line: ...]` / `[file: ..., lines: ...]`, it's worth teaching the agent to re-read the exact reference before answering. Consider adding the following to your global `AGENTS.md` (or equivalent):
@@ -1260,7 +1280,7 @@ Both are no-ops when there's nothing queued.
 
 #### Auto-open on prompt focus
 
-By default (`attention.auto_open_on_prompt_focus = true`), simply focusing the π prompt with an empty draft pulls the next queued request for the current tab automatically. This matches the mental model of "the prompt is the place where the agent talks to you" — when you show up at the prompt ready to interact, π dispatches whatever's pending.
+By default (`attention.auto_open_on_prompt_focus = true`), simply focusing the π prompt with an empty draft pulls the next queued request for the current tab automatically. This matches the mental model of "the prompt is the place where the agent talks to you" — when you show up at the prompt ready to interact, π dispatches whatever's pending. It applies however the prompt gets focus: moving into it yourself, or π focusing it for you (`:Pi`, `pi.show()`, `:PiToggleLayout`, returning from diff review). Layout switches with `focus = false` don't count, because you haven't moved.
 
 Disable this if you prefer to control the timing manually:
 
@@ -1970,7 +1990,8 @@ pi.setup(opts?)
 pi.show(opts?)                -- open the chat; opts: { layout = "side"|"float", draft = "text to pre-fill, never sent" }
 pi.toggle(opts?)              -- open or hide the chat
 pi.toggle_chat()              -- hide/show the chat windows for the current tab
-pi.toggle_layout(cb?)         -- swap side ↔ float; cb runs after the swap completes
+pi.set_layout(mode, opts?)    -- switch to "side" | "float"; opts: { focus = true, on_done = function(layout) end }
+pi.toggle_layout(opts?)       -- swap side ↔ float; same opts as set_layout
 pi.is_visible()               -- boolean: is the chat shown in the current tab?
 pi.layout()                   -- "side" | "float" | nil
 

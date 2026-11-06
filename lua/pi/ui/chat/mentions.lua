@@ -104,41 +104,54 @@ function M._insert(session, loc, opts)
     elseif loc.start_line then
         mention = mention .. "#L" .. loc.start_line
     end
-    if opts.focus ~= false then
-        session.chat:ensure_shown_and_focus_prompt()
+    -- Insert before showing or focusing: focusing an empty prompt may open a
+    -- pending attention request, which must not cover the mention.
+    local buf = session.chat:prompt_buf()
+    local win = session.chat:prompt_win()
+
+    local row, col
+    if win then
+        row, col = unpack(vim.api.nvim_win_get_cursor(win))
     else
-        session.chat:show()
+        row = vim.api.nvim_buf_line_count(buf)
+        local last_line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
+        col = #last_line
     end
 
-    vim.schedule(function()
-        local buf = session.chat:prompt_buf()
-        local win = session.chat:prompt_win()
+    local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
+    col = math.min(col, #line)
+    -- col is 0-indexed byte offset; insert at cursor position
+    local before = col > 0 and line:sub(col, col) or ""
+    local after = col < #line and line:sub(col + 1, col + 1) or ""
 
-        local row, col
-        if win and vim.api.nvim_win_is_valid(win) then
-            row, col = unpack(vim.api.nvim_win_get_cursor(win))
-        else
-            row = vim.api.nvim_buf_line_count(buf)
-            local last_line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
-            col = #last_line
-        end
+    local prefix = (before ~= "" and before ~= " ") and " " or ""
+    local suffix = (after ~= " ") and " " or ""
+    local insert = prefix .. mention .. suffix
 
-        local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1] or ""
-        -- col is 0-indexed byte offset; insert at cursor position
-        local before = col > 0 and line:sub(col, col) or ""
-        local after = col < #line and line:sub(col + 1, col + 1) or ""
+    vim.api.nvim_buf_set_text(buf, row - 1, col, row - 1, col, { insert })
+    Decorators.update(buf)
 
-        local prefix = (before ~= "" and before ~= " ") and " " or ""
-        local suffix = (after ~= " ") and " " or ""
-        local insert = prefix .. mention .. suffix
+    -- Cursor after the mention and its separating space (added or already
+    -- there), so typing never runs into the mention.
+    local cursor_col = col + #insert + (suffix == "" and 1 or 0)
+    if opts.focus ~= false then
+        session.chat:show_and_focus_at(row, cursor_col)
+        return
+    end
 
-        vim.api.nvim_buf_set_text(buf, row - 1, col, row - 1, col, { insert })
-        if win and vim.api.nvim_win_is_valid(win) then
-            vim.api.nvim_win_set_cursor(win, { row, col + #insert })
-        end
-
-        Decorators.update(buf)
-    end)
+    if win then
+        vim.api.nvim_win_set_cursor(win, { row, cursor_col })
+    end
+    session.chat:show()
+    if not win then
+        -- Opened just now: place the cursor once the window exists.
+        vim.schedule(function()
+            local new_win = session.chat:prompt_win()
+            if new_win then
+                pcall(vim.api.nvim_win_set_cursor, new_win, { row, cursor_col })
+            end
+        end)
+    end
 end
 
 --- Send @-mention for current buffer.

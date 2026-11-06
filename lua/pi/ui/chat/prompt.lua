@@ -8,7 +8,7 @@
 ---@field _attachments pi.ChatAttachments
 ---@field _tab pi.TabId
 ---@field _zen boolean
----@field _resume_insert? "eol"|"bol"|"mid"
+---@field _resume_insert? "eol"|"at_cursor"|"mid"
 local Prompt = {}
 Prompt.__index = Prompt
 
@@ -242,35 +242,50 @@ function Prompt:focus(cb)
     if not self._win or not vim.api.nvim_win_is_valid(self._win) then
         return
     end
-    vim.api.nvim_set_current_win(self._win)
+    local win = self._win
+    vim.api.nvim_set_current_win(win)
     vim.schedule(function()
-        vim.cmd("startinsert")
+        -- Entering may have opened something that took focus (e.g. an
+        -- attention dialog auto-opened on prompt focus); leave it alone.
+        if vim.api.nvim_get_current_win() == win then
+            vim.cmd("startinsert")
+        end
         if cb then
             cb()
         end
     end)
 end
 
---- Focus the prompt in insert mode at the end of a buffer line.
+--- Focus the prompt in insert mode with the cursor before byte `col` of
+--- `row` (nil: end of the line), so typing continues right there.
 --- Sets the cursor directly instead of using `_resume_insert`, which only
 --- WinEnter clears and would linger when the prompt is already current.
 ---@param row integer 1-based line
-function Prompt:focus_line_end(row)
+---@param col? integer 0-based byte column; nil for end of line
+function Prompt:focus_at(row, col)
     if not self._win or not vim.api.nvim_win_is_valid(self._win) then
         return
     end
     local win = self._win
     vim.api.nvim_set_current_win(win)
     -- Entering the window queues the WinEnter handler's plain `startinsert`;
-    -- place the cursor after it so the end-of-line position wins.
+    -- place the cursor after it so this position wins.
     vim.schedule(function()
         if not vim.api.nvim_win_is_valid(win) or vim.api.nvim_get_current_win() ~= win then
             return
         end
         row = math.min(row, vim.api.nvim_buf_line_count(self._buf))
         local line = vim.api.nvim_buf_get_lines(self._buf, row - 1, row, false)[1] or ""
-        vim.api.nvim_win_set_cursor(win, { row, #line })
-        vim.cmd("startinsert!")
+        local target = math.min(col or #line, #line)
+        if vim.api.nvim_get_mode().mode:sub(1, 1) == "i" then
+            vim.api.nvim_win_set_cursor(win, { row, target })
+        elseif target >= #line then
+            vim.api.nvim_win_set_cursor(win, { row, #line })
+            vim.cmd("startinsert!")
+        else
+            vim.api.nvim_win_set_cursor(win, { row, target })
+            vim.cmd("startinsert")
+        end
     end)
 end
 
