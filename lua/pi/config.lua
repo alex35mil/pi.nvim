@@ -183,10 +183,6 @@
 ---@field block "custom" Block type.
 ---@field content pi.CustomBlockLine[] Lines of styled chunks to render.
 
----@class pi.CliConfig
----@field bin string Path to the `pi` executable.
----@field args string[] Extra startup args for every RPC process. pi.nvim filters args that conflict with RPC mode.
-
 ---@class pi.RpcAdapterContext
 ---@field set_commands fun(commands: pi.SlashCommand[]) Replace the slash-command list of the connection whose event or command is being mapped.
 
@@ -196,7 +192,7 @@
 
 ---@class pi.CleanupFailureReport
 ---@field workspace string Workspace the launch ran in.
----@field descriptor? string Descriptor the launch came from; nil for local pi.
+---@field descriptor? string Descriptor the launch came from; nil for the global `process` setting.
 ---@field command string Name of the launched command (first argument).
 ---@field outcome "exit"|"timeout"|"forced" Non-zero exit, did not stop in time, or force-stopped.
 ---@field code? integer Exit code, when the process exited.
@@ -209,14 +205,23 @@
 ---@field trusted_paths string[] Directories whose descriptors need no prompt on a workspace's first use.
 
 ---@class pi.StopConfig
----@field grace_ms integer How long a stopping pi may take after its input closes; a descriptor's `process.stop.grace_ms` overrides it for that workspace. Neovim exit waits once, for the longest among running pis.
+---@field grace_ms integer How long a stopping pi (or an attached pi's connector) may take after its input closes; a descriptor's `process.stop.grace_ms` overrides it for that workspace. Neovim exit waits once, for the longest among running pis.
 ---@field on_failure? fun(report: pi.CleanupFailureReport) Called for cleanup failures during Neovim exit.
 ---@field report_failures_on_start boolean Save exit cleanup failures and show them on the next start.
 
---- This tab's Pi process: how it's started locally (`cli`), how a workspace
---- describes it instead (`descriptor`), and how pi.nvim stops a Pi it started (`stop`).
+---@class pi.ReconnectConfig
+---@field enabled? boolean Reconnect automatically after an unexpected connection loss (default true).
+---@field give_up_after_ms? integer|false Stop retrying after this long (default 60000); false retries until detached or stopped.
+
+--- How each tab's pi is started or reached (the launch spec, with the same keys
+--- and validation as a workspace descriptor's `process`), where workspaces
+--- describe it instead (`descriptor`), and how pi.nvim stops it (`stop`).
 ---@class pi.ProcessConfig
----@field cli pi.CliConfig
+---@field kind "spawned"|"attached" `spawned`: pi.nvim starts and owns the process. `attached`: `cmd` is a connector to a pi your tooling keeps running; closing it only disconnects.
+---@field cmd string[] Complete argument list, run as given in the tab's workspace (default `{ "pi", "--mode", "rpc" }`).
+---@field env? table<string, string> Variables added to the started process's environment (for `attached`, the connector's).
+---@field terminate? string[] `attached` only: command `:PiStop` runs to end the attached pi; may contain `${{SESSION_ID}}` and `${{SESSION_FILE}}`.
+---@field reconnect? pi.ReconnectConfig `attached` only: automatic reconnect.
 ---@field descriptor pi.DescriptorConfig
 ---@field stop pi.StopConfig
 
@@ -253,10 +258,8 @@ math.randomseed(os.time())
 ---@type pi.Options
 local defaults = {
     process = {
-        cli = {
-            bin = "pi",
-            args = {},
-        },
+        kind = "spawned",
+        cmd = { "pi", "--mode", "rpc" },
         descriptor = {
             path = ".pi.nvim.json",
             trusted_paths = {},
@@ -408,14 +411,39 @@ M.options = vim.deepcopy(defaults)
 
 ---@param opts? pi.Options
 function M.setup(opts)
-    if opts and opts.bin ~= nil then
-        error("pi.nvim: `bin` was removed; use `process = { cli = { bin = ... } }`", 2)
+    if opts and (opts --[[@as table]]).bin ~= nil then
+        error('pi.nvim: `bin` was removed; use `process = { cmd = { "<bin>", "--mode", "rpc" } }`', 2)
     end
     -- Removed or moved options: not part of pi.Options any more, so read them untyped.
     if
         opts and (opts --[[@as table]]).cli ~= nil
     then
-        error("pi.nvim: `cli` moved to `process.cli`; use `process = { cli = { bin = ..., args = ... } }`", 2)
+        error('pi.nvim: `cli` was removed; use `process = { cmd = { "<bin>", <args...>, "--mode", "rpc" } }`', 2)
+    end
+    local process_cli = opts and opts.process and (opts.process --[[@as table]]).cli
+    if process_cli ~= nil then
+        local equivalent = { "pi" }
+        if type(process_cli) == "table" then
+            equivalent = { type(process_cli.bin) == "string" and process_cli.bin or "pi" }
+            if type(process_cli.args) == "table" then
+                vim.list_extend(equivalent, process_cli.args)
+            end
+        end
+        vim.list_extend(equivalent, { "--mode", "rpc" })
+        error(
+            ("pi.nvim: `process.cli` was replaced by `process.cmd`, which runs exactly as given; use `process = { cmd = %s }`"):format(
+                vim.inspect(equivalent, { newline = " ", indent = "" })
+            ),
+            2
+        )
+    end
+    if
+        opts
+        and opts.process
+        and opts.process.kind == "attached"
+        and opts.process.cmd == nil
+    then
+        error('pi.nvim: `process.kind = "attached"` needs `process.cmd`, the connector command', 2)
     end
     if
         opts and (opts --[[@as table]]).agent_dir ~= nil
@@ -435,6 +463,17 @@ function M.setup(opts)
     end
 
     M.options = vim.tbl_deep_extend("force", defaults, opts or {})
+    -- Argument lists replace the defaults as given. `tbl_deep_extend` merges an
+    -- empty table into the default list, which would hide an empty `cmd` from
+    -- validation and silently run the default command.
+    local user_process = opts and opts.process --[[@as table?]]
+    if type(user_process) == "table" then
+        for _, key in ipairs({ "cmd", "terminate" }) do
+            if user_process[key] ~= nil then
+                M.options.process[key] = vim.deepcopy(user_process[key])
+            end
+        end
+    end
 
     if M.options.on_widget ~= nil and not on_widget_warned then
         on_widget_warned = true
@@ -456,14 +495,9 @@ function M.setup(opts)
         end
     end
 
-    local grace = M.options.process.stop.grace_ms
-    if type(grace) ~= "number" or grace ~= math.floor(grace) or grace < 0 then
-        error(
-            ("pi.nvim: `process.stop.grace_ms` must be a non-negative integer (milliseconds), got %s"):format(
-                vim.inspect(grace)
-            ),
-            2
-        )
+    local _, spec_err = require("pi.execution.spec").parse_setup(M.options.process, vim.fn.getcwd())
+    if spec_err then
+        error("pi.nvim: invalid `process` setting: " .. spec_err, 2)
     end
 
     -- Resolve verbs: merge or replace based on use_defaults.

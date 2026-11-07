@@ -32,7 +32,7 @@ _G.T = { dispatched = 0, events = {} }
 
 local Descriptor = require("pi.execution.descriptor")
 Descriptor.resolve = function(workspace, done)
-    done({ kind = "local" })
+    done({ kind = "global" })
 end
 
 local Rpc = require("pi.rpc")

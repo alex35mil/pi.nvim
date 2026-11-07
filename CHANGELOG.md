@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-07
+
+- **BREAKING:** Replace `process.cli` with `process.cmd`, the complete command run exactly as given (default `{ "pi", "--mode", "rpc" }`); pi.nvim no longer appends `--mode rpc` or filters arguments. `setup()` raises an error when `process.cli` is set, showing the equivalent `cmd`. `process` now has the same fields and checks as a workspace descriptor's `process` (`kind`, `cmd`, `env`, `stop.grace_ms`). See UPGRADING.md.
+- **CHANGED:** `:checkhealth pi` checks the executable of `process.cmd`, and pi's version when the command runs `pi` itself (with any arguments).
+
 ## 2026-11-06
 
 - **BREAKING:** `pi.toggle_layout(cb)` takes an options table: replace `pi.toggle_layout(cb)` with `pi.toggle_layout({ on_done = cb })`. Passing a function raises an error that names the new form. `:PiToggleLayout` and `pi.toggle_layout()` are unchanged. See [UPGRADING](UPGRADING.md).

@@ -46,6 +46,7 @@ local CommandCatalog = require("pi.cache.commands")
 local Workspace = require("pi.workspace")
 local Execution = require("pi.execution")
 local Descriptor = require("pi.execution.descriptor")
+local Spec = require("pi.execution.spec")
 local ExecState = require("pi.execution.state")
 local Tools = require("pi.ui.chat.tools")
 
@@ -557,18 +558,20 @@ local function start_session(tab, workspace, execution, opts)
     return session
 end
 
---- Ask before starting local pi in a workspace that used a descriptor.
+--- Ask before using the global `process` setting in a workspace that used a descriptor.
 ---@param workspace string
 ---@param cb fun(confirmed: boolean)
 local function confirm_local_after_descriptor(workspace, cb)
+    local cmd = Spec.display(Spec.global(workspace).process.cmd)
     Dialog.select({
         title = "pi descriptor missing",
         message = "This workspace used a pi descriptor before, but it's gone:\n"
             .. Descriptor.path(workspace)
-            .. "\n\nStart pi locally on this machine instead?",
-        options = { "Start local Pi", "Cancel" },
+            .. "\n\nRun the `process` setting's command on this machine instead?\n"
+            .. cmd,
+        options = { "Run it", "Cancel" },
     }, function(choice)
-        cb(choice == "Start local Pi")
+        cb(choice == "Run it")
     end)
 end
 
@@ -612,13 +615,19 @@ function M.get_or_create(opts, cb)
             finish(nil)
             return
         end
+        -- TODO(#28 step 3): attached connections get their own lifecycle; until then they're refused.
+        if execution:connection() == "attached" then
+            Notify.error('pi wasn\'t started: `kind = "attached"` isn\'t supported yet')
+            finish(nil)
+            return
+        end
         finish(start_session(tab, workspace, execution, opts))
     end
 
     Descriptor.resolve(workspace, function(result)
         local kind = result.kind
-        if kind == "local" then
-            launch(Execution.new_local(workspace))
+        if kind == "global" then
+            launch(Execution.new_global(workspace))
         elseif kind == "descriptor" then
             launch(Execution.new_descriptor(workspace, result.spec, result.path))
         elseif kind == "missing_after_use" then
@@ -633,7 +642,7 @@ function M.get_or_create(opts, cb)
                     finish(nil)
                     return
                 end
-                launch(Execution.new_local(workspace))
+                launch(Execution.new_global(workspace))
             end)
         elseif kind == "cancelled" then
             Notify.info("pi wasn't started: the workspace descriptor isn't trusted")
@@ -660,7 +669,7 @@ local function notify_stop_report(report)
             report.command,
             what,
             report.workspace,
-            report.descriptor and ("descriptor " .. report.descriptor) or "local pi"
+            report.descriptor and ("descriptor " .. report.descriptor) or "process setting"
         ),
     }
     vim.list_extend(lines, report.stderr)

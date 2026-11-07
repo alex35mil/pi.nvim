@@ -57,7 +57,7 @@ local function describe(failure)
     })[failure.outcome] or tostring(failure.outcome)
     local lines = {
         ("%s: `%s` in %s %s"):format(os.date("%Y-%m-%d %H:%M", failure.time), failure.command, failure.workspace, what),
-        "  " .. (failure.descriptor and ("descriptor: " .. failure.descriptor) or "local pi"),
+        "  " .. (failure.descriptor and ("descriptor: " .. failure.descriptor) or "process setting"),
     }
     for _, line in ipairs(failure.stderr or {}) do
         lines[#lines + 1] = "  " .. line

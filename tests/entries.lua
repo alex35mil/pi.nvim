@@ -109,7 +109,7 @@ end)
 _G.T = { sent = {}, handler = nil, entries = nil, notes = {} }
 
 require("pi.execution.descriptor").resolve = function(_, done)
-    done({ kind = "local" })
+    done({ kind = "global" })
 end
 
 require("pi.rpc").new = function()

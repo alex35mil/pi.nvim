@@ -1,22 +1,27 @@
 --- A connection's execution context: what was launched, how its paths relate
 --- to the host, and whether pi's working directory has been verified.
 ---
---- Two kinds:
---- - `local`: pi.nvim starts pi on the host in the workspace.
---- - `descriptor`: pi runs where a workspace descriptor put it.
+--- Where its launch spec came from:
+--- - `global`: the global `process` setting (by default local pi), started in the workspace.
+--- - `descriptor`: a trusted workspace descriptor.
+---
+--- The spec's `kind` says what pi.nvim owns: a `spawned` pi, or only the
+--- connector of an `attached` one.
 ---
 --- And two filesystems:
---- - `host`: pi sees the host's own filesystem (local pi, or a descriptor
----   without `paths`, such as an OS-level sandbox). Paths are used as given.
+--- - `host`: pi sees the host's own filesystem (the global setting, or a
+---   descriptor without `paths`, such as an OS-level sandbox). Paths are used as given.
 --- - `mapped`: pi runs in a separate filesystem (a descriptor with `paths`).
 ---   Paths are translated through the mapping; unmapped paths are refused.
 
-local Cli = require("pi.cli")
 local Notify = require("pi.notify")
 local PathMap = require("pi.execution.paths")
+local Spec = require("pi.execution.spec")
 local Workspace = require("pi.workspace")
 
----@alias pi.ExecutionKind "local"|"descriptor"
+---@alias pi.ExecutionSource "global"|"descriptor"
+
+---@alias pi.ConnectionKind "spawned"|"attached"
 
 --- The filesystem pi sees.
 ---@alias pi.ExecutionFilesystem
@@ -37,9 +42,10 @@ local Workspace = require("pi.workspace")
 ---| { kind: "session_unmapped", file: string } # pi's session file isn't reachable, so the check can't run
 
 ---@class pi.Execution
----@field kind pi.ExecutionKind
+---@field source pi.ExecutionSource
 ---@field workspace string Host workspace.
----@field descriptor? string Real path of the descriptor (descriptor kind).
+---@field descriptor? string Real path of the descriptor (descriptor source).
+---@field process pi.LaunchProcess The launch spec's process: kind, command, and (attached) terminate and reconnect.
 ---@field _launch pi.Launch
 ---@field _fs pi.ExecutionFilesystem
 ---@field _cwd pi.CwdVerification
@@ -48,31 +54,17 @@ local Workspace = require("pi.workspace")
 local Execution = {}
 Execution.__index = Execution
 
---- Local pi on the host.
+---@param source pi.ExecutionSource
 ---@param workspace string
+---@param spec pi.LaunchSpec
+---@param descriptor? string
 ---@return pi.Execution
-function Execution.new_local(workspace)
+local function new(source, workspace, spec, descriptor)
     local self = setmetatable({}, Execution)
-    self.kind = "local"
-    self.workspace = workspace
-    self._launch = { cmd = Cli.command() }
-    self._fs = { kind = "host" }
-    -- pi.nvim starts local pi itself with the workspace as its working directory.
-    self._cwd = "verified"
-    self._reported = {}
-    return self
-end
-
---- pi launched from a trusted workspace descriptor.
----@param workspace string
----@param spec pi.DescriptorSpec
----@param descriptor string real path of the descriptor
----@return pi.Execution
-function Execution.new_descriptor(workspace, spec, descriptor)
-    local self = setmetatable({}, Execution)
-    self.kind = "descriptor"
+    self.source = source
     self.workspace = workspace
     self.descriptor = descriptor
+    self.process = vim.deepcopy(spec.process)
     self._launch = {
         cmd = vim.deepcopy(spec.process.cmd),
         env = spec.process.env and vim.deepcopy(spec.process.env) or nil,
@@ -84,9 +76,36 @@ function Execution.new_descriptor(workspace, spec, descriptor)
     else
         self._fs = { kind = "host" }
     end
-    self._cwd = "unverified"
     self._reported = {}
     return self
+end
+
+--- pi from the global `process` setting, on the host filesystem.
+---@param workspace string
+---@return pi.Execution
+function Execution.new_global(workspace)
+    local self = new("global", workspace, Spec.global(workspace))
+    -- pi.nvim starts the global command itself with the workspace as its
+    -- working directory, on the host's own filesystem.
+    self._cwd = "verified"
+    return self
+end
+
+--- pi from a trusted workspace descriptor.
+---@param workspace string
+---@param spec pi.LaunchSpec
+---@param descriptor string real path of the descriptor
+---@return pi.Execution
+function Execution.new_descriptor(workspace, spec, descriptor)
+    local self = new("descriptor", workspace, spec, descriptor)
+    self._cwd = "unverified"
+    return self
+end
+
+--- What pi.nvim owns for this connection: a spawned pi, or an attached pi's connector.
+---@return pi.ConnectionKind
+function Execution:connection()
+    return self.process.kind
 end
 
 --- What to start for this connection.
@@ -95,15 +114,15 @@ function Execution:launch()
     return vim.deepcopy(self._launch)
 end
 
---- Short label for messages: the descriptor path, or "local pi".
+--- Short label for messages: the descriptor path, or the global setting.
 ---@return string
 function Execution:label()
-    if self.kind == "local" then
-        return "local pi"
-    elseif self.kind == "descriptor" then
+    if self.source == "global" then
+        return "process setting"
+    elseif self.source == "descriptor" then
         return "descriptor " .. assert(self.descriptor)
     end
-    error("unknown execution kind: " .. tostring(self.kind))
+    error("unknown execution source: " .. tostring(self.source))
 end
 
 --- Show a message once per connection.

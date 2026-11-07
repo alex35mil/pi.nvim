@@ -196,16 +196,17 @@ All options are optional. These are the defaults:
 ```lua
 ---@type pi.Options
 require("pi").setup({
-    -- This tab's pi process: how it's started locally, how a workspace describes
-    -- it instead, and how pi.nvim stops a pi it started. See "Execution environments".
+    -- How each tab's pi is started, how a workspace describes it instead, and how
+    -- pi.nvim stops it. See "Execution environments".
     process = {
-        -- Local pi. Extra args are inserted before `--mode rpc`.
-        -- Args that conflict with RPC mode (`--mode`, `--print`, `--help`, etc.) are ignored.
-        -- Not used for a workspace descriptor's command.
-        cli = {
-            bin = "pi",
-            args = {},
-        },
+        -- "spawned": pi.nvim starts `cmd` and owns the process.
+        kind = "spawned",
+        -- The complete command, run exactly as given (no shell) in the tab's workspace.
+        -- It must start pi in RPC mode; pi.nvim adds no arguments.
+        -- A workspace descriptor's `process` replaces this for its workspace.
+        cmd = { "pi", "--mode", "rpc" },
+        -- Optional variables added to the command's environment.
+        env = nil,
         -- Workspace descriptors (containers, sandboxes).
         descriptor = {
             -- Descriptor path relative to the tab's workspace.
@@ -419,19 +420,17 @@ require("pi").setup({
 
 `pi.nvim` runs pi in RPC mode and does not currently implement the TUI's interactive project trust prompt or save trust decisions. It uses pi's non-interactive defaults, which means project-local settings, resources, packages, extensions, and project `.agents/skills` are not loaded.
 
-To trust project-local pi files when using `pi.nvim`, either pass pi's trust flag through `process.cli.args`:
+To trust project-local pi files when using `pi.nvim`, either add pi's trust flag to `process.cmd`:
 
 ```lua
 require("pi").setup({
     process = {
-        cli = {
-            args = { "--approve" },
-        },
+        cmd = { "pi", "--approve", "--mode", "rpc" },
     },
 })
 ```
 
-`process.cli.args` applies to local pi only. A [workspace descriptor](#execution-environments) runs its own command exactly as given, so add `--approve` to its `cmd` if you need it there.
+A [workspace descriptor](#execution-environments) replaces `process.cmd` for its workspace, so add `--approve` to its `cmd` if you need it there too.
 
 or set the global pi default in `~/.pi/agent/settings.json`:
 
@@ -772,7 +771,7 @@ Other completion plugins can usually bridge the built-in `completefunc` via thei
 
 #### Adapting non-upstream RPC backends
 
-pi.nvim targets upstream pi RPC. If you point `process.cli.bin` at a fork with a different protocol, use `rpc.map_command` / `rpc.map_event` to translate in user config instead of patching pi.nvim core.
+pi.nvim targets upstream pi RPC. If you point `process.cmd` at a fork with a different protocol, use `rpc.map_command` / `rpc.map_event` to translate in user config instead of patching pi.nvim core.
 
 <details>
 <summary>Example: adapt `omp` command-list compatibility</summary>
@@ -797,7 +796,7 @@ local function strip_ansi(text)
 end
 
 require("pi").setup({
-    process = { cli = { bin = "omp" } },
+    process = { cmd = { "omp", "--mode", "rpc" } },
     rpc = {
         map_command = function(cmd)
             if cmd.type == "get_commands" then
@@ -1574,12 +1573,12 @@ Each tab's pi runs in that tab's **workspace**: its tab-local directory (`:tcd`)
 
 pi.nvim doesn't compute where sessions are stored. It asks the running pi and lists the folder pi reports for its current session file, so pi's own settings are honored:
 
-1. `--session-dir <dir>` in `process.cli.args`
+1. `--session-dir <dir>` in `process.cmd`
 2. `$PI_CODING_AGENT_SESSION_DIR`
 3. pi's `sessionDir` setting
 4. the default: `<agent dir>/sessions/<encoded-workspace>/`, where the agent directory is `$PI_CODING_AGENT_DIR` or `~/.pi/agent`
 
-Sessions are **scoped to the workspace**: when a custom folder holds several projects' sessions, continue and resume only show the ones recorded for this tab's workspace. If pi runs without persistent sessions (for example `--no-session` in `process.cli.args`), continue and resume say so instead of listing anything.
+Sessions are **scoped to the workspace**: when a custom folder holds several projects' sessions, continue and resume only show the ones recorded for this tab's workspace. If pi runs without persistent sessions (for example `--no-session` in `process.cmd`), continue and resume say so instead of listing anything.
 
 #### Starting, continuing, resuming
 
@@ -1635,7 +1634,7 @@ After successful compaction, pi.nvim renders a collapsed summary block in chat h
 
 ### Execution environments
 
-By default each tab's pi runs locally: `process.cli.bin` + `process.cli.args` + `--mode rpc`, in the tab's workspace. A workspace can instead say how to start pi somewhere else, such as a container on a worktree or an OS-level sandbox, through a **descriptor**: a JSON file at `process.descriptor.path` (default `.pi.nvim.json`) in the tab's workspace. `:Pi`, `:PiContinue`, `:PiResume`, and keymaps then work as usual, with pi running where the descriptor says.
+Each tab's pi runs the `process.cmd` from `setup()` in the tab's workspace; by default that's local `pi --mode rpc`. A workspace can instead say how to start pi somewhere else, such as a container on a worktree or an OS-level sandbox, through a **descriptor**: a JSON file at `process.descriptor.path` (default `.pi.nvim.json`) in the tab's workspace. `:Pi`, `:PiContinue`, `:PiResume`, and keymaps then work as usual, with pi running where the descriptor says.
 
 pi.nvim doesn't prepare environments. Creating worktrees or containers, building images, and other per-machine setup belong to your own tooling, which writes the descriptor and can point its command at a wrapper script of yours.
 
@@ -1684,7 +1683,7 @@ A container has its own filesystem, so it also declares `paths`. Mounting the wo
 
 Fields:
 
-- **`process`** (required): this workspace's pi process. It mirrors the [`process` setup options](#configuration): where both name the same setting, the descriptor's value overrides the `setup()` one for this workspace.
+- **`process`** (required): this workspace's pi process. It has the same fields and checks as the [`process` setup options](#configuration) `kind`, `cmd`, `env`, and `stop.grace_ms`, and replaces them as a whole for this workspace: a field the descriptor leaves out takes its default, not the `setup()` value, except `stop.grace_ms`, which falls back to the `setup()` one.
   - **`kind`** (required): `"spawned"`, meaning pi.nvim starts the command and owns the process. It's the only supported kind; `"attached"`, for a pi your own tooling started that pi.nvim only connects to, is planned.
   - **`cmd`** (required): the command as an array of arguments, run without a shell. pi.nvim adds nothing, so it must start pi with `--mode rpc`. For shell features, spell it out: `["sh", "-c", "…"]`.
   - **`env`** (optional): string variables added to the command's environment. The command also inherits Neovim's environment. Inside a container, pi sees a variable only if the command forwards it (`-e NAME`).
@@ -1897,7 +1896,7 @@ Run it any time you suspect something is off with the install:
 :checkhealth pi
 ```
 
-If the executable isn't found, either install pi or set `process = { cli = { bin = "/absolute/path/to/pi" } }` in `setup()`.
+If the executable isn't found, either install pi or set `process = { cmd = { "/absolute/path/to/pi", "--mode", "rpc" } }` in `setup()`. The health check asks for pi's version when `process.cmd` runs `pi` itself (with any extra arguments); for another executable, such as a wrapper or a connector, it only checks that the executable exists.
 
 #### RPC debug logging
 
@@ -1926,7 +1925,7 @@ When filing an issue, attaching the relevant section of the RPC log is by far th
 
 #### Process lifecycle
 
-Each π session owns an underlying `pi --mode rpc` process: local pi, or the command a [workspace descriptor](#execution-environments) names. One tab = one session = one process. The lifecycle is:
+Each π session owns an underlying `pi --mode rpc` process: the `process.cmd` from `setup()`, or the command a [workspace descriptor](#execution-environments) names. One tab = one session = one process. The lifecycle is:
 
 - **Spawned** lazily, the first time you open the chat in a tab (via `:Pi`, `:PiContinue`, `:PiResume`, `pi.toggle()`, etc.). There is no background daemon; nothing runs until you ask for it.
 - **Alive** as long as the tab is alive. Hiding the chat (`:PiToggleChat`) or switching away from the tab does **not** stop the process — the session keeps running in the background, and any queued [attention](#attention--dialogs) requests keep being tracked.

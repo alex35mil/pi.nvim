@@ -35,7 +35,7 @@ end
 --- the workspace) is reported and left unexpanded.
 ---@param text string
 ---@param workspace string
----@param execution? pi.Execution session's execution; nil = local pi
+---@param execution? pi.Execution session's execution; nil = pi on the host's own filesystem
 ---@return string
 function M.expand(text, workspace, execution)
     local result = text:gsub("@(%S+)", function(ref)
