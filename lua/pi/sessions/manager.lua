@@ -17,6 +17,8 @@
 ---@field execution pi.Execution How pi was launched and how its paths map to the host.
 ---@field commands pi.CommandCatalog Slash commands of this connection.
 ---@field session_dir? string Folder of pi's current session file, from `get_state`.
+---@field session_id? string pi's current session id, from the latest `get_state`.
+---@field _terminating? boolean `:PiStop` is running the attached pi's `terminate` command; a connector exit meanwhile is expected.
 ---@field persistent? boolean False when pi reports no session file (e.g. `--no-session`); nil until known.
 ---@field rpc pi.Rpc
 ---@field chat pi.Chat
@@ -37,6 +39,7 @@
 
 --- A point after which the chat is rebuilt from a snapshot of pi.
 ---@alias pi.RestoreBoundary
+---| { kind: "attach" } # a connector to an attached pi started; pi may be mid-run
 ---| { kind: "switch", focus: boolean } # pi answered a session switch or new session with success; it may be another, running pi
 ---| { kind: "compaction", will_retry: boolean } # compaction finished; the chat shows the compacted entries
 
@@ -219,6 +222,8 @@ end
 ---@param session pi.Session
 ---@param state table
 local function record_session_storage(session, state)
+    local id = state.sessionId
+    session.session_id = type(id) == "string" and id ~= "" and id or nil
     local file = state.sessionFile
     if type(file) == "string" and file ~= "" then
         -- As pi sees it; translated to the host when listing.
@@ -431,8 +436,21 @@ local function handle_event(session, msg)
             chat:on_system_error(msg.message --[[@as string]], { pad_top = true, pad_bottom = true })
         end
     elseif t == "_process_exit" then
+        local expected = msg.expected == true or session._terminating == true
+        local attached = session.execution:connection() == "attached"
         vim.schedule(function()
-            chat:on_process_exit(msg.code, msg.expected == true)
+            if attached and not expected then
+                chat:on_process_exit(msg.code, true)
+                chat:on_system_error(
+                    ("The connection to the attached pi ended (connector `%s` exited with code %s). Run :PiDetach, then :Pi to connect again."):format(
+                        session.rpc:command_name(),
+                        tostring(msg.code)
+                    ),
+                    { pad_top = true, pad_bottom = true }
+                )
+            else
+                chat:on_process_exit(msg.code, expected)
+            end
         end)
     elseif t == "response" then
         -- Callbacks reconcile the submitted input; command failures are also
@@ -536,6 +554,12 @@ end
 ---@type table<pi.TabId, fun(session: pi.Session?)[]>
 local creating = {}
 
+---@type fun(session: pi.Session, boundary: pi.RestoreBoundary): integer
+local begin_restore
+
+---@type fun(session: pi.Session, seq: integer)
+local take_snapshot
+
 --- Start a session for a tab with a resolved execution.
 ---@param tab pi.TabId
 ---@param workspace string
@@ -587,11 +611,22 @@ local function start_session(tab, workspace, execution, opts)
         recovered_drafts[tab] = nil
     end
 
-    -- Fetch available /commands for completion, highlighting, and system info
-    fetch_commands_and_show_startup_block(session)
+    local kind = execution:connection()
+    if kind == "attached" then
+        -- An attached pi may already have a conversation and be running. Hold
+        -- its records until the chat is restored from its snapshot.
+        local seq = begin_restore(session, { kind = "attach" })
+        chat:show_loading()
+        take_snapshot(session, seq)
+    elseif kind == "spawned" then
+        -- Fetch available /commands for completion, highlighting, and system info
+        fetch_commands_and_show_startup_block(session)
 
-    -- Fetch initial state for status line (model, thinking level)
-    M.refresh_state(session)
+        -- Fetch initial state for status line (model, thinking level)
+        M.refresh_state(session)
+    else
+        error("unknown connection kind: " .. tostring(kind))
+    end
 
     return session
 end
@@ -653,12 +688,6 @@ function M.get_or_create(opts, cb)
             finish(nil)
             return
         end
-        -- TODO(#28 step 3): attached connections get their own lifecycle; until then they're refused.
-        if execution:connection() == "attached" then
-            Notify.error('pi wasn\'t started: `kind = "attached"` isn\'t supported yet')
-            finish(nil)
-            return
-        end
         finish(start_session(tab, workspace, execution, opts))
     end
 
@@ -702,8 +731,10 @@ local function notify_stop_report(report)
         timeout = "didn't stop in time and was force-stopped",
         forced = "was force-stopped",
     })[report.outcome] or report.outcome
+    local subject = report.connection == "attached" and "pi connector" or "pi launch"
     local lines = {
-        ("pi launch `%s` %s (%s, %s)"):format(
+        ("%s `%s` %s (%s, %s)"):format(
+            subject,
             report.command,
             what,
             report.workspace,
@@ -726,14 +757,14 @@ local function stop_launch(session)
     end)
 end
 
---- Remove and clean up a session for the current tab.
-function M.stop()
-    local tab = current_tab()
-    local session = sessions[tab]
-    if not session then
+--- Release a session: close what pi.nvim owns (a spawned pi, or an attached
+--- pi's connector), close the chat, and forget the session.
+---@param session pi.Session
+local function release(session)
+    local tab = session.tab
+    if sessions[tab] ~= session then
         return
     end
-
     if not session.rpc:is_running() and session.chat:has_draft() then
         recovered_drafts[tab] = session.chat:snapshot_draft()
     end
@@ -741,8 +772,126 @@ function M.stop()
     stop_launch(session)
     session.chat:hide()
     session.chat:clear()
-
     sessions[tab] = nil
+end
+
+--- What pi.nvim owns for a tab's pi: `"spawned"` (the pi itself), `"attached"`
+--- (only a connector to a pi your tooling runs), or nil when the tab has none.
+---@param tab? pi.TabId|0 default: current tab
+---@return pi.ConnectionKind?
+function M.connection(tab)
+    local session = sessions[(tab == nil or tab == 0) and current_tab() or tab]
+    return session and session.execution:connection() or nil
+end
+
+--- Confirmation before running an attached pi's `terminate`, replaceable for tests.
+---@param workspace string
+---@param cmd string[]
+---@param cb fun(confirmed: boolean)
+function M._confirm_terminate(workspace, cmd, cb)
+    Dialog.confirm({
+        title = "Stop the attached pi?",
+        message = ("This pi runs outside Neovim. Stop it with:\n%s\n\nin %s"):format(Spec.display(cmd), workspace),
+    }, cb)
+end
+
+--- End an attached pi through its `terminate` command, then detach.
+---@param session pi.Session
+local function terminate(session)
+    local process = session.execution.process
+    if process.kind ~= "attached" then
+        error("terminate needs an attached connection")
+    end
+    if session._terminating then
+        Notify.info("Already stopping the attached pi")
+        return
+    end
+    local template = process.terminate
+    if not template then
+        Notify.warn(
+            "This pi runs outside Neovim and its connection has no `terminate` command, so pi.nvim can't stop it. Use :PiDetach to disconnect."
+        )
+        return
+    end
+    local cmd, missing = Spec.fill_session(template, {
+        session_id = session.session_id,
+        session_file = session.execution:session_file(),
+    })
+    if not cmd then
+        Notify.warn(
+            ("Can't stop the attached pi yet: `${{%s}}` in its `terminate` command isn't known until pi reports its session"):format(
+                tostring(missing)
+            )
+        )
+        return
+    end
+    M._confirm_terminate(session.workspace, cmd, function(confirmed)
+        if not confirmed or sessions[session.tab] ~= session or session._terminating then
+            return
+        end
+        session._terminating = true
+        local grace = session.rpc:grace_ms()
+        local ok, err = pcall(vim.system, cmd, {
+            cwd = session.workspace,
+            env = process.env,
+            text = true,
+            timeout = grace,
+        }, function(res)
+            vim.schedule(function()
+                if res.code == 0 then
+                    release(session)
+                    return
+                end
+                session._terminating = nil
+                local tail = vim.split(vim.trim(res.stderr or ""), "\n", { plain = true })
+                if #tail > 5 then
+                    tail = vim.list_slice(tail, #tail - 4)
+                end
+                local what = res.code == 124 and ("didn't finish within %d ms"):format(grace)
+                    or ("exited with code %d"):format(res.code)
+                local lines = { ("Stopping the attached pi failed: `%s` %s"):format(Spec.display(cmd), what) }
+                vim.list_extend(lines, tail)
+                Notify.error(table.concat(lines, "\n"))
+            end)
+        end)
+        if not ok then
+            session._terminating = nil
+            Notify.error(("Stopping the attached pi failed: couldn't run `%s`: %s"):format(Spec.display(cmd), tostring(err)))
+        end
+    end)
+end
+
+--- End the current tab's pi: stop a spawned pi, or stop an attached pi through
+--- its `terminate` command after a confirmation.
+function M.stop()
+    local session = sessions[current_tab()]
+    if not session then
+        return
+    end
+    local kind = session.execution:connection()
+    if kind == "spawned" then
+        release(session)
+    elseif kind == "attached" then
+        terminate(session)
+    else
+        error("unknown connection kind: " .. tostring(kind))
+    end
+end
+
+--- Disconnect the current tab from an attached pi, leaving it running.
+function M.detach()
+    local session = sessions[current_tab()]
+    if not session then
+        return
+    end
+    local kind = session.execution:connection()
+    if kind == "attached" then
+        release(session)
+    elseif kind == "spawned" then
+        Notify.warn("This pi was started by pi.nvim and would stop if it were detached; use :PiStop to stop it")
+    else
+        error("unknown connection kind: " .. tostring(kind))
+    end
 end
 
 ---@param session pi.Session
@@ -923,7 +1072,7 @@ end
 ---@param session pi.Session
 ---@param boundary pi.RestoreBoundary
 ---@return integer seq
-local function begin_restore(session, boundary)
+begin_restore = function(session, boundary)
     session._restore_seq = (session._restore_seq or 0) + 1
     local restore = session._restore
     if restore then
@@ -957,6 +1106,10 @@ local function summarize(boundaries)
         if kind == "switch" then
             out.switch = true
             out.focus = out.focus or b.focus
+        elseif kind == "attach" then
+            -- A fresh chat on a pi that may already have a conversation; the
+            -- startup block and commands come with the snapshot.
+            out.switch = true
         elseif kind == "compaction" then
             out.compaction = true
             out.will_retry = out.will_retry or b.will_retry
@@ -1001,7 +1154,7 @@ end
 --- different process.
 ---@param session pi.Session
 ---@param seq integer
-local function take_snapshot(session, seq)
+take_snapshot = function(session, seq)
     ---@type table?
     local state = nil
     M.refresh_state(session, function(ok, data)

@@ -193,6 +193,7 @@
 ---@class pi.CleanupFailureReport
 ---@field workspace string Workspace the launch ran in.
 ---@field descriptor? string Descriptor the launch came from; nil for the global `process` setting.
+---@field connection "spawned" Always a spawned launch: an attached pi's connector owns nothing that could be left running.
 ---@field command string Name of the launched command (first argument).
 ---@field outcome "exit"|"timeout"|"forced" Non-zero exit, did not stop in time, or force-stopped.
 ---@field code? integer Exit code, when the process exited.

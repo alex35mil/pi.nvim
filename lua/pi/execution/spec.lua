@@ -529,6 +529,37 @@ function M.global(workspace)
     return spec
 end
 
+--- Values for the session placeholders in `terminate`, from the latest `get_state`.
+---@class pi.SessionValues
+---@field session_id? string
+---@field session_file? string
+
+--- Fill `${{SESSION_ID}}` and `${{SESSION_FILE}}` in a validated `terminate`.
+---@param args string[]
+---@param values pi.SessionValues
+---@return string[]? filled
+---@return string? missing name of a placeholder whose value isn't known yet
+function M.fill_session(args, values)
+    local by_name = { SESSION_ID = values.session_id, SESSION_FILE = values.session_file }
+    ---@type string[]
+    local out = {}
+    for i, arg in ipairs(args) do
+        local missing = nil
+        out[i] = arg:gsub("%${{([%u_]+)}}", function(name)
+            local value = by_name[name]
+            if value == nil or value == "" then
+                missing = missing or name
+                return ""
+            end
+            return value
+        end)
+        if missing then
+            return nil, missing
+        end
+    end
+    return out
+end
+
 --- Display form of a command, for prompts and messages.
 ---@param cmd string[]
 ---@return string

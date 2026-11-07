@@ -70,6 +70,7 @@ local function new(source, workspace, spec, descriptor)
         env = spec.process.env and vim.deepcopy(spec.process.env) or nil,
         descriptor = descriptor,
         stop_grace_ms = spec.process.stop.grace_ms,
+        connection = spec.process.kind,
     }
     if spec.paths then
         self._fs = { kind = "mapped", map = PathMap.new(workspace, spec.paths) }
@@ -85,9 +86,17 @@ end
 ---@return pi.Execution
 function Execution.new_global(workspace)
     local self = new("global", workspace, Spec.global(workspace))
-    -- pi.nvim starts the global command itself with the workspace as its
-    -- working directory, on the host's own filesystem.
-    self._cwd = "verified"
+    local kind = self.process.kind
+    if kind == "spawned" then
+        -- pi.nvim starts the command itself with the workspace as its working
+        -- directory, on the host's own filesystem.
+        self._cwd = "verified"
+    elseif kind == "attached" then
+        -- A bridge runs pi; its working directory is checked from the session file.
+        self._cwd = "unverified"
+    else
+        error("unknown connection kind: " .. tostring(kind))
+    end
     return self
 end
 
@@ -172,6 +181,12 @@ function Execution:workspace_exec()
         return fs.map.workspace_exec
     end
     error("unknown filesystem kind: " .. tostring(fs.kind))
+end
+
+--- pi's current session file as pi reports it (from `get_state`), or nil.
+---@return string?
+function Execution:session_file()
+    return self._session_file
 end
 
 --- Record pi's current session file (from `get_state`); nil = no persistent session.

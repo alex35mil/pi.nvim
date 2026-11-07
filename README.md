@@ -1615,7 +1615,9 @@ And mid-session management:
 | `:PiNewSession` | `pi.new_session()` | Discard the current session in this tab and start a fresh one. Extensions can cancel this via the `session_before_switch` hook (e.g. to warn about unsaved draft state). |
 | `:PiClear` | `pi.new_session()` | Clear the chat by starting a fresh session. The previous conversation remains available through `:PiResume`. |
 | `:PiSessionName [name]` | `pi.set_session_name(name?)` | Set a human-readable display name for the current session. Without an argument, opens a dialog to type one. Without any argument and via the API, returns the current name. Names appear in the `:PiResume` picker so you can identify long-running conversations at a glance. |
-| `:PiStop` | `pi.stop()` | Tear down the current session and stop the backing pi process (see [Stopping](#stopping)). When the process has already exited, keep the recovered draft for the next `:Pi` in the same tab. Different from `:PiToggleChat`, which just hides the windows while the session keeps running. |
+| `:PiStop` | `pi.stop()` | End the tab's pi (see [Stopping](#stopping)). A pi that pi.nvim started is stopped and the session torn down; when the process has already exited, the recovered draft is kept for the next `:Pi` in the same tab. An [attached](#attached-pi) pi is ended through its `terminate` command after a confirmation. Different from `:PiToggleChat`, which just hides the windows while the session keeps running. |
+| `:PiDetach` | `pi.detach()` | Disconnect the tab from an [attached](#attached-pi) pi and close the chat, leaving that pi running. A pi that pi.nvim started can't be detached; use `:PiStop`. |
+| — | `pi.connection(tab?)` | What pi.nvim owns for the tab's pi: `"spawned"` (the pi itself), `"attached"` (only a connector to a pi your tooling runs), or `nil` without one. |
 
 #### Compaction
 
@@ -1750,11 +1752,53 @@ To start pi inside a container that's already running, such as a dev container w
 - Keep the session folder inside the mounted workspace (or another mounted folder listed in `paths.mounts`) so continue and resume can find saved conversations.
 - `:PiStop` closes pi's input, pi exits, and `docker exec` returns; the container keeps running. If pi hangs and the grace period runs out, pi.nvim force-stops the local `docker exec` process, but Docker doesn't pass that on to the process it started in the container, so the hung pi keeps running there. If you need that case covered, point `cmd` at a wrapper script of yours that, when it's terminated, also stops the pi it started inside the container (for example by recording that pi's process ID in the container and killing it with a second `docker exec`).
 
+#### Attached pi
+
+With `kind = "attached"`, `cmd` is a **connector** to a pi that your own tooling keeps running, for example a session bridge or daemon: a command whose standard input and output carry pi RPC records unchanged (`socat - UNIX-CONNECT:/run/pi.sock`, `ssh host my-bridge-client`, or a bridge's own `attach` command). pi.nvim owns only that connector process. Set it globally to attach every tab, or in a workspace's descriptor:
+
+```lua
+require("pi").setup({
+    process = {
+        kind = "attached",
+        cmd = { "my-bridge", "attach" },
+        -- Optional: how :PiStop ends the attached pi. ${{SESSION_ID}} and ${{SESSION_FILE}}
+        -- are the session the tab is on now (they follow :PiResume and :PiNewSession).
+        terminate = { "my-bridge", "stop", "--session", "${{SESSION_ID}}" },
+    },
+})
+```
+
+When a tab connects, the chat is restored from the pi's current conversation and state, including a reply that is still running.
+
+| Action | Started pi (`spawned`) | Attached pi |
+| --- | --- | --- |
+| `:PiStop` / `pi.stop()` | stops pi | asks for confirmation, runs `terminate` in the workspace, and disconnects once it exits 0; without `terminate`, says it can't and changes nothing |
+| `:PiDetach` / `pi.detach()` | refuses: pi would stop | disconnects; pi keeps running |
+| Closing the tab, quitting Neovim | stops pi | disconnects |
+
+Closing a connector closes its input, waits up to the grace period, then force-stops it, as for a started pi; at Neovim exit, a connector's outcome isn't saved as a cleanup failure, because it owns nothing that could be left running. A failing or slow `terminate` is reported with its last error lines and leaves the tab connected.
+
+One key that lets go of either kind, plus another that always ends pi:
+
+```lua
+vim.keymap.set("n", "<leader>pq", function()
+    local pi = require("pi")
+    if pi.connection() == "attached" then
+        pi.detach()
+    else
+        pi.stop()
+    end
+end, { desc = "Let go of π" })
+vim.keymap.set("n", "<leader>pQ", "<cmd>PiStop<cr>", { desc = "Stop π" })
+```
+
 #### Several workers for one project
 
 To run several pis on the same project at once, give each its own copy of the project (a worktree or clone) with its own descriptor, and open each in its own tab with `:tcd`. Each tab's pi, slash commands, file list, sessions, trust decision, and stop reports belong to that copy; stopping one tab's pi leaves the others running.
 
 #### Stopping
+
+This section is about a pi that pi.nvim started (`kind = "spawned"`, the default). For a pi your own tooling keeps running, see [Attached pi](#attached-pi): closing its tab or quitting Neovim only disconnects, and `:PiStop` ends it through its `terminate` command.
 
 `:PiStop`, closing the tab, and quitting Neovim stop every pi the same way, local or not: pi.nvim closes pi's input, which is pi's signal to shut down cleanly and gives a wrapper time to clean up (for example `docker run --rm` removing the container), waits up to its grace period (the descriptor's `process.stop.grace_ms`, otherwise the `setup()` option `process.stop.grace_ms`), then force-stops it.
 
@@ -1958,7 +2002,8 @@ A rough triage checklist for common symptoms:
 | `:PiToggleChat` | Toggle chat visibility |
 | `:PiToggleLayout` | Switch between side and float layout |
 | `:PiAbort` | Abort the current agent operation |
-| `:PiStop` | Stop the RPC process and close the chat |
+| `:PiStop` | Stop the tab's pi and close the chat (an attached pi through its `terminate` command) |
+| `:PiDetach` | Disconnect from an attached pi, leaving it running |
 | `:PiAttention` | Open the next queued attention request |
 | `:PiNewSession` | Start a new conversation in the current tab/session |
 | `:PiToggleStartupDetails` | Toggle the startup block between compact and expanded |
@@ -2004,7 +2049,9 @@ pi.changed_files()            -- string[]: absolute paths of files modified by e
 
 -- Agent control
 pi.abort()                    -- cancel the current agent turn, keep the session alive
-pi.stop()                     -- close the chat and stop pi for the current tab (close input, wait the grace period, then force-stop)
+pi.stop()                     -- close the chat and stop pi for the current tab (close input, wait the grace period, then force-stop); an attached pi through its `terminate` command
+pi.detach()                   -- disconnect from an attached pi, leaving it running
+pi.connection(tab?)           -- "spawned" | "attached" | nil: what pi.nvim owns for the tab's pi
 
 -- Prompt input
 pi.send_mention(args?, opts?) -- insert an @-mention for the current buffer / selection

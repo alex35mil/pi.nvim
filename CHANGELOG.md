@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-08
+
+- **ADDED:** `process.kind = "attached"` (in `setup()` or a workspace descriptor) connects to a pi your own tooling keeps running through a connector command, restoring the chat from that pi's current conversation. Closing the tab or quitting Neovim only disconnects. `:PiStop` ends an attached pi through `process.terminate` (with `${{SESSION_ID}}` and `${{SESSION_FILE}}`) after a confirmation. See "Attached pi" in the README.
+- **ADDED:** `:PiDetach` / `pi.detach()` disconnects from an attached pi, leaving it running; `pi.connection(tab?)` returns `"spawned"`, `"attached"`, or nil.
+
 ## 2026-11-07
 
 - **BREAKING:** Replace `process.cli` with `process.cmd`, the complete command run exactly as given (default `{ "pi", "--mode", "rpc" }`); pi.nvim no longer appends `--mode rpc` or filters arguments. `setup()` raises an error when `process.cli` is set, showing the equivalent `cmd`. `process` now has the same fields and checks as a workspace descriptor's `process` (`kind`, `cmd`, `env`, `stop.grace_ms`). See UPGRADING.md.

@@ -222,6 +222,20 @@ function M.stop()
     require("pi.sessions.manager").stop()
 end
 
+--- Disconnect the current tab from an attached pi (`process.kind = "attached"`),
+--- leaving it running. A pi that pi.nvim started can't be detached; use `stop()`.
+function M.detach()
+    require("pi.sessions.manager").detach()
+end
+
+--- What pi.nvim owns for a tab's pi: `"spawned"` (pi itself), `"attached"`
+--- (only a connector to a pi your tooling runs), or nil when the tab has none.
+---@param tab? pi.TabId|0 default: current tab
+---@return "spawned"|"attached"|nil
+function M.connection(tab)
+    return require("pi.sessions.manager").connection(tab)
+end
+
 --- Open the next queued π attention request.
 ---@return boolean opened
 function M.attention()
