@@ -4,6 +4,9 @@
 
 - **BREAKING:** Replace `process.cli` with `process.cmd`, the complete command run exactly as given (default `{ "pi", "--mode", "rpc" }`); pi.nvim no longer appends `--mode rpc` or filters arguments. `setup()` raises an error when `process.cli` is set, showing the equivalent `cmd`. `process` now has the same fields and checks as a workspace descriptor's `process` (`kind`, `cmd`, `env`, `stop.grace_ms`). See UPGRADING.md.
 - **CHANGED:** `:checkhealth pi` checks the executable of `process.cmd`, and pi's version when the command runs `pi` itself (with any arguments).
+- **CHANGED:** Switching sessions (`:PiContinue`, `:PiResume`), starting a new session, and the rebuild after compaction restore the chat from pi's current state: a session that is already running shows its active status, and a reply that started earlier shows "response in progress" until its complete text arrives.
+- **CHANGED:** `:PiNewSession` no longer sends a separate abort; pi stops the current run when it starts the new session.
+- **ADDED:** Messages sent to the same pi from another frontend appear in the chat.
 
 ## 2026-11-06
 

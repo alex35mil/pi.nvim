@@ -25,8 +25,25 @@
 ---@field system_errors pi.SystemErrorEntry[]
 ---@field changed_files table<string, true> Set of absolute file paths modified by edit/write tools during the current session.
 ---@field _pending_file_change_args? table<string, table> Pending tool args by tool call id for file-changing tools.
----@field _compaction_rebuilding? boolean True while compacted messages are being fetched/replayed.
----@field _compaction_event_queue? pi.RpcEvent[] Events received while compacted messages are being fetched/replayed.
+---@field _restore? pi.RestoreHold Records held while the chat is rebuilt from a snapshot.
+---@field _message? pi.LiveMessage The assistant message currently streaming, if pi.nvim is following one.
+---@field _restore_seq? integer Counter of restore boundaries.
+
+--- Records held from a restore boundary until the snapshot is applied.
+---@class pi.RestoreHold
+---@field held pi.RpcEvent[]
+---@field seq integer The latest boundary using this hold; an older snapshot that completes later is ignored.
+---@field boundaries pi.RestoreBoundary[] Boundaries this hold covers; one snapshot restores them all.
+
+--- A point after which the chat is rebuilt from a snapshot of pi.
+---@alias pi.RestoreBoundary
+---| { kind: "switch", focus: boolean } # pi answered a session switch or new session with success; it may be another, running pi
+---| { kind: "compaction", will_retry: boolean } # compaction finished; the chat shows the compacted entries
+
+--- How the assistant message being streamed is shown.
+---@alias pi.LiveMessage
+---| { kind: "seen" } # its `message_start` arrived; deltas stream as usual
+---| { kind: "unseen" } # it started before a restore boundary; a placeholder stands in until `message_end`
 
 ---@class pi.SessionCreateOpts
 ---@field layout? pi.LayoutMode
@@ -49,6 +66,7 @@ local Descriptor = require("pi.execution.descriptor")
 local Spec = require("pi.execution.spec")
 local ExecState = require("pi.execution.state")
 local Tools = require("pi.ui.chat.tools")
+local Restore = require("pi.sessions.restore")
 
 ---@class pi.StartupSection
 ---@field header string
@@ -92,8 +110,11 @@ local ignored_events = {
 ---@type fun(session: pi.Session, result: table, will_retry: boolean)?
 local rebuild_after_compaction
 
----@type fun(session: pi.Session, flush_queue?: boolean, will_retry?: boolean)?
-local finish_compaction_rebuild
+---@type fun(session: pi.Session, held: pi.RpcEvent[])?
+local release_held
+
+---@type fun(session: pi.Session, cmd: pi.RpcCommand, opts: { failed: string, cancelled: string, fresh?: boolean, focus?: boolean })
+local switch_and_restore
 
 ---@param chat pi.Chat
 local function restore_active_agent_status(chat)
@@ -244,14 +265,14 @@ local function handle_event(session, msg)
     local t = msg.type
     local chat = session.chat
 
-    -- NOTE: This compaction-specific rebuild gate should become a small
-    -- transaction helper if other session rebuild flows need event buffering.
-    if session._compaction_rebuilding and t ~= "response" then
-        if t == "_process_exit" and finish_compaction_rebuild then
-            finish_compaction_rebuild(session, false)
+    -- While the chat is rebuilt from a snapshot, records wait until it's applied.
+    -- Command responses still reach their callbacks; a process exit ends the restore.
+    local restore = session._restore
+    if restore and t ~= "response" then
+        if t == "_process_exit" and release_held then
+            release_held(session, restore.held)
         else
-            session._compaction_event_queue = session._compaction_event_queue or {}
-            session._compaction_event_queue[#session._compaction_event_queue + 1] = msg
+            restore.held[#restore.held + 1] = msg
             return true
         end
     end
@@ -280,7 +301,21 @@ local function handle_event(session, msg)
     elseif t == "message_update" then
         local event = msg.assistantMessageEvent
         if event then
-            if event.type == "thinking_start" then
+            if session._message == nil or session._message.kind == "unseen" then
+                -- A message that started before a restore boundary: its earlier
+                -- deltas aren't known, so a placeholder stands in until message_end.
+                if session._message == nil then
+                    session._message = { kind = "unseen" }
+                    chat:begin_unseen_message()
+                end
+                -- Text that arrives now follows the placeholder; thinking is left out,
+                -- since its start is unknown too.
+                if event.type == "text_delta" then
+                    chat:on_unseen_delta(event.delta or "")
+                elseif event.type == "toolcall_end" and type(event.toolCall) == "table" then
+                    stash_file_tool_args(session, event.toolCall.name, event.toolCall.id, event.toolCall.arguments)
+                end
+            elseif event.type == "thinking_start" then
                 chat:on_thinking_start()
             elseif event.type == "thinking_delta" then
                 chat:on_thinking_delta(event.delta or "")
@@ -407,10 +442,23 @@ local function handle_event(session, msg)
         end
         return false
     elseif t == "message_start" then
+        if type(msg.message) == "table" and msg.message.role == "assistant" then
+            session._message = { kind = "seen" }
+        end
         chat:on_message_start(msg)
     elseif t == "message_end" then
-        chat:on_message_end(msg)
         local message = msg.message
+        if type(message) == "table" and message.role == "assistant" then
+            local live = session._message
+            session._message = nil
+            if live == nil then
+                chat:begin_unseen_message()
+            end
+            if live == nil or live.kind == "unseen" then
+                chat:finish_unseen_message(message)
+            end
+        end
+        chat:on_message_end(msg)
         if type(message) == "table" and (message.role == "assistant" or message.role == "toolResult") then
             M.refresh_stats(session)
             if message.role == "toolResult" then
@@ -441,29 +489,19 @@ local function handle_event(session, msg)
     return true
 end
 
+--- End a restore and apply its held records in order. A held record can start
+--- another restore (a compaction entry, for example); the remaining records
+--- are then held by that one.
 ---@param session pi.Session
----@param flush_queue? boolean default true
----@param will_retry? boolean
-finish_compaction_rebuild = function(session, flush_queue, will_retry)
-    local queued = session._compaction_event_queue or {}
-    session._compaction_event_queue = {}
-    session._compaction_rebuilding = false
-    session.chat:set_compacting(false)
-    restore_active_agent_status(session.chat)
-    if flush_queue ~= false then
-        session.chat:flush_compaction_queue(will_retry == true)
-    end
-
-    for i, queued_msg in ipairs(queued) do
-        if session._compaction_rebuilding then
-            local active_queue = session._compaction_event_queue or {}
-            for j = i, #queued do
-                active_queue[#active_queue + 1] = queued[j]
-            end
-            session._compaction_event_queue = active_queue
+---@param held pi.RpcEvent[]
+release_held = function(session, held)
+    session._restore = nil
+    for i, msg in ipairs(held) do
+        if session._restore then
+            vim.list_extend(session._restore.held, held, i)
             return
         end
-        handle_event(session, queued_msg)
+        handle_event(session, msg)
     end
 end
 
@@ -713,47 +751,13 @@ local function start_new_session(session)
         return
     end
 
-    Attention.begin_session_transition(session)
-    local sent = session.rpc:send({ type = "abort" }, function(abort_res)
-        if not abort_res.success then
-            vim.schedule(function()
-                Attention.end_session_transition(session, false)
-                Notify.error(abort_res.error or "Failed to abort current session")
-            end)
-            return
-        end
-        local sent_new = session.rpc:send({ type = "new_session" }, function(res)
-            local data = res.data or {}
-            vim.schedule(function()
-                if not res.success then
-                    Attention.end_session_transition(session, false)
-                    Notify.error(res.error or "Failed to start new session")
-                    return
-                end
-                if data.cancelled then
-                    Attention.end_session_transition(session, false)
-                    Notify.warn("New session was cancelled")
-                    return
-                end
-                Attention.end_session_transition(session, true)
-                session.startup_announcements = {}
-                session.system_errors = {}
-                session.changed_files = {}
-                session._pending_file_change_args = nil
-                session.chat:clear()
-                fetch_commands_and_show_startup_block(session)
-                M.refresh_state(session)
-            end)
-        end)
-        if not sent_new then
-            vim.schedule(function()
-                Attention.end_session_transition(session, false)
-            end)
-        end
-    end)
-    if not sent then
-        Attention.end_session_transition(session, false)
-    end
+    -- pi's new_session settles a run in the same pi itself; no separate abort,
+    -- which a bridge would pass to another frontend's run on a shared pi.
+    switch_and_restore(session, { type = "new_session" }, {
+        failed = "Failed to start new session",
+        cancelled = "New session was cancelled",
+        fresh = true,
+    })
 end
 
 --- Start a new conversation in the current tab's session.
@@ -874,6 +878,9 @@ local function replay_entries(session, data)
                     if tc.args then
                         tool_call_args[tc.id] = tc.args
                     end
+                    -- A call whose result isn't in the entries may still be running;
+                    -- its live end then records the file change.
+                    stash_file_tool_args(session, tc.name, tc.id, tc.args)
                 end
                 if #tool_calls == 0 then
                     session.chat:on_agent_end()
@@ -892,6 +899,9 @@ local function replay_entries(session, data)
             if tc_args then
                 track_changed_file(session, tc_args)
             end
+            if session._pending_file_change_args then
+                session._pending_file_change_args[tool_call_id] = nil
+            end
             track_nested_files(session, msg)
         elseif role == "compactionSummary" then
             if pending_agent_end then
@@ -908,110 +918,228 @@ local function replay_entries(session, data)
     session.chat:set_replaying(false)
 end
 
+--- Begin holding records for a restore boundary. Overlapping boundaries
+--- share one hold and are all restored by the latest snapshot.
+---@param session pi.Session
+---@param boundary pi.RestoreBoundary
+---@return integer seq
+local function begin_restore(session, boundary)
+    session._restore_seq = (session._restore_seq or 0) + 1
+    local restore = session._restore
+    if restore then
+        restore.seq = session._restore_seq
+        restore.boundaries[#restore.boundaries + 1] = boundary
+    else
+        session._restore = { held = {}, seq = session._restore_seq, boundaries = { boundary } }
+    end
+    return session._restore_seq
+end
+
+--- The hold of restore `seq`, or nil when a later boundary took it over or it ended.
+---@param session pi.Session
+---@param seq integer
+---@return pi.RestoreHold?
+local function current_restore(session, seq)
+    local restore = session._restore
+    if restore and restore.seq == seq then
+        return restore
+    end
+    return nil
+end
+
+--- What a set of boundaries asks of the rebuild.
+---@param boundaries pi.RestoreBoundary[]
+---@return { switch: boolean, focus: boolean, compaction: boolean, flush: boolean, will_retry: boolean }
+local function summarize(boundaries)
+    local out = { switch = false, focus = false, compaction = false, flush = false, will_retry = false }
+    for _, b in ipairs(boundaries) do
+        local kind = b.kind
+        if kind == "switch" then
+            out.switch = true
+            out.focus = out.focus or b.focus
+        elseif kind == "compaction" then
+            out.compaction = true
+            out.will_retry = out.will_retry or b.will_retry
+            out.flush = out.flush or not b.will_retry
+        else
+            error("unknown restore boundary: " .. tostring(kind))
+        end
+    end
+    return out
+end
+
+--- Finish a restore that couldn't take a snapshot: report it, keep the chat
+--- usable, and apply the held records as they are.
+---@param session pi.Session
+---@param seq integer
+---@param err string
+local function fail_restore(session, seq, err)
+    local restore = current_restore(session, seq)
+    if not restore then
+        return
+    end
+    local what = summarize(restore.boundaries)
+    Notify.error(err)
+    session.chat:clear_placeholder()
+    session.chat:on_error(err, { pad_top = true, pad_bottom = true })
+    if what.compaction then
+        session.chat:set_compacting(false)
+        restore_active_agent_status(session.chat)
+        if what.flush then
+            session.chat:flush_compaction_queue(false)
+        end
+    end
+    if what.focus then
+        session.chat:ensure_shown_and_focus_prompt()
+    end
+    release_held(session, restore.held)
+end
+
+--- Rebuild the chat from a snapshot of pi (`get_state`, `get_entries`), then
+--- apply the records held since the boundary minus what the snapshot shows.
+--- Used at every boundary after which pi may already be running or may be a
+--- different process.
+---@param session pi.Session
+---@param seq integer
+local function take_snapshot(session, seq)
+    ---@type table?
+    local state = nil
+    M.refresh_state(session, function(ok, data)
+        if ok then
+            state = data
+        end
+    end)
+    local sent = session.rpc:send({ type = "get_entries" }, function(res)
+        vim.schedule(function()
+            local restore = current_restore(session, seq)
+            if not restore then
+                return
+            end
+            if not res.success then
+                fail_restore(session, seq, res.error or "Failed to load session entries")
+                return
+            end
+            local data = res.data or {}
+            local what = summarize(restore.boundaries)
+            local entries = data.entries or {}
+            local index = Restore.index(entries)
+
+            local function rebuild(commands)
+                if not current_restore(session, seq) then
+                    return
+                end
+                session.changed_files = {}
+                session._pending_file_change_args = nil
+                session._message = nil
+                if what.switch then
+                    session.chat:clear()
+                else
+                    session.chat:clear_for_compaction_rebuild()
+                end
+                show_startup_block(session, commands)
+                replay_entries(session, data)
+                if what.compaction then
+                    session.chat:set_compacting(false)
+                end
+                session.chat:resume_activity(state)
+                if what.compaction and what.flush then
+                    session.chat:flush_compaction_queue(false)
+                end
+                if what.focus then
+                    session.chat:ensure_shown_and_focus_prompt()
+                end
+                local apply, dropped_user = Restore.filter(restore.held, index)
+                -- A user message the snapshot already shows won't arrive again; if it
+                -- was this chat's own prompt, stop waiting for its echo.
+                session.chat:drop_local_echoes(dropped_user)
+                release_held(session, apply)
+            end
+
+            if what.switch then
+                -- A switch may reach another pi with other commands.
+                session.commands:fetch(session.rpc, rebuild)
+            else
+                rebuild(session.commands:list())
+            end
+        end)
+    end)
+    if not sent then
+        vim.schedule(function()
+            fail_restore(session, seq, "Failed to load session entries")
+        end)
+    end
+end
+
 ---@param session pi.Session
 ---@param _result table
 ---@param will_retry boolean
 rebuild_after_compaction = function(session, _result, will_retry)
-    session._compaction_rebuilding = true
-    session._compaction_event_queue = {}
     if will_retry then
         session.chat:flush_compaction_queue(true)
     end
+    take_snapshot(session, begin_restore(session, { kind = "compaction", will_retry = will_retry }))
+end
 
-    local sent = session.rpc:send({ type = "get_entries" }, function(res)
+--- Send a command that replaces the conversation (`switch_session`,
+--- `new_session`), then restore the chat from what pi reports. Records are held
+--- from the moment the command is sent: a bridge may answer by moving the
+--- connection to another pi, which can be mid-run.
+---@param session pi.Session
+---@param cmd pi.RpcCommand
+---@param opts { failed: string, cancelled: string, fresh?: boolean, focus?: boolean }
+switch_and_restore = function(session, cmd, opts)
+    if sessions[session.tab] ~= session or not session.rpc:is_running() then
+        return
+    end
+    Attention.begin_session_transition(session)
+    local sent = session.rpc:send(cmd, function(res)
+        -- Runs while the response is dispatched, before any later record, so
+        -- the hold starts exactly at the boundary. Records before the response
+        -- belong to the conversation being replaced and were handled live.
+        local switched = res.success == true and not (res.data or {}).cancelled
+        local seq = switched and begin_restore(session, { kind = "switch", focus = opts.focus == true }) or nil
         vim.schedule(function()
             if not res.success then
-                local err = res.error or "Failed to load compacted session entries"
-                Notify.error(err)
-                session.chat:on_error(err, { pad_top = true, pad_bottom = true })
-                finish_compaction_rebuild(session, not will_retry, will_retry)
+                Attention.end_session_transition(session, false)
+                Notify.error(res.error or opts.failed)
                 return
             end
-
-            local data = res.data or {}
-            session.changed_files = {}
-            session._pending_file_change_args = nil
-            session.chat:clear_for_compaction_rebuild()
-            show_startup_block(session, session.commands:list())
-            replay_entries(session, data)
-            M.refresh_state(session)
-            vim.schedule(function()
-                finish_compaction_rebuild(session, not will_retry, will_retry)
-            end)
+            if not seq then
+                Attention.end_session_transition(session, false)
+                Notify.warn(opts.cancelled)
+                return
+            end
+            Attention.end_session_transition(session, true)
+            if opts.fresh then
+                session.startup_announcements = {}
+                session.system_errors = {}
+            end
+            if not current_restore(session, seq) then
+                return
+            end
+            session.chat:clear()
+            session.chat:show_loading()
+            take_snapshot(session, seq)
         end)
     end)
     if not sent then
-        finish_compaction_rebuild(session, false)
-    end
-end
-
---- Load a session by path: switch_session -> clear chat -> get_entries -> replay.
----@param session pi.Session
----@param session_path string
-local function load_session(session, session_path)
-    Attention.begin_session_transition(session)
-
-    local sent_switch = session.rpc:send({ type = "switch_session", sessionPath = session_path }, function(msg)
-        local data = msg.data or {}
-        if not msg.success then
-            vim.schedule(function()
-                Attention.end_session_transition(session, false)
-                Notify.error(msg.error or "Failed to switch session")
-            end)
-            return
-        end
-        if data.cancelled then
-            vim.schedule(function()
-                Attention.end_session_transition(session, false)
-                Notify.warn("Session switch was cancelled")
-            end)
-            return
-        end
-
-        Attention.end_session_transition(session, true)
-        M.refresh_state(session)
-
-        vim.schedule(function()
-            session.changed_files = {}
-            session._pending_file_change_args = nil
-            session.chat:clear()
-            session.chat:show_loading()
-        end)
-
-        local sent_entries = session.rpc:send({ type = "get_entries" }, function(res)
-            vim.schedule(function()
-                session.chat:clear_placeholder()
-                if not res.success then
-                    local err = res.error or "Failed to load session entries"
-                    Notify.error(err)
-                    session.chat:on_error(err, { pad_top = true, pad_bottom = true })
-                    session.chat:ensure_shown_and_focus_prompt()
-                    return
-                end
-
-                local data = res.data or {}
-                -- Fetch commands, show startup block, then replay.
-                session.commands:fetch(session.rpc, function(commands)
-                    show_startup_block(session, commands)
-                    replay_entries(session, data)
-                    session.chat:ensure_shown_and_focus_prompt()
-                end)
-            end)
-        end)
-        if not sent_entries then
-            vim.schedule(function()
-                session.chat:clear()
-                Notify.error("Failed to load session entries")
-                session.chat:on_error("Failed to load session entries", { pad_top = true, pad_bottom = true })
-                session.chat:ensure_shown_and_focus_prompt()
-            end)
-        end
-    end)
-
-    if not sent_switch then
         Attention.end_session_transition(session, false)
     end
 end
+
+--- Load a session by path: switch_session, then restore the chat from pi.
+---@param session pi.Session
+---@param session_path string
+local function load_session(session, session_path)
+    switch_and_restore(session, { type = "switch_session", sessionPath = session_path }, {
+        failed = "Failed to switch session",
+        cancelled = "Session switch was cancelled",
+        focus = true,
+    })
+end
+
+--- Session switch, reachable for tests.
+M._load_session = load_session
 
 --- A saved session in the picker or for continue. `path` is the session file
 --- as pi sees it (what `switch_session` receives); `file` is the same file
