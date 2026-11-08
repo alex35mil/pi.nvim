@@ -56,6 +56,9 @@ function M.show(opts)
 
     local Sessions = require("pi.sessions.manager")
     local existing = Sessions.get()
+    if existing and Sessions.needs_new_connection(existing) then
+        existing = nil
+    end
     if existing then
         if draft then
             existing.chat:show_with_draft(draft, layout)
@@ -83,6 +86,9 @@ end
 function M.toggle(opts)
     local Sessions = require("pi.sessions.manager")
     local existing = Sessions.get()
+    if existing and Sessions.needs_new_connection(existing) then
+        existing = nil
+    end
     if not existing then
         Sessions.get_or_create(opts, function(session)
             if session then

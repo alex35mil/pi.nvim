@@ -4,6 +4,8 @@
 
 - **ADDED:** `process.kind = "attached"` (in `setup()` or a workspace descriptor) connects to a pi your own tooling keeps running through a connector command, restoring the chat from that pi's current conversation. Closing the tab or quitting Neovim only disconnects. `:PiStop` ends an attached pi through `process.terminate` (with `${{SESSION_ID}}` and `${{SESSION_FILE}}`) after a confirmation. See "Attached pi" in the README.
 - **ADDED:** `:PiDetach` / `pi.detach()` disconnects from an attached pi, leaving it running; `pi.connection(tab?)` returns `"spawned"`, `"attached"`, or nil.
+- **ADDED:** An attached pi reconnects automatically when its connection drops (`process.reconnect = { enabled, give_up_after_ms }`, default on, 60 s), and returns to the conversation it was on when the pi it reaches has started fresh. A connector that exits with code 3 reports that pi itself ended, which isn't reconnected. Messages sent while disconnected stay in the prompt.
+- **ADDED:** A pi question (extension dialog) open when the connection drops closes with a warning and is shown again when the tab attaches to the same conversation; a question a bridge re-sends appears once.
 
 ## 2026-11-07
 

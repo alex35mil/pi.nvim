@@ -145,11 +145,12 @@ end
 --- Picker-style select dialog.
 ---@param opts { title: string, message?: string, options: string[], shortcuts?: table<string, string>, initial_index?: integer, timeout?: integer, on_timeout?: fun() }
 ---@param callback fun(choice: string?)
+---@return fun()? dismiss closes the dialog without calling `callback`; nil when none opened
 function M.select(opts, callback)
     local options = opts.options or {}
     if #options == 0 then
         callback(nil)
-        return
+        return nil
     end
 
     local lines = {}
@@ -255,6 +256,15 @@ function M.select(opts, callback)
             resolve(nil)
         end,
     })
+
+    -- Close without calling `callback` (the request it answers went away).
+    return function()
+        if responded then
+            return
+        end
+        responded = true
+        close()
+    end
 end
 
 --- Informational dialog with static content.
@@ -324,8 +334,9 @@ end
 --- Confirm dialog with picker UI.
 ---@param opts { title: string, message?: string, timeout?: integer, on_timeout?: fun() }
 ---@param callback fun(confirmed: boolean)
+---@return fun()? dismiss
 function M.confirm(opts, callback)
-    M.select({
+    return M.select({
         title = opts.title or "Confirm",
         message = opts.message,
         options = { "Yes", "No" },
@@ -343,6 +354,7 @@ end
 --- Input dialog with editable line.
 ---@param opts { title: string, default?: string, timeout?: integer, on_timeout?: fun(), multiline?: boolean }
 ---@param callback fun(value: string?)
+---@return fun() dismiss closes the dialog without calling `callback`
 function M.input(opts, callback)
     local default = opts.default or ""
     local lines = vim.split(default, "\n", { plain = true })
@@ -441,6 +453,15 @@ function M.input(opts, callback)
             resolve(nil)
         end,
     })
+
+    -- Close without calling `callback` (the request it answers went away).
+    return function()
+        if responded then
+            return
+        end
+        responded = true
+        close()
+    end
 end
 
 return M

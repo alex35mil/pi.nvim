@@ -2,6 +2,7 @@
 
 ---@class pi.ChatAgent
 ---@field send fun(msg: pi.RpcCommand, callback?: fun(response: pi.RpcEvent)): boolean?
+---@field ready? fun(): boolean false while the connection is down; a submission then stays in the prompt
 
 ---@class pi.SubmittedMessage
 ---@field text string
@@ -716,6 +717,11 @@ end
 function Chat:_capture_submission()
     local text = self._prompt:text()
     if text == "" and self._attachments:count() == 0 then
+        return nil
+    end
+    -- While the connection is down, the text stays as a draft and is never sent
+    -- on its own; the user sends it once pi is back.
+    if self._agent.ready and not self._agent.ready() then
         return nil
     end
     if self._zen:is_active() then

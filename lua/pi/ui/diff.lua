@@ -461,6 +461,7 @@ end
 ---@param payload { prompt: string, toolName: string, toolInput: table }
 ---@param callback fun(result: string) Called with json-encoded review result, or "Reject" for no-note rejection/backcompat
 ---@param opts { workspace: string, execution: pi.Execution, timeout?: integer, on_timeout?: fun() }
+---@return fun()? dismiss closes the open review without calling `callback`; nil when no review opened
 function M.open(payload, callback, opts)
     local input = payload.toolInput
     local workspace = opts.workspace
@@ -1684,6 +1685,15 @@ function M.open(payload, callback, opts)
             accept()
         end,
     })
+
+    -- Close the review without answering (the connection to pi ended).
+    return function()
+        if responded or cleaned_up then
+            return
+        end
+        responded = true
+        close_review_tab()
+    end
 end
 
 return M
