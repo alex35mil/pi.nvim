@@ -1,5 +1,19 @@
 # Upgrading
 
+## `process.cli` replaced by `process.cmd` (2026-11-07)
+
+`process` is now a launch spec with the same fields as a workspace descriptor's `process`. Its `cmd` is the complete command, run exactly as given: pi.nvim no longer appends `--mode rpc` or drops arguments that conflict with RPC mode. `setup()` raises an error when `process.cli` is set, showing the equivalent `cmd`.
+
+```lua
+-- Before
+process = { cli = { bin = "omp", args = { "--approve" } } }
+
+-- After
+process = { cmd = { "omp", "--approve", "--mode", "rpc" } }
+```
+
+Without `process.cli`, nothing changes: the default `cmd` is `{ "pi", "--mode", "rpc" }`.
+
 ## `pi.toggle_layout` takes options (2026-11-06)
 
 `pi.toggle_layout` now takes the same options table as the new `pi.set_layout`. If you pass a callback, move it into `on_done`:

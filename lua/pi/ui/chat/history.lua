@@ -25,6 +25,7 @@
 ---@field _blocks_expanded boolean
 ---@field _placeholder_extmark integer?
 ---@field _placeholder_mode? "loading"
+---@field _unseen? { start: integer, stop: integer } Extmarks around the text of an assistant message that began before a restore, shown as "response in progress".
 ---@field _has_conversation_content boolean
 ---@field _startup_block_line_count integer
 ---@field _startup_block_expanded boolean
@@ -2476,6 +2477,89 @@ function History:has_conversation_content()
     return self._has_conversation_content
 end
 
+--- Mark the start of an assistant message whose earlier text isn't known (it
+--- started before a restore): a "response in progress" line stands in for it
+--- above the text that arrives from now on.
+function History:begin_unseen_message()
+    vim.schedule(function()
+        if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
+            return
+        end
+        -- The message's text gets a line of its own, so anything written after
+        -- it (errors, other output) stays outside the range replaced at the end.
+        local last = vim.api.nvim_buf_line_count(self._buf) - 1
+        if (vim.api.nvim_buf_get_lines(self._buf, last, last + 1, false)[1] or "") ~= "" then
+            self:_append_lines({ "" })
+            last = last + 1
+        end
+        local icon = Config.options.labels.agent_response
+        self._unseen = {
+            start = vim.api.nvim_buf_set_extmark(self._buf, ns, last, 0, {
+                right_gravity = false,
+                virt_lines = { { { icon .. "  response in progress; earlier text appears when it finishes", "PiBusy" } } },
+                virt_lines_above = true,
+            }),
+            stop = vim.api.nvim_buf_set_extmark(self._buf, ns, last, 0, { right_gravity = true }),
+        }
+        self:_maybe_scroll()
+    end)
+end
+
+--- Text of that message received after the boundary, shown below the placeholder.
+---@param delta string
+function History:append_unseen_delta(delta)
+    vim.schedule(function()
+        local unseen = self._unseen
+        if not unseen or not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
+            return
+        end
+        local pos = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, unseen.stop, {})
+        if not pos[1] then
+            return
+        end
+        self:_with_modifiable(function()
+            vim.api.nvim_buf_set_text(self._buf, pos[1], pos[2], pos[1], pos[2], vim.split(delta, "\n", { plain = true }))
+        end)
+        self:_maybe_scroll()
+    end)
+end
+
+--- Replace the placeholder and the text received since with the message's
+--- complete text.
+---@param text string
+function History:finish_unseen_message(text)
+    vim.schedule(function()
+        if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
+            return
+        end
+        local unseen = self._unseen
+        self._unseen = nil
+        if not unseen then
+            return
+        end
+        local from = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, unseen.start, {})
+        local to = vim.api.nvim_buf_get_extmark_by_id(self._buf, ns, unseen.stop, {})
+        pcall(vim.api.nvim_buf_del_extmark, self._buf, ns, unseen.start)
+        pcall(vim.api.nvim_buf_del_extmark, self._buf, ns, unseen.stop)
+        if not from[1] or not to[1] then
+            return
+        end
+        text = text:gsub("^\n+", "")
+        local closer = Fences.closer(text)
+        if closer then
+            text = text .. "\n" .. closer
+        end
+        -- Replace only this message's range; output written after it stays.
+        self:_with_modifiable(function()
+            vim.api.nvim_buf_set_text(self._buf, from[1], from[2], to[1], to[2], vim.split(text, "\n", { plain = true }))
+        end)
+        self._first_delta = false
+        self._needs_separator = false
+        self:_update_status_extmark()
+        self:_maybe_scroll()
+    end)
+end
+
 --- Show a placeholder message (virtual text) on the history buffer.
 --- Replaces any existing placeholder.
 ---@param virt_lines table[] virt_lines spec for nvim_buf_set_extmark
@@ -2546,6 +2630,7 @@ function History:clear()
     self._pending_queue = {}
     self._pending_queue_extmark_id = nil
     self._rendered_entry_ids = {}
+    self._unseen = nil
     self._thinking_accum = nil
     self._thinking_blocks = {}
     self._tool_blocks = {}

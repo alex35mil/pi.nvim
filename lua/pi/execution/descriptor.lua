@@ -1,8 +1,9 @@
 --- Workspace descriptors: discovery, trust, parsing, and validation.
 ---
 --- A descriptor is a static JSON file at `process.descriptor.path` inside the
---- tab's workspace. It says how this workspace's pi process is reached and
---- stopped (`process`, overriding the `setup()` options of the same name) and, when pi runs in a
+--- tab's workspace. It says how this workspace's pi is started or reached and
+--- stopped (`process`, a launch spec that replaces the global `process` setting
+--- for this workspace; see `pi.execution.spec`) and, when pi runs in a
 --- separate filesystem such as a container, how its paths map to the host
 --- (`paths`). Because it names a host command, it is used only when trusted
 --- (Neovim's trust database, or a configured trusted location on a workspace's
@@ -12,43 +13,15 @@
 local M = {}
 
 local Config = require("pi.config")
+local Spec = require("pi.execution.spec")
 local State = require("pi.execution.state")
 local Workspace = require("pi.workspace")
 
----@class pi.DescriptorMount
----@field host string Absolute host path.
----@field path string Absolute path inside the environment.
-
---- How pi's paths map to the host, for pi in a separate filesystem.
----@class pi.DescriptorPaths
----@field workspace string Absolute path where the workspace appears to pi.
----@field mounts pi.DescriptorMount[] Other mounted folders.
-
---- How pi.nvim stops this launch; overrides the `setup()` option `process.stop` for this workspace.
----@class pi.DescriptorStop
----@field grace_ms? integer Grace period for this launch; nil = the `setup()` option `process.stop.grace_ms`.
-
---- pi started and owned by pi.nvim.
----@class pi.DescriptorSpawned
----@field kind "spawned"
----@field cmd string[]
----@field env? table<string, string>
----@field stop pi.DescriptorStop
-
---- Upper bound for a descriptor's `process.stop.grace_ms`, so a descriptor can't
---- stall Neovim's exit indefinitely.
-M.MAX_STOP_GRACE_MS = 60000
-
---- A validated descriptor with `${{WORKSPACE}}` expanded and mount hosts absolute.
----@class pi.DescriptorSpec
----@field process pi.DescriptorSpawned
----@field paths? pi.DescriptorPaths Absent: pi runs on the host's own filesystem.
-
 --- Result of resolving a tab's execution.
 ---@alias pi.ExecutionResolution
----| { kind: "local" } # no descriptor and no record: local pi
----| { kind: "descriptor", path: string, spec: pi.DescriptorSpec } # trusted, valid descriptor
----| { kind: "missing_after_use" } # recorded workspace without a descriptor: ask before local pi
+---| { kind: "global" } # no descriptor and no record: the global `process` setting
+---| { kind: "descriptor", path: string, spec: pi.LaunchSpec } # trusted, valid descriptor
+---| { kind: "missing_after_use" } # recorded workspace without a descriptor: ask before the global setting
 ---| { kind: "cancelled" } # the user declined or viewed the descriptor
 ---| { kind: "error", message: string } # denied, invalid, or unreadable descriptor
 
@@ -220,294 +193,17 @@ local function trusted_content(real, workspace_real, done)
         apply_choice(choice, real, done)
     end)
 end
-
---- Validation failure naming the offending field.
----@class pi.DescriptorError
----@field field string
----@field message string
-
----@param field string
----@param message string
----@return pi.DescriptorError
-local function invalid(field, message)
-    return { field = field, message = message }
-end
-
---- `vim.json.decode` marks empty JSON objects with `vim.empty_dict()`'s
---- metatable, which tells `{}` apart from `[]`.
-local EMPTY_DICT_MT = getmetatable(vim.empty_dict())
-
----@param v any
----@return boolean
-local function is_object(v)
-    if type(v) ~= "table" then
-        return false
-    end
-    if next(v) == nil then
-        return getmetatable(v) == EMPTY_DICT_MT
-    end
-    return not vim.islist(v)
-end
-
----@param v any
----@return boolean
-local function is_list(v)
-    return type(v) == "table" and getmetatable(v) ~= EMPTY_DICT_MT and vim.islist(v)
-end
-
----@param field string
----@param obj table
----@param allowed table<string, true>
----@return pi.DescriptorError?
-local function check_fields(field, obj, allowed)
-    for key in pairs(obj) do
-        if not allowed[key] then
-            local name = field == "" and tostring(key) or (field .. "." .. tostring(key))
-            return invalid(name, "unknown field")
-        end
-    end
-    return nil
-end
-
---- Who reads a descriptor value, which decides what other `$` forms mean.
----@alias pi.DescriptorValueReader
----| "command" # `cmd` and `env`: handed to the started command, which may expand `$VAR`/`${VAR}` itself
----| "pi.nvim" # `paths`: read by pi.nvim, where nothing would expand a `$`
-
---- Placeholders a descriptor value may use, by exact (uppercase) name.
----@type table<string, true>
-local PLACEHOLDERS = { WORKSPACE = true }
-
---- Expand `${{WORKSPACE}}`. Any other `${{…}}` (names are case-sensitive),
---- or an unclosed `${{`, is invalid. `${{` is never valid shell syntax, so it
---- can't collide with what a command means by `$VAR` or `${VAR}`; those pass
---- through for a command. Where pi.nvim reads the value itself, a `$` or a
---- leading `~` is invalid, since nothing would expand it.
----@param field string
----@param value any
----@param workspace string
----@param reader pi.DescriptorValueReader
----@return string? expanded
----@return pi.DescriptorError? err
-local function expand(field, value, workspace, reader)
-    if type(value) ~= "string" then
-        return nil, invalid(field, "must be a string")
-    end
-    -- Checked on the value without its placeholders, so a workspace path
-    -- that itself contains `$` or `${{` isn't mistaken for a problem.
-    local rest = value:gsub("%${{.-}}", "")
-    if rest:find("${{", 1, true) then
-        return nil, invalid(field, "has an unclosed `${{` (write `${{WORKSPACE}}`)")
-    end
-    for name in value:gmatch("%${{(.-)}}") do
-        if not PLACEHOLDERS[name] then
-            local hint = PLACEHOLDERS[name:upper()] and ("; did you mean `${{%s}}`?"):format(name:upper())
-                or " (only `${{WORKSPACE}}` is supported)"
-            return nil, invalid(field, ("unknown placeholder `${{%s}}`%s"):format(name, hint))
-        end
-    end
-    if reader == "pi.nvim" then
-        if rest:find("$", 1, true) then
-            return nil,
-                invalid(
-                    field,
-                    "can't use `$` variables: pi.nvim reads this path itself and nothing expands them (only `${{WORKSPACE}}` is supported)"
-                )
-        end
-        if vim.startswith(value, "~") then
-            return nil,
-                invalid(
-                    field,
-                    "can't start with `~`: pi.nvim doesn't expand it; use an absolute path or `${{WORKSPACE}}`"
-                )
-        end
-    elseif reader ~= "command" then
-        error("unknown descriptor value reader: " .. tostring(reader))
-    end
-    local out = value:gsub("%${{WORKSPACE}}", function()
-        return workspace
-    end)
-    return out
-end
-
----@param p string
----@return boolean
-local function is_absolute(p)
-    return vim.startswith(p, "/")
-end
-
----@param raw any
----@param workspace string
----@return pi.DescriptorSpawned? spawned
----@return pi.DescriptorError? err
-local function parse_process(raw, workspace)
-    if raw == nil then
-        return nil, invalid("process", "is required")
-    end
-    if not is_object(raw) then
-        return nil, invalid("process", "must be an object")
-    end
-    if raw.kind == nil then
-        return nil, invalid("process.kind", 'is required ("spawned")')
-    end
-    if raw.kind ~= "spawned" then
-        return nil,
-            invalid("process.kind", ('unsupported kind %s (only "spawned" is supported)'):format(vim.inspect(raw.kind)))
-    end
-    local err = check_fields("process", raw, { kind = true, cmd = true, env = true, stop = true })
-    if err then
-        return nil, err
-    end
-    if not is_list(raw.cmd) or #raw.cmd == 0 then
-        return nil, invalid("process.cmd", "must be a non-empty array of strings")
-    end
-    ---@type string[]
-    local cmd = {}
-    for i, arg in ipairs(raw.cmd) do
-        local value, aerr = expand(("process.cmd[%d]"):format(i), arg, workspace, "command")
-        if not value then
-            return nil, aerr
-        end
-        cmd[i] = value
-    end
-    ---@type table<string, string>?
-    local env = nil
-    if raw.env ~= nil then
-        if not is_object(raw.env) then
-            return nil, invalid("process.env", "must be an object of strings")
-        end
-        env = {}
-        for name, v in pairs(raw.env) do
-            local value, eerr = expand("process.env." .. tostring(name), v, workspace, "command")
-            if not value then
-                return nil, eerr
-            end
-            env[name] = value
-        end
-    end
-    ---@type pi.DescriptorStop
-    local stop = {}
-    if raw.stop ~= nil then
-        if not is_object(raw.stop) then
-            return nil, invalid("process.stop", "must be an object")
-        end
-        local serr = check_fields("process.stop", raw.stop, { grace_ms = true })
-        if serr then
-            return nil, serr
-        end
-        local grace = raw.stop.grace_ms
-        if
-            grace ~= nil
-            and (type(grace) ~= "number" or grace ~= math.floor(grace) or grace < 0 or grace > M.MAX_STOP_GRACE_MS)
-        then
-            return nil,
-                invalid("process.stop.grace_ms", ("must be an integer from 0 to %d"):format(M.MAX_STOP_GRACE_MS))
-        end
-        stop.grace_ms = grace
-    end
-    return { kind = "spawned", cmd = cmd, env = env, stop = stop }
-end
-
----@param raw any
----@param workspace string
----@return pi.DescriptorPaths? paths
----@return pi.DescriptorError? err
-local function parse_paths(raw, workspace)
-    if not is_object(raw) then
-        return nil, invalid("paths", "must be an object")
-    end
-    local err = check_fields("paths", raw, { workspace = true, mounts = true })
-    if err then
-        return nil, err
-    end
-    if raw.workspace == nil then
-        return nil, invalid("paths.workspace", "is required")
-    end
-    local ws, werr = expand("paths.workspace", raw.workspace, workspace, "pi.nvim")
-    if not ws then
-        return nil, werr
-    end
-    if not is_absolute(ws) then
-        return nil, invalid("paths.workspace", "must be an absolute path")
-    end
-    ---@type pi.DescriptorMount[]
-    local mounts = {}
-    if raw.mounts ~= nil then
-        if not is_list(raw.mounts) then
-            return nil, invalid("paths.mounts", "must be an array")
-        end
-        for i, m in ipairs(raw.mounts) do
-            local field = ("paths.mounts[%d]"):format(i)
-            if not is_object(m) then
-                return nil, invalid(field, 'must be an object with "host" and "path"')
-            end
-            local merr = check_fields(field, m, { host = true, path = true })
-            if merr then
-                return nil, merr
-            end
-            if m.host == nil then
-                return nil, invalid(field .. ".host", "is required")
-            end
-            if m.path == nil then
-                return nil, invalid(field .. ".path", "is required")
-            end
-            local host, herr = expand(field .. ".host", m.host, workspace, "pi.nvim")
-            if not host then
-                return nil, herr
-            end
-            if host == "" then
-                return nil, invalid(field .. ".host", "must not be empty")
-            end
-            local path, perr = expand(field .. ".path", m.path, workspace, "pi.nvim")
-            if not path then
-                return nil, perr
-            end
-            if not is_absolute(path) then
-                return nil, invalid(field .. ".path", "must be an absolute path")
-            end
-            if not is_absolute(host) then
-                host = vim.fs.joinpath(workspace, host)
-            end
-            mounts[i] = { host = vim.fs.normalize(host), path = vim.fs.normalize(path) }
-        end
-    end
-    return { workspace = vim.fs.normalize(ws), mounts = mounts }
-end
-
 --- Parse and validate descriptor content for a workspace.
 ---@param content string
 ---@param workspace string host workspace, for `${{WORKSPACE}}`
----@return pi.DescriptorSpec? spec
+---@return pi.LaunchSpec? spec
 ---@return string? err
 function M.parse(content, workspace)
     local ok, raw = pcall(vim.json.decode, content, { luanil = { object = true, array = true } })
     if not ok then
         return nil, "malformed JSON: " .. tostring(raw)
     end
-    if not is_object(raw) then
-        return nil, "the descriptor must be a JSON object"
-    end
-    local function fail(e)
-        return nil, ("`%s` %s"):format(e.field, e.message)
-    end
-    local err = check_fields("", raw, { process = true, paths = true })
-    if err then
-        return fail(err)
-    end
-    local spawned, perr = parse_process(raw.process, workspace)
-    if not spawned then
-        return fail(perr)
-    end
-    ---@type pi.DescriptorPaths?
-    local paths = nil
-    if raw.paths ~= nil then
-        local p, paerr = parse_paths(raw.paths, workspace)
-        if not p then
-            return fail(paerr)
-        end
-        paths = p
-    end
-    return { process = spawned, paths = paths }
+    return Spec.parse_descriptor(raw, workspace)
 end
 
 --- Resolve how to run pi for a tab's workspace.
@@ -521,7 +217,7 @@ function M.resolve(workspace, done)
         if State.used_descriptor(workspace_real) then
             done({ kind = "missing_after_use" })
         else
-            done({ kind = "local" })
+            done({ kind = "global" })
         end
         return
     end

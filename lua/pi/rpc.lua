@@ -158,12 +158,13 @@
 local Rpc = {}
 Rpc.__index = Rpc
 
---- What to start for a connection: local pi or a workspace descriptor's command.
+--- What to start for a connection: the global `process` setting's command or a workspace descriptor's.
 ---@class pi.Launch
 ---@field cmd string[] Complete argument list.
 ---@field env? table<string, string> Variables added to the inherited environment.
----@field descriptor? string Real path of the descriptor it came from; nil for local pi.
+---@field descriptor? string Real path of the descriptor it came from; nil for the global `process` setting.
 ---@field stop_grace_ms? integer Grace period for this launch; nil = `process.stop.grace_ms`.
+---@field connection pi.ConnectionKind `spawned`: pi.nvim owns pi. `attached`: it owns only this connector; closing it disconnects.
 
 --- Outcome of a stop that didn't end cleanly.
 ---@alias pi.StopOutcome
@@ -176,7 +177,8 @@ Rpc.__index = Rpc
 ---@field code? integer
 ---@field command string
 ---@field workspace string
----@field descriptor? string Descriptor the launch came from; nil for local pi.
+---@field descriptor? string Descriptor the launch came from; nil for the global `process` setting.
+---@field connection pi.ConnectionKind Whether the process was pi itself or an attached pi's connector.
 ---@field stderr string[]
 ---@field log? string
 ---@field log_tail? string[] Last RPC log entries at the time of the stop (debug logging on); kept because the log is reset when the tab starts pi again.
@@ -431,6 +433,7 @@ function Rpc:_report(outcome, code)
         command = self:command_name(),
         workspace = self._workspace,
         descriptor = self._launch.descriptor,
+        connection = self._launch.connection,
         stderr = self:stderr_tail(),
         log = debug_enabled() and self._log_path or nil,
         log_tail = debug_enabled() and read_log_tail(self._log_path) or nil,
@@ -639,13 +642,18 @@ function Rpc.stop_all_blocking()
     local reports = {}
     for i, rpc in ipairs(rpcs) do
         local status = results[i]
+        -- A connector owns nothing that could be left running, so only
+        -- spawned launches are reported as cleanup failures.
+        local owned = rpc._launch.connection == "spawned"
         if status == -1 then
             -- Still running: force it down; its cleanup may be cut short.
             pcall(vim.fn.jobstop, ids[i])
-            reports[#reports + 1] = rpc:_report("forced")
+            if owned then
+                reports[#reports + 1] = rpc:_report("forced")
+            end
         else
             local code = status >= 0 and status or rpc._exit_code
-            if code and code ~= 0 then
+            if owned and code and code ~= 0 then
                 reports[#reports + 1] = rpc:_report("exit", code)
             end
         end

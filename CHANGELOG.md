@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-11-08
+
+- **ADDED:** `process.kind = "attached"` (in `setup()` or a workspace descriptor) connects to a pi your own tooling keeps running through a connector command, restoring the chat from that pi's current conversation. Closing the tab or quitting Neovim only disconnects. `:PiStop` ends an attached pi through `process.terminate` (with `${{SESSION_ID}}` and `${{SESSION_FILE}}`) after a confirmation. See "Attached pi" in the README.
+- **ADDED:** `:PiDetach` / `pi.detach()` disconnects from an attached pi, leaving it running; `pi.connection(tab?)` returns `"spawned"`, `"attached"`, or nil.
+- **ADDED:** An attached pi reconnects automatically when its connection drops (`process.reconnect = { enabled, give_up_after_ms }`, default on, 60 s), and returns to the conversation it was on when the pi it reaches has started fresh. A connector that exits with code 3 reports that pi itself ended, which isn't reconnected. Messages sent while disconnected stay in the prompt.
+- **ADDED:** A pi question (extension dialog) open when the connection drops closes with a warning and is shown again when the tab attaches to the same conversation; a question a bridge re-sends appears once.
+
+## 2026-11-07
+
+- **BREAKING:** Replace `process.cli` with `process.cmd`, the complete command run exactly as given (default `{ "pi", "--mode", "rpc" }`); pi.nvim no longer appends `--mode rpc` or filters arguments. `setup()` raises an error when `process.cli` is set, showing the equivalent `cmd`. `process` now has the same fields and checks as a workspace descriptor's `process` (`kind`, `cmd`, `env`, `stop.grace_ms`). See UPGRADING.md.
+- **CHANGED:** `:checkhealth pi` checks the executable of `process.cmd`, and pi's version when the command runs `pi` itself (with any arguments).
+- **CHANGED:** Switching sessions (`:PiContinue`, `:PiResume`), starting a new session, and the rebuild after compaction restore the chat from pi's current state: a session that is already running shows its active status, and a reply that started earlier shows "response in progress" until its complete text arrives.
+- **CHANGED:** `:PiNewSession` no longer sends a separate abort; pi stops the current run when it starts the new session.
+- **ADDED:** Messages sent to the same pi from another frontend appear in the chat.
+
 ## 2026-11-06
 
 - **BREAKING:** `pi.toggle_layout(cb)` takes an options table: replace `pi.toggle_layout(cb)` with `pi.toggle_layout({ on_done = cb })`. Passing a function raises an error that names the new form. `:PiToggleLayout` and `pi.toggle_layout()` are unchanged. See [UPGRADING](UPGRADING.md).

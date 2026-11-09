@@ -16,6 +16,14 @@ local Notify = require("pi.notify")
 ---@field kind pi.AttentionKind
 ---@field expires_at integer?
 ---@field open fun(): boolean opened
+---@field request pi.RpcEvent The extension_ui_request this entry answers, kept to show it again after a reconnect.
+
+--- A dialog request whose connection ended before it was answered, kept to
+--- show again when the tab attaches again to a pi in the same conversation.
+---@class pi.KeptDialog
+---@field request pi.RpcEvent
+---@field expires_at integer?
+---@field session_id? string Conversation the request came from.
 
 ---@class pi.AttentionTabState
 ---@field count integer
@@ -119,9 +127,27 @@ end
 ---@param session pi.Session
 ---@param cmd pi.RpcCommand
 local function send_response(session, cmd)
+    if cmd.id then
+        session.attention.open = session.attention.open or {}
+        session.attention.open[cmd.id] = nil
+    end
     if session.rpc:is_running() then
         session.rpc:send(cmd)
     end
+end
+
+--- Remember an open dialog so a lost connection can close it without answering.
+---@param session pi.Session
+---@param id string
+---@param request pi.RpcEvent
+---@param expires_at integer?
+---@param dismiss fun()?
+local function track_open(session, id, request, expires_at, dismiss)
+    if not dismiss then
+        return
+    end
+    session.attention.open = session.attention.open or {}
+    session.attention.open[id] = { request = request, expires_at = expires_at, dismiss = dismiss }
 end
 
 ---@param session pi.Session
@@ -278,6 +304,7 @@ local function build_entry(session, msg)
             return {
                 id = id,
                 seq = next_attention_seq(),
+                request = msg,
                 kind = "diff",
                 expires_at = expires_at,
                 open = function()
@@ -285,7 +312,7 @@ local function build_entry(session, msg)
                     if timeout ~= nil and timeout <= 0 then
                         return false
                     end
-                    Diff.open(payload, function(result)
+                    local dismiss = Diff.open(payload, function(result)
                         send_response(session, { type = "extension_ui_response", id = id, value = result })
                     end, {
                         workspace = session.workspace,
@@ -295,6 +322,7 @@ local function build_entry(session, msg)
                             notify_expired("diff")
                         end,
                     })
+                    track_open(session, id, msg, expires_at, dismiss)
                     return true
                 end,
             }
@@ -303,6 +331,7 @@ local function build_entry(session, msg)
         return {
             id = id,
             seq = next_attention_seq(),
+            request = msg,
             kind = "select",
             expires_at = expires_at,
             open = function()
@@ -310,7 +339,7 @@ local function build_entry(session, msg)
                 if timeout ~= nil and timeout <= 0 then
                     return false
                 end
-                Dialog.select({
+                local dismiss = Dialog.select({
                     title = "Select",
                     message = msg.title,
                     options = msg.options or {},
@@ -325,6 +354,7 @@ local function build_entry(session, msg)
                         send_response(session, { type = "extension_ui_response", id = id, cancelled = true })
                     end
                 end)
+                track_open(session, id, msg, expires_at, dismiss)
                 return true
             end,
         }
@@ -334,6 +364,7 @@ local function build_entry(session, msg)
         return {
             id = id,
             seq = next_attention_seq(),
+            request = msg,
             kind = "confirm",
             expires_at = expires_at,
             open = function()
@@ -341,7 +372,7 @@ local function build_entry(session, msg)
                 if timeout ~= nil and timeout <= 0 then
                     return false
                 end
-                Dialog.confirm({
+                local dismiss = Dialog.confirm({
                     title = msg.title,
                     message = msg.message --[[@as string?]],
                     timeout = timeout,
@@ -355,6 +386,7 @@ local function build_entry(session, msg)
                         send_response(session, { type = "extension_ui_response", id = id, cancelled = true })
                     end
                 end)
+                track_open(session, id, msg, expires_at, dismiss)
                 return true
             end,
         }
@@ -364,6 +396,7 @@ local function build_entry(session, msg)
         return {
             id = id,
             seq = next_attention_seq(),
+            request = msg,
             kind = msg.method,
             expires_at = expires_at,
             open = function()
@@ -371,7 +404,7 @@ local function build_entry(session, msg)
                 if timeout ~= nil and timeout <= 0 then
                     return false
                 end
-                Dialog.input({
+                local dismiss = Dialog.input({
                     title = msg.title or "Input",
                     default = msg.prefill or msg.placeholder or "",
                     timeout = timeout,
@@ -385,6 +418,7 @@ local function build_entry(session, msg)
                         send_response(session, { type = "extension_ui_response", id = id, cancelled = true })
                     end
                 end)
+                track_open(session, id, msg, expires_at, dismiss)
                 return true
             end,
         }
@@ -500,6 +534,17 @@ function M.present(session, msg)
     local entry = build_entry(session, msg)
     if not entry then
         return false
+    end
+
+    -- A request already open or queued (re-sent by a bridge, or shown again
+    -- after a reconnect) appears once.
+    if session.attention.open and session.attention.open[entry.id] then
+        return true
+    end
+    for _, existing in ipairs(pending_entries(session)) do
+        if existing.id == entry.id then
+            return true
+        end
     end
 
     if session.chat:has_prompt_focus() and not session.chat:has_draft() then
@@ -642,6 +687,12 @@ end
 ---@param session pi.Session
 function M.clear_session(session)
     local pending = pending_entries(session)
+    -- Close dialogs still on screen: their answers can no longer reach pi.
+    local open = session.attention.open or {}
+    session.attention.open = nil
+    for _, o in pairs(open) do
+        pcall(o.dismiss)
+    end
     local removed = #pending
     if removed == 0 then
         return
@@ -649,6 +700,68 @@ function M.clear_session(session)
     session.attention.pending = {}
     reschedule_timer(true)
     request_redraw()
+end
+
+--- The connection ended without an answer: close open dialogs and drop
+--- queued ones without answering, and return the requests still waiting in pi
+--- (not expired), to show again after a reconnect to the same conversation.
+---@param session pi.Session
+---@param session_id? string conversation the requests came from
+---@param reason "lost"|"detached" why the connection ended, for the warning
+---@return pi.KeptDialog[]
+function M.suspend(session, session_id, reason)
+    local now = now_ms()
+    ---@type pi.KeptDialog[]
+    local kept = {}
+    local function keep(request, expires_at)
+        if expires_at == nil or expires_at > now then
+            kept[#kept + 1] = { request = request, expires_at = expires_at, session_id = session_id }
+        end
+    end
+    local open = session.attention.open or {}
+    session.attention.open = nil
+    for _, o in pairs(open) do
+        pcall(o.dismiss)
+        keep(o.request, o.expires_at)
+    end
+    for _, entry in ipairs(pending_entries(session)) do
+        keep(entry.request, entry.expires_at)
+    end
+    session.attention.pending = {}
+    session.attention.transition_seq = nil
+    reschedule_timer(true)
+    request_redraw()
+    if #kept > 0 then
+        local what
+        if reason == "lost" then
+            what = "pi.nvim lost its connection"
+        elseif reason == "detached" then
+            what = "Detached"
+        else
+            error("unknown suspend reason: " .. tostring(reason))
+        end
+        Notify.warn(
+            ("%s while %d question(s) from pi were open; pi is still waiting for an answer"):format(what, #kept)
+        )
+    end
+    return kept
+end
+
+--- Show kept requests again after attaching to a pi that reports the same
+--- conversation, with their original deadlines.
+---@param session pi.Session
+---@param kept pi.KeptDialog[]
+function M.resume(session, kept)
+    local now = now_ms()
+    for _, k in ipairs(kept) do
+        if k.expires_at == nil or k.expires_at > now then
+            local request = vim.deepcopy(k.request)
+            if k.expires_at then
+                request.timeout = k.expires_at - now
+            end
+            M.present(session, request)
+        end
+    end
 end
 
 --- Count active attention requests for a tab.

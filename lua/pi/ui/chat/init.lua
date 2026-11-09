@@ -2,12 +2,14 @@
 
 ---@class pi.ChatAgent
 ---@field send fun(msg: pi.RpcCommand, callback?: fun(response: pi.RpcEvent)): boolean?
+---@field ready? fun(): boolean false while the connection is down; a submission then stays in the prompt
 
 ---@class pi.SubmittedMessage
 ---@field text string
 ---@field expanded_text string
 ---@field attachments? pi.Attachment[]
 ---@field images? pi.RpcImageContent[]
+---@field echo? "rendered"|"awaited" Rendered in the chat when sent; "awaited" once pi reported it started, until its user message_start arrives.
 
 ---@class pi.ChatDraft
 ---@field text string
@@ -35,6 +37,7 @@
 ---@field _done_verb string?
 ---@field _last_turn_stop_reason "aborted"|"error"|nil
 ---@field _inflight_prompt? pi.SubmittedMessage
+---@field _local_echoes pi.SubmittedMessage[] Prompts rendered when sent whose user `message_start` hasn't arrived yet, oldest first.
 ---@field _attachments pi.ChatAttachments
 ---@field _zen pi.Zen
 ---@field _deferred_actions fun()[] Window actions waiting for the chat's tab to become current.
@@ -88,6 +91,7 @@ function Chat.new(tab, mode, agent)
     self._done_verb = nil
     self._last_turn_stop_reason = nil
     self._inflight_prompt = nil
+    self._local_echoes = {}
     self._zen = Zen.new(self._prompt)
     self._deferred_actions = {}
     self._deferred_autocmd = nil
@@ -715,6 +719,11 @@ function Chat:_capture_submission()
     if text == "" and self._attachments:count() == 0 then
         return nil
     end
+    -- While the connection is down, the text stays as a draft and is never sent
+    -- on its own; the user sends it once pi is back.
+    if self._agent.ready and not self._agent.ready() then
+        return nil
+    end
     if self._zen:is_active() then
         self._zen:exit()
     end
@@ -792,6 +801,15 @@ function Chat:_send_submission(submission, command_type)
         self._inflight_prompt = submission
     end
     local callback = function(response)
+        local disposition = response.success ~= false and response.data and response.data.disposition or nil
+        -- Only a started prompt produces its own user message_start, and pi
+        -- writes this response before it. Counted here, while the response is
+        -- dispatched and before any later record, so a user message from another
+        -- frontend that arrives first is never taken for this one.
+        if disposition == "started" and submission.echo == "rendered" then
+            submission.echo = "awaited"
+            self._local_echoes[#self._local_echoes + 1] = submission
+        end
         vim.schedule(function()
             if not self:_resolve_submission(submission) then
                 return
@@ -799,7 +817,7 @@ function Chat:_send_submission(submission, command_type)
             if response.success == false then
                 self:_restore_submission(submission)
             elseif command_type == "prompt" then
-                self:_reconcile_prompt(submission, response.data.disposition)
+                self:_reconcile_prompt(submission, disposition)
             end
         end)
     end
@@ -839,6 +857,7 @@ function Chat:_queue_compaction_message(mode)
     end
     if self:_is_extension_command(submission.text) then
         self._history:add_user_message(submission.text, nil, submission.images and #submission.images or nil)
+        self:_add_echo(submission)
         self:_send_submission(submission, "prompt")
         return
     end
@@ -870,6 +889,7 @@ function Chat:flush_compaction_queue(will_retry)
     self._compaction_prompt = submission
     self:_refresh_pending_queue()
     self._history:add_user_message(submission.text, nil, submission.images and #submission.images or nil)
+    self:_add_echo(submission)
     self:_send_submission(submission, "prompt")
 end
 
@@ -882,6 +902,7 @@ function Chat:_send_message(queue_type)
     end
     if not queue_type then
         self._history:add_user_message(submission.text, nil, submission.images and #submission.images or nil)
+        self:_add_echo(submission)
     end
     self:_send_submission(submission, queue_type or "prompt")
 end
@@ -1017,6 +1038,7 @@ end
 ---@param code integer?
 ---@param expected? boolean
 function Chat:on_process_exit(code, expected)
+    self._local_echoes = {}
     local pending = self._pending_submissions
     self._pending_submissions = {}
     self:_restore_submissions(pending)
@@ -1076,11 +1098,95 @@ function Chat:on_message_start(msg)
         self:_refresh_pending_queue()
         if entry then
             self._history:add_user_message(entry.text, nil, image_count > 0 and image_count or nil, entry.queue_type)
+        elseif not self:_consume_local_echo() then
+            -- Not a queued message and not a prompt this chat already rendered:
+            -- another frontend sent it to a pi they share.
+            self._history:add_user_message(text, message.timestamp, image_count > 0 and image_count or nil)
         end
     elseif message.role == "assistant" then
         self._assistant_block_open = false
         self._assistant_message_header_rendered = false
         self._assistant_message_timestamp = message.timestamp
+    end
+end
+
+--- Mark a prompt this chat rendered when it was sent. Its user message_start
+--- is awaited once pi reports it started.
+---@param submission pi.SubmittedMessage
+function Chat:_add_echo(submission)
+    submission.echo = "rendered"
+end
+
+--- Forget the oldest `count` rendered prompts: their user messages won't arrive
+--- as records (a restore already showed them from the snapshot).
+---@param count integer
+function Chat:drop_local_echoes(count)
+    for _ = 1, count do
+        if not table.remove(self._local_echoes, 1) then
+            return
+        end
+    end
+end
+
+--- A prompt this chat rendered when it was sent; its `message_start` from pi
+--- shouldn't render it again.
+---@return boolean
+function Chat:_consume_local_echo()
+    return table.remove(self._local_echoes, 1) ~= nil
+end
+
+--- An assistant message that started before a restore boundary is being
+--- received: show a placeholder for its unknown earlier text.
+function Chat:begin_unseen_message()
+    self:_ensure_assistant_block_open()
+    self._history:begin_unseen_message()
+end
+
+--- Text of that message received after the boundary.
+---@param delta string
+function Chat:on_unseen_delta(delta)
+    self._history:append_unseen_delta(delta)
+end
+
+--- That message ended: show its complete text instead of the placeholder.
+---@param message table the `message_end` message
+function Chat:finish_unseen_message(message)
+    local text = ""
+    if type(message.content) == "string" then
+        text = message.content
+    elseif type(message.content) == "table" then
+        for _, part in ipairs(message.content) do
+            if type(part) == "table" and part.type == "text" then
+                text = text .. (part.text or "")
+            end
+        end
+    end
+    self._history:finish_unseen_message(text)
+end
+
+--- After a rebuild from a snapshot, show the activity pi reports: a run or a
+--- compaction that is already in progress.
+---@param state? table `get_state` data; nil when it couldn't be read (the chat's own flags are kept)
+function Chat:resume_activity(state)
+    if type(state) == "table" then
+        if state.isCompacting == true then
+            self._compacting = true
+        end
+        if state.isStreaming == true then
+            self._streaming = true
+        end
+    end
+    if self._streaming and not self._active_verb then
+        local verbs = Config.random_verbs()
+        self._active_verb = verbs[1]
+        self._done_verb = verbs[2]
+    end
+    if self._compacting then
+        self:set_status({ type = "compaction" })
+    elseif self._streaming then
+        self:set_status({ type = "agent", text = self._active_verb .. "…" })
+    else
+        self:set_status(nil)
     end
 end
 
@@ -1265,6 +1371,7 @@ function Chat:_clear_rendered_history()
 end
 
 function Chat:clear()
+    self._local_echoes = {}
     self._streaming = false
     self._compacting = false
     self:set_replaying(false)

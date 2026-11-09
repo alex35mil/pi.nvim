@@ -17,6 +17,25 @@
 ---@field execution pi.Execution How pi was launched and how its paths map to the host.
 ---@field commands pi.CommandCatalog Slash commands of this connection.
 ---@field session_dir? string Folder of pi's current session file, from `get_state`.
+---@field session_id? string pi's current session id, from the latest `get_state`.
+---@field _terminating? boolean `:PiStop` is running the attached pi's `terminate` command; a connector exit meanwhile is expected if it succeeds.
+---@field _exit_during_terminate? integer Exit code of a connector exit while `terminate` ran, handled if `terminate` fails.
+---@field _link? pi.AttachedLink Connection state of an attached pi; nil for a spawned one.
+---@field _had_messages? boolean The current conversation has messages: the last `get_state` reported some, or a `message_end` arrived after it.
+---@field _kept_dialogs? pi.KeptDialog[] Dialog requests kept from a lost connection, shown again on reattach to the same conversation.
+
+--- Connection state of an attached pi.
+---@alias pi.AttachedLink
+---| { state: "connected" }
+---| { state: "reconnecting", attempt: integer, started: integer, timer?: uv.uv_timer_t, previous: pi.PreviousConversation }
+---| { state: "gave_up", previous: pi.PreviousConversation } # retries ran out; an ordinary command creates a new connection
+---| { state: "ended" } # the connector reported that pi itself ended (exit 3)
+
+--- The conversation an attached tab was on when the connection was lost.
+---@class pi.PreviousConversation
+---@field session_id? string
+---@field session_file? string as pi sees it
+---@field had_messages boolean
 ---@field persistent? boolean False when pi reports no session file (e.g. `--no-session`); nil until known.
 ---@field rpc pi.Rpc
 ---@field chat pi.Chat
@@ -25,8 +44,26 @@
 ---@field system_errors pi.SystemErrorEntry[]
 ---@field changed_files table<string, true> Set of absolute file paths modified by edit/write tools during the current session.
 ---@field _pending_file_change_args? table<string, table> Pending tool args by tool call id for file-changing tools.
----@field _compaction_rebuilding? boolean True while compacted messages are being fetched/replayed.
----@field _compaction_event_queue? pi.RpcEvent[] Events received while compacted messages are being fetched/replayed.
+---@field _restore? pi.RestoreHold Records held while the chat is rebuilt from a snapshot.
+---@field _message? pi.LiveMessage The assistant message currently streaming, if pi.nvim is following one.
+---@field _restore_seq? integer Counter of restore boundaries.
+
+--- Records held from a restore boundary until the snapshot is applied.
+---@class pi.RestoreHold
+---@field held pi.RpcEvent[]
+---@field seq integer The latest boundary using this hold; an older snapshot that completes later is ignored.
+---@field boundaries pi.RestoreBoundary[] Boundaries this hold covers; one snapshot restores them all.
+
+--- A point after which the chat is rebuilt from a snapshot of pi.
+---@alias pi.RestoreBoundary
+---| { kind: "attach" } # a connector to an attached pi started; pi may be mid-run
+---| { kind: "switch", focus: boolean } # pi answered a session switch or new session with success; it may be another, running pi
+---| { kind: "compaction", will_retry: boolean } # compaction finished; the chat shows the compacted entries
+
+--- How the assistant message being streamed is shown.
+---@alias pi.LiveMessage
+---| { kind: "seen" } # its `message_start` arrived; deltas stream as usual
+---| { kind: "unseen" } # it started before a restore boundary; a placeholder stands in until `message_end`
 
 ---@class pi.SessionCreateOpts
 ---@field layout? pi.LayoutMode
@@ -46,8 +83,10 @@ local CommandCatalog = require("pi.cache.commands")
 local Workspace = require("pi.workspace")
 local Execution = require("pi.execution")
 local Descriptor = require("pi.execution.descriptor")
+local Spec = require("pi.execution.spec")
 local ExecState = require("pi.execution.state")
 local Tools = require("pi.ui.chat.tools")
+local Restore = require("pi.sessions.restore")
 
 ---@class pi.StartupSection
 ---@field header string
@@ -91,8 +130,11 @@ local ignored_events = {
 ---@type fun(session: pi.Session, result: table, will_retry: boolean)?
 local rebuild_after_compaction
 
----@type fun(session: pi.Session, flush_queue?: boolean, will_retry?: boolean)?
-local finish_compaction_rebuild
+---@type fun(session: pi.Session, held: pi.RpcEvent[])?
+local release_held
+
+---@type fun(session: pi.Session, cmd: pi.RpcCommand, opts: { failed: string, cancelled: string, fresh?: boolean, focus?: boolean, on_failed?: fun(err: string) })
+local switch_and_restore
 
 ---@param chat pi.Chat
 local function restore_active_agent_status(chat)
@@ -197,6 +239,9 @@ end
 ---@param session pi.Session
 ---@param state table
 local function record_session_storage(session, state)
+    local id = state.sessionId
+    session.session_id = type(id) == "string" and id ~= "" and id or nil
+    session._had_messages = type(state.messageCount) == "number" and state.messageCount > 0
     local file = state.sessionFile
     if type(file) == "string" and file ~= "" then
         -- As pi sees it; translated to the host when listing.
@@ -243,14 +288,14 @@ local function handle_event(session, msg)
     local t = msg.type
     local chat = session.chat
 
-    -- NOTE: This compaction-specific rebuild gate should become a small
-    -- transaction helper if other session rebuild flows need event buffering.
-    if session._compaction_rebuilding and t ~= "response" then
-        if t == "_process_exit" and finish_compaction_rebuild then
-            finish_compaction_rebuild(session, false)
+    -- While the chat is rebuilt from a snapshot, records wait until it's applied.
+    -- Command responses still reach their callbacks; a process exit ends the restore.
+    local restore = session._restore
+    if restore and t ~= "response" then
+        if t == "_process_exit" and release_held then
+            release_held(session, restore.held)
         else
-            session._compaction_event_queue = session._compaction_event_queue or {}
-            session._compaction_event_queue[#session._compaction_event_queue + 1] = msg
+            restore.held[#restore.held + 1] = msg
             return true
         end
     end
@@ -279,7 +324,21 @@ local function handle_event(session, msg)
     elseif t == "message_update" then
         local event = msg.assistantMessageEvent
         if event then
-            if event.type == "thinking_start" then
+            if session._message == nil or session._message.kind == "unseen" then
+                -- A message that started before a restore boundary: its earlier
+                -- deltas aren't known, so a placeholder stands in until message_end.
+                if session._message == nil then
+                    session._message = { kind = "unseen" }
+                    chat:begin_unseen_message()
+                end
+                -- Text that arrives now follows the placeholder; thinking is left out,
+                -- since its start is unknown too.
+                if event.type == "text_delta" then
+                    chat:on_unseen_delta(event.delta or "")
+                elseif event.type == "toolcall_end" and type(event.toolCall) == "table" then
+                    stash_file_tool_args(session, event.toolCall.name, event.toolCall.id, event.toolCall.arguments)
+                end
+            elseif event.type == "thinking_start" then
                 chat:on_thinking_start()
             elseif event.type == "thinking_delta" then
                 chat:on_thinking_delta(event.delta or "")
@@ -395,8 +454,20 @@ local function handle_event(session, msg)
             chat:on_system_error(msg.message --[[@as string]], { pad_top = true, pad_bottom = true })
         end
     elseif t == "_process_exit" then
+        local requested = msg.expected == true
+        local attached = session.execution:connection() == "attached"
+        if attached and not requested and session._terminating then
+            -- Expected if terminate succeeds; if it fails, this exit is handled
+            -- as an unrequested one then.
+            session._exit_during_terminate = msg.code
+            return true
+        end
         vim.schedule(function()
-            chat:on_process_exit(msg.code, msg.expected == true)
+            if attached and not requested then
+                M._on_connection_lost(session, msg.code)
+            else
+                chat:on_process_exit(msg.code, requested)
+            end
         end)
     elseif t == "response" then
         -- Callbacks reconcile the submitted input; command failures are also
@@ -406,10 +477,24 @@ local function handle_event(session, msg)
         end
         return false
     elseif t == "message_start" then
+        if type(msg.message) == "table" and msg.message.role == "assistant" then
+            session._message = { kind = "seen" }
+        end
         chat:on_message_start(msg)
     elseif t == "message_end" then
-        chat:on_message_end(msg)
+        session._had_messages = true
         local message = msg.message
+        if type(message) == "table" and message.role == "assistant" then
+            local live = session._message
+            session._message = nil
+            if live == nil then
+                chat:begin_unseen_message()
+            end
+            if live == nil or live.kind == "unseen" then
+                chat:finish_unseen_message(message)
+            end
+        end
+        chat:on_message_end(msg)
         if type(message) == "table" and (message.role == "assistant" or message.role == "toolResult") then
             M.refresh_stats(session)
             if message.role == "toolResult" then
@@ -440,29 +525,19 @@ local function handle_event(session, msg)
     return true
 end
 
+--- End a restore and apply its held records in order. A held record can start
+--- another restore (a compaction entry, for example); the remaining records
+--- are then held by that one.
 ---@param session pi.Session
----@param flush_queue? boolean default true
----@param will_retry? boolean
-finish_compaction_rebuild = function(session, flush_queue, will_retry)
-    local queued = session._compaction_event_queue or {}
-    session._compaction_event_queue = {}
-    session._compaction_rebuilding = false
-    session.chat:set_compacting(false)
-    restore_active_agent_status(session.chat)
-    if flush_queue ~= false then
-        session.chat:flush_compaction_queue(will_retry == true)
-    end
-
-    for i, queued_msg in ipairs(queued) do
-        if session._compaction_rebuilding then
-            local active_queue = session._compaction_event_queue or {}
-            for j = i, #queued do
-                active_queue[#active_queue + 1] = queued[j]
-            end
-            session._compaction_event_queue = active_queue
+---@param held pi.RpcEvent[]
+release_held = function(session, held)
+    session._restore = nil
+    for i, msg in ipairs(held) do
+        if session._restore then
+            vim.list_extend(session._restore.held, held, i)
             return
         end
-        handle_event(session, queued_msg)
+        handle_event(session, msg)
     end
 end
 
@@ -497,6 +572,309 @@ end
 ---@type table<pi.TabId, fun(session: pi.Session?)[]>
 local creating = {}
 
+---@type fun(session: pi.Session, boundary: pi.RestoreBoundary): integer
+local begin_restore
+
+---@type fun(session: pi.Session, seq: integer, done?: fun(state: table?, ok: boolean))
+local take_snapshot
+
+--- Notify about a stop that didn't end cleanly.
+---@param report pi.StopReport
+local function notify_stop_report(report)
+    local what = ({
+        exit = "exited with code " .. tostring(report.code),
+        timeout = "didn't stop in time and was force-stopped",
+        forced = "was force-stopped",
+    })[report.outcome] or report.outcome
+    local subject = report.connection == "attached" and "pi connector" or "pi launch"
+    local lines = {
+        ("%s `%s` %s (%s, %s)"):format(
+            subject,
+            report.command,
+            what,
+            report.workspace,
+            report.descriptor and ("descriptor " .. report.descriptor) or "process setting"
+        ),
+    }
+    vim.list_extend(lines, report.stderr)
+    Notify.warn(table.concat(lines, "\n"))
+end
+
+--- Stop a session's launch in the background and report a stop that didn't end cleanly.
+---@param session pi.Session
+local function stop_launch(session)
+    session.rpc:stop(function(report)
+        if report then
+            vim.schedule(function()
+                notify_stop_report(report)
+            end)
+        end
+    end)
+end
+
+--- Stop a pending automatic reconnect attempt.
+---@param session pi.Session
+local function cancel_reconnect(session)
+    local link = session._link
+    if link and link.state == "reconnecting" and link.timer then
+        pcall(link.timer.stop, link.timer)
+        if not link.timer:is_closing() then
+            link.timer:close()
+        end
+        link.timer = nil
+    end
+end
+
+--- Dialog requests carried from a released attached connection to the tab's
+--- next one (after `:PiDetach`, or a new connection once retries gave up).
+---@type table<pi.TabId, pi.KeptDialog[]>
+local carried_dialogs = {}
+
+--- Release a session: close what pi.nvim owns (a spawned pi, or an attached
+--- pi's connector), close the chat, and forget the session.
+---@param session pi.Session
+---@param opts? { keep_dialogs?: boolean } keep unanswered dialogs for the tab's next attached connection
+local function release(session, opts)
+    local tab = session.tab
+    if sessions[tab] ~= session then
+        return
+    end
+    cancel_reconnect(session)
+    if not session.rpc:is_running() and session.chat:has_draft() then
+        recovered_drafts[tab] = session.chat:snapshot_draft()
+    end
+    if opts and opts.keep_dialogs then
+        local kept = Attention.suspend(session, session.session_id, "detached")
+        vim.list_extend(kept, session._kept_dialogs or {})
+        carried_dialogs[tab] = #kept > 0 and kept or nil
+    else
+        carried_dialogs[tab] = nil
+    end
+    Attention.clear_session(session)
+    stop_launch(session)
+    session.chat:hide()
+    session.chat:clear()
+    sessions[tab] = nil
+end
+
+--- Retry delay before attempt `n` (0-based): 500 ms doubling to 10 s.
+---@param n integer
+---@return integer
+local function retry_delay(n)
+    return math.min(500 * 2 ^ n, 10000)
+end
+
+--- After an attach restore, show kept dialogs again if pi reports the same
+--- conversation they came from; drop them otherwise.
+---@param session pi.Session
+---@param kept pi.KeptDialog[]?
+---@param state table?
+local function resume_dialogs(session, kept, state)
+    if not kept or #kept == 0 then
+        return
+    end
+    local id = type(state) == "table" and state.sessionId or nil
+    ---@type pi.KeptDialog[]
+    local same = {}
+    for _, k in ipairs(kept) do
+        if k.session_id ~= nil and k.session_id == id then
+            same[#same + 1] = k
+        end
+    end
+    Attention.resume(session, same)
+end
+
+---@param state table?
+---@return boolean
+local function empty_and_idle(state)
+    return type(state) == "table"
+        and state.messageCount == 0
+        and (state.pendingMessageCount or 0) == 0
+        and state.isStreaming ~= true
+        and state.isCompacting ~= true
+end
+
+--- An automatic reconnect reached pi: return to the previous conversation
+--- when it had messages and the conversation reached is empty and idle.
+---@param session pi.Session
+---@param previous pi.PreviousConversation
+---@param state table?
+local function return_to_previous(session, previous, state)
+    local id = type(state) == "table" and state.sessionId or nil
+    if id ~= nil and id == previous.session_id then
+        return
+    end
+    if not previous.had_messages then
+        return
+    end
+    local file = previous.session_file
+    if empty_and_idle(state) and file then
+        switch_and_restore(session, { type = "switch_session", sessionPath = file }, {
+            failed = "Failed to switch session",
+            cancelled = "Session switch was cancelled",
+            on_failed = function(err)
+                Notify.warn(
+                    ("Reconnected, but couldn't return to the previous conversation %s: %s"):format(file, err)
+                )
+            end,
+        })
+        return
+    end
+    Notify.warn(
+        ("Reconnected to a conversation another frontend is using; the previous one (%s) wasn't restored. :PiResume brings it back."):format(
+            tostring(file)
+        )
+    )
+end
+
+---@type fun(session: pi.Session)
+local attempt_reconnect
+
+--- Schedule the next automatic reconnect attempt, or give up.
+---@param session pi.Session
+local function schedule_reconnect(session)
+    local link = session._link
+    if not link or link.state ~= "reconnecting" then
+        return
+    end
+    local reconnect = session.execution.process.reconnect
+    local give_up = reconnect and reconnect.give_up_after_ms
+    if give_up ~= false and give_up ~= nil and vim.uv.now() - link.started >= give_up then
+        session._link = { state = "gave_up", previous = link.previous }
+        session.chat:on_system_error(
+            "pi.nvim stopped trying to reconnect. :Pi (or sending a prompt) connects again.",
+            { pad_top = true, pad_bottom = true }
+        )
+        return
+    end
+    local timer = assert(vim.uv.new_timer())
+    link.timer = timer
+    timer:start(retry_delay(link.attempt), 0, vim.schedule_wrap(function()
+        if not timer:is_closing() then
+            timer:close()
+        end
+        if session._link ~= link or sessions[session.tab] ~= session then
+            return
+        end
+        link.timer = nil
+        link.attempt = link.attempt + 1
+        attempt_reconnect(session)
+    end))
+end
+
+attempt_reconnect = function(session)
+    local link = session._link
+    if not link or link.state ~= "reconnecting" then
+        return
+    end
+    if not session.rpc:start() then
+        schedule_reconnect(session)
+        return
+    end
+    local previous = link.previous
+    local seq = begin_restore(session, { kind = "attach" })
+    session.chat:show_loading()
+    take_snapshot(session, seq, function(state, ok)
+        if session._link ~= link then
+            return
+        end
+        -- The connector is running: the tab is connected again, even when the
+        -- snapshot couldn't be read (the error is in the chat).
+        session._link = { state = "connected" }
+        local kept = session._kept_dialogs
+        session._kept_dialogs = nil
+        if not ok or type(state) ~= "table" then
+            Notify.warn("Reconnected to pi, but couldn't read its state; the previous conversation wasn't checked")
+            return
+        end
+        Notify.info("Reconnected to pi")
+        -- Kept dialogs are checked against the conversation reached first,
+        -- before any switch back.
+        resume_dialogs(session, kept, state)
+        return_to_previous(session, previous, state)
+    end)
+end
+
+--- The connector of an attached pi exited without being asked.
+---@param session pi.Session
+---@param code integer
+function M._on_connection_lost(session, code)
+    if sessions[session.tab] ~= session then
+        return
+    end
+    local link = session._link or { state = "connected" }
+    local chat = session.chat
+    if code == 3 then
+        -- The pi behind the connector ended: nothing to reconnect to.
+        cancel_reconnect(session)
+        session._link = { state = "ended" }
+        session._kept_dialogs = nil
+        Attention.clear_session(session)
+        chat:on_process_exit(code, true)
+        chat:on_system_error(
+            ("The attached pi ended (connector `%s` exited with code 3). Run :PiDetach, then :Pi to start again."):format(
+                session.rpc:command_name()
+            ),
+            { pad_top = true, pad_bottom = true }
+        )
+        return
+    end
+    ---@type pi.PreviousConversation
+    local previous
+    if link.state == "reconnecting" or link.state == "gave_up" then
+        previous = link.previous
+    else
+        previous = {
+            session_id = session.session_id,
+            session_file = session.execution:session_file(),
+            had_messages = session._had_messages == true,
+        }
+        local kept = Attention.suspend(session, session.session_id, "lost")
+        session._kept_dialogs = vim.list_extend(session._kept_dialogs or {}, kept)
+        chat:on_process_exit(code, true)
+    end
+    local reconnect = session.execution.process.reconnect
+    if link.state == "reconnecting" then
+        schedule_reconnect(session)
+        return
+    end
+    if reconnect and reconnect.enabled then
+        session._link = { state = "reconnecting", attempt = 0, started = vim.uv.now(), previous = previous }
+        chat:on_system_error(
+            ("Lost the connection to pi (connector `%s` exited with code %d); reconnecting…"):format(
+                session.rpc:command_name(),
+                code
+            ),
+            { pad_top = true, pad_bottom = true }
+        )
+        schedule_reconnect(session)
+    else
+        session._link = { state = "gave_up", previous = previous }
+        chat:on_system_error(
+            ("Lost the connection to pi (connector `%s` exited with code %d). :Pi connects again."):format(
+                session.rpc:command_name(),
+                code
+            ),
+            { pad_top = true, pad_bottom = true }
+        )
+    end
+end
+
+--- Whether an attached session needs a new connection before it can be used.
+---@param session pi.Session
+---@return boolean
+local function gave_up(session)
+    return session._link ~= nil and session._link.state == "gave_up"
+end
+
+--- Whether the tab's session gave up reconnecting, so an ordinary command
+--- should create a new connection (`get_or_create` does).
+---@param session pi.Session
+---@return boolean
+function M.needs_new_connection(session)
+    return gave_up(session)
+end
+
 --- Start a session for a tab with a resolved execution.
 ---@param tab pi.TabId
 ---@param workspace string
@@ -519,11 +897,38 @@ local function start_session(tab, workspace, execution, opts)
             return rpc:send(msg, callback)
         end,
     }
+    ---@type pi.Session
+    local session
 
     local chat = Chat.new(tab, layout, agent)
 
-    ---@type pi.Session
-    local session = {
+    agent.ready = function()
+        local link = session._link
+        if not link or link.state == "connected" then
+            return true
+        end
+        local state = link.state
+        if state == "reconnecting" then
+            Notify.info("Not sent: pi.nvim is reconnecting to pi; your message stays in the prompt")
+        elseif state == "gave_up" then
+            Notify.info("Not sent: connecting to pi again; send your message once it's back")
+            vim.schedule(function()
+                vim.api.nvim_set_current_tabpage(tab)
+                M.get_or_create({}, function(created)
+                    if created then
+                        created.chat:ensure_shown_and_focus_prompt()
+                    end
+                end)
+            end)
+        elseif state == "ended" then
+            Notify.info("Not sent: the attached pi ended; run :PiDetach, then :Pi")
+        else
+            error("unknown connection state: " .. tostring(state))
+        end
+        return false
+    end
+
+    session = {
         tab = tab,
         workspace = workspace,
         execution = execution,
@@ -548,27 +953,50 @@ local function start_session(tab, workspace, execution, opts)
         recovered_drafts[tab] = nil
     end
 
-    -- Fetch available /commands for completion, highlighting, and system info
-    fetch_commands_and_show_startup_block(session)
+    local kind = execution:connection()
+    if kind == "attached" then
+        -- An attached pi may already have a conversation and be running. Hold
+        -- its records until the chat is restored from its snapshot.
+        session._link = { state = "connected" }
+        local carried = carried_dialogs[tab]
+        carried_dialogs[tab] = nil
+        local seq = begin_restore(session, { kind = "attach" })
+        chat:show_loading()
+        take_snapshot(session, seq, function(state, ok)
+            if ok then
+                resume_dialogs(session, carried, state)
+            end
+        end)
+    elseif kind == "spawned" then
+        -- A launched pi never asked a kept question, even when it resumes the
+        -- same conversation.
+        carried_dialogs[tab] = nil
+        -- Fetch available /commands for completion, highlighting, and system info
+        fetch_commands_and_show_startup_block(session)
 
-    -- Fetch initial state for status line (model, thinking level)
-    M.refresh_state(session)
+        -- Fetch initial state for status line (model, thinking level)
+        M.refresh_state(session)
+    else
+        error("unknown connection kind: " .. tostring(kind))
+    end
 
     return session
 end
 
---- Ask before starting local pi in a workspace that used a descriptor.
+--- Ask before using the global `process` setting in a workspace that used a descriptor.
 ---@param workspace string
 ---@param cb fun(confirmed: boolean)
 local function confirm_local_after_descriptor(workspace, cb)
+    local cmd = Spec.display(Spec.global(workspace).process.cmd)
     Dialog.select({
         title = "pi descriptor missing",
         message = "This workspace used a pi descriptor before, but it's gone:\n"
             .. Descriptor.path(workspace)
-            .. "\n\nStart pi locally on this machine instead?",
-        options = { "Start local Pi", "Cancel" },
+            .. "\n\nRun the `process` setting's command on this machine instead?\n"
+            .. cmd,
+        options = { "Run it", "Cancel" },
     }, function(choice)
-        cb(choice == "Start local Pi")
+        cb(choice == "Run it")
     end)
 end
 
@@ -585,6 +1013,12 @@ function M.get_or_create(opts, cb)
     local tab = current_tab()
 
     local session = sessions[tab]
+    if session and gave_up(session) then
+        -- Retries ran out: a new connection resolves the spec again (descriptor
+        -- or global) under the normal trust rules. Unanswered dialogs carry over.
+        release(session, { keep_dialogs = true })
+        session = nil
+    end
     if session then
         cb(session)
         return
@@ -617,8 +1051,8 @@ function M.get_or_create(opts, cb)
 
     Descriptor.resolve(workspace, function(result)
         local kind = result.kind
-        if kind == "local" then
-            launch(Execution.new_local(workspace))
+        if kind == "global" then
+            launch(Execution.new_global(workspace))
         elseif kind == "descriptor" then
             launch(Execution.new_descriptor(workspace, result.spec, result.path))
         elseif kind == "missing_after_use" then
@@ -633,7 +1067,7 @@ function M.get_or_create(opts, cb)
                     finish(nil)
                     return
                 end
-                launch(Execution.new_local(workspace))
+                launch(Execution.new_global(workspace))
             end)
         elseif kind == "cancelled" then
             Notify.info("pi wasn't started: the workspace descriptor isn't trusted")
@@ -647,55 +1081,148 @@ function M.get_or_create(opts, cb)
     end)
 end
 
---- Notify about a stop that didn't end cleanly.
----@param report pi.StopReport
-local function notify_stop_report(report)
-    local what = ({
-        exit = "exited with code " .. tostring(report.code),
-        timeout = "didn't stop in time and was force-stopped",
-        forced = "was force-stopped",
-    })[report.outcome] or report.outcome
-    local lines = {
-        ("pi launch `%s` %s (%s, %s)"):format(
-            report.command,
-            what,
-            report.workspace,
-            report.descriptor and ("descriptor " .. report.descriptor) or "local pi"
-        ),
-    }
-    vim.list_extend(lines, report.stderr)
-    Notify.warn(table.concat(lines, "\n"))
+--- What pi.nvim owns for a tab's pi: `"spawned"` (the pi itself), `"attached"`
+--- (only a connector to a pi your tooling runs), or nil when the tab has none.
+---@param tab? pi.TabId|0 default: current tab
+---@return pi.ConnectionKind?
+function M.connection(tab)
+    local session = sessions[(tab == nil or tab == 0) and current_tab() or tab]
+    return session and session.execution:connection() or nil
 end
 
---- Stop a session's launch in the background and report a stop that didn't end cleanly.
+--- Confirmation before running an attached pi's `terminate`, replaceable for tests.
+---@param workspace string
+---@param cmd string[]
+---@param cb fun(confirmed: boolean)
+function M._confirm_terminate(workspace, cmd, cb)
+    Dialog.confirm({
+        title = "Stop the attached pi?",
+        message = ("This pi runs outside Neovim. Stop it with:\n%s\n\nin %s"):format(Spec.display(cmd), workspace),
+    }, cb)
+end
+
+--- End an attached pi through its `terminate` command, then detach.
 ---@param session pi.Session
-local function stop_launch(session)
-    session.rpc:stop(function(report)
-        if report then
+local function terminate(session)
+    local process = session.execution.process
+    if process.kind ~= "attached" then
+        error("terminate needs an attached connection")
+    end
+    if session._terminating then
+        Notify.info("Already stopping the attached pi")
+        return
+    end
+    local template = process.terminate
+    if not template then
+        Notify.warn(
+            "This pi runs outside Neovim and its connection has no `terminate` command, so pi.nvim can't stop it. Use :PiDetach to disconnect."
+        )
+        return
+    end
+    local cmd, missing = Spec.fill_session(template, {
+        session_id = session.session_id,
+        session_file = session.execution:session_file(),
+    })
+    if not cmd then
+        Notify.warn(
+            ("Can't stop the attached pi yet: `${{%s}}` in its `terminate` command isn't known until pi reports its session"):format(
+                tostring(missing)
+            )
+        )
+        return
+    end
+    M._confirm_terminate(session.workspace, cmd, function(confirmed)
+        if not confirmed or sessions[session.tab] ~= session or session._terminating then
+            return
+        end
+        session._terminating = true
+        -- No reconnect attempt runs while terminate does.
+        local was_reconnecting = session._link ~= nil and session._link.state == "reconnecting"
+        cancel_reconnect(session)
+        session._exit_during_terminate = nil
+        local function resume_retries()
+            local code = session._exit_during_terminate
+            session._exit_during_terminate = nil
+            if code ~= nil and not session.rpc:is_running() then
+                -- The connector exited while terminate ran, and terminate failed:
+                -- that exit counts as unrequested (pi ended, or a lost connection).
+                M._on_connection_lost(session, code)
+                return
+            end
+            if was_reconnecting and session._link and session._link.state == "reconnecting" then
+                schedule_reconnect(session)
+            end
+        end
+        local grace = session.rpc:grace_ms()
+        local ok, err = pcall(vim.system, cmd, {
+            cwd = session.workspace,
+            env = process.env,
+            text = true,
+            timeout = grace,
+        }, function(res)
             vim.schedule(function()
-                notify_stop_report(report)
+                if res.code == 0 then
+                    release(session)
+                    return
+                end
+                session._terminating = nil
+                resume_retries()
+                local tail = vim.split(vim.trim(res.stderr or ""), "\n", { plain = true })
+                if #tail > 5 then
+                    tail = vim.list_slice(tail, #tail - 4)
+                end
+                local what = res.code == 124 and ("didn't finish within %d ms"):format(grace)
+                    or ("exited with code %d"):format(res.code)
+                local lines = { ("Stopping the attached pi failed: `%s` %s"):format(Spec.display(cmd), what) }
+                vim.list_extend(lines, tail)
+                Notify.error(table.concat(lines, "\n"))
             end)
+        end)
+        if not ok then
+            session._terminating = nil
+            resume_retries()
+            Notify.error(("Stopping the attached pi failed: couldn't run `%s`: %s"):format(Spec.display(cmd), tostring(err)))
         end
     end)
 end
 
---- Remove and clean up a session for the current tab.
+--- End the current tab's pi: stop a spawned pi, or stop an attached pi through
+--- its `terminate` command after a confirmation.
 function M.stop()
-    local tab = current_tab()
-    local session = sessions[tab]
+    local session = sessions[current_tab()]
     if not session then
         return
     end
-
-    if not session.rpc:is_running() and session.chat:has_draft() then
-        recovered_drafts[tab] = session.chat:snapshot_draft()
+    local kind = session.execution:connection()
+    if kind == "spawned" then
+        release(session)
+    elseif kind == "attached" then
+        local link = session._link
+        if link and link.state == "ended" then
+            -- pi already ended; only the tab is left to close.
+            release(session)
+        else
+            terminate(session)
+        end
+    else
+        error("unknown connection kind: " .. tostring(kind))
     end
-    Attention.clear_session(session)
-    stop_launch(session)
-    session.chat:hide()
-    session.chat:clear()
+end
 
-    sessions[tab] = nil
+--- Disconnect the current tab from an attached pi, leaving it running.
+function M.detach()
+    local session = sessions[current_tab()]
+    if not session then
+        return
+    end
+    local kind = session.execution:connection()
+    if kind == "attached" then
+        release(session, { keep_dialogs = true })
+    elseif kind == "spawned" then
+        Notify.warn("This pi was started by pi.nvim and would stop if it were detached; use :PiStop to stop it")
+    else
+        error("unknown connection kind: " .. tostring(kind))
+    end
 end
 
 ---@param session pi.Session
@@ -704,52 +1231,22 @@ local function start_new_session(session)
         return
     end
 
-    Attention.begin_session_transition(session)
-    local sent = session.rpc:send({ type = "abort" }, function(abort_res)
-        if not abort_res.success then
-            vim.schedule(function()
-                Attention.end_session_transition(session, false)
-                Notify.error(abort_res.error or "Failed to abort current session")
-            end)
-            return
-        end
-        local sent_new = session.rpc:send({ type = "new_session" }, function(res)
-            local data = res.data or {}
-            vim.schedule(function()
-                if not res.success then
-                    Attention.end_session_transition(session, false)
-                    Notify.error(res.error or "Failed to start new session")
-                    return
-                end
-                if data.cancelled then
-                    Attention.end_session_transition(session, false)
-                    Notify.warn("New session was cancelled")
-                    return
-                end
-                Attention.end_session_transition(session, true)
-                session.startup_announcements = {}
-                session.system_errors = {}
-                session.changed_files = {}
-                session._pending_file_change_args = nil
-                session.chat:clear()
-                fetch_commands_and_show_startup_block(session)
-                M.refresh_state(session)
-            end)
-        end)
-        if not sent_new then
-            vim.schedule(function()
-                Attention.end_session_transition(session, false)
-            end)
-        end
-    end)
-    if not sent then
-        Attention.end_session_transition(session, false)
-    end
+    -- pi's new_session settles a run in the same pi itself; no separate abort,
+    -- which a bridge would pass to another frontend's run on a shared pi.
+    switch_and_restore(session, { type = "new_session" }, {
+        failed = "Failed to start new session",
+        cancelled = "New session was cancelled",
+        fresh = true,
+    })
 end
 
 --- Start a new conversation in the current tab's session.
 function M.new_session()
     local session = M.get()
+    if session and gave_up(session) then
+        Notify.info("Not connected to pi; :Pi connects again")
+        return
+    end
     if not session or not session.rpc:is_running() then
         return
     end
@@ -865,6 +1362,9 @@ local function replay_entries(session, data)
                     if tc.args then
                         tool_call_args[tc.id] = tc.args
                     end
+                    -- A call whose result isn't in the entries may still be running;
+                    -- its live end then records the file change.
+                    stash_file_tool_args(session, tc.name, tc.id, tc.args)
                 end
                 if #tool_calls == 0 then
                     session.chat:on_agent_end()
@@ -883,6 +1383,9 @@ local function replay_entries(session, data)
             if tc_args then
                 track_changed_file(session, tc_args)
             end
+            if session._pending_file_change_args then
+                session._pending_file_change_args[tool_call_id] = nil
+            end
             track_nested_files(session, msg)
         elseif role == "compactionSummary" then
             if pending_agent_end then
@@ -899,110 +1402,247 @@ local function replay_entries(session, data)
     session.chat:set_replaying(false)
 end
 
+--- Begin holding records for a restore boundary. Overlapping boundaries
+--- share one hold and are all restored by the latest snapshot.
+---@param session pi.Session
+---@param boundary pi.RestoreBoundary
+---@return integer seq
+begin_restore = function(session, boundary)
+    session._restore_seq = (session._restore_seq or 0) + 1
+    local restore = session._restore
+    if restore then
+        restore.seq = session._restore_seq
+        restore.boundaries[#restore.boundaries + 1] = boundary
+    else
+        session._restore = { held = {}, seq = session._restore_seq, boundaries = { boundary } }
+    end
+    return session._restore_seq
+end
+
+--- The hold of restore `seq`, or nil when a later boundary took it over or it ended.
+---@param session pi.Session
+---@param seq integer
+---@return pi.RestoreHold?
+local function current_restore(session, seq)
+    local restore = session._restore
+    if restore and restore.seq == seq then
+        return restore
+    end
+    return nil
+end
+
+--- What a set of boundaries asks of the rebuild.
+---@param boundaries pi.RestoreBoundary[]
+---@return { switch: boolean, focus: boolean, compaction: boolean, flush: boolean, will_retry: boolean }
+local function summarize(boundaries)
+    local out = { switch = false, focus = false, compaction = false, flush = false, will_retry = false }
+    for _, b in ipairs(boundaries) do
+        local kind = b.kind
+        if kind == "switch" then
+            out.switch = true
+            out.focus = out.focus or b.focus
+        elseif kind == "attach" then
+            -- A fresh chat on a pi that may already have a conversation; the
+            -- startup block and commands come with the snapshot.
+            out.switch = true
+        elseif kind == "compaction" then
+            out.compaction = true
+            out.will_retry = out.will_retry or b.will_retry
+            out.flush = out.flush or not b.will_retry
+        else
+            error("unknown restore boundary: " .. tostring(kind))
+        end
+    end
+    return out
+end
+
+--- Finish a restore that couldn't take a snapshot: report it, keep the chat
+--- usable, and apply the held records as they are.
+---@param session pi.Session
+---@param seq integer
+---@param err string
+local function fail_restore(session, seq, err)
+    local restore = current_restore(session, seq)
+    if not restore then
+        return
+    end
+    local what = summarize(restore.boundaries)
+    Notify.error(err)
+    session.chat:clear_placeholder()
+    session.chat:on_error(err, { pad_top = true, pad_bottom = true })
+    if what.compaction then
+        session.chat:set_compacting(false)
+        restore_active_agent_status(session.chat)
+        if what.flush then
+            session.chat:flush_compaction_queue(false)
+        end
+    end
+    if what.focus then
+        session.chat:ensure_shown_and_focus_prompt()
+    end
+    release_held(session, restore.held)
+end
+
+--- Rebuild the chat from a snapshot of pi (`get_state`, `get_entries`), then
+--- apply the records held since the boundary minus what the snapshot shows.
+--- Used at every boundary after which pi may already be running or may be a
+--- different process.
+---@param session pi.Session
+---@param seq integer
+take_snapshot = function(session, seq, done)
+    -- `done` runs once the restore has finished, with `ok = false` when the
+    -- snapshot couldn't be taken (the connection is still usable).
+    ---@type table?
+    local state = nil
+    M.refresh_state(session, function(ok, data)
+        if ok then
+            state = data
+        end
+    end)
+    local sent = session.rpc:send({ type = "get_entries" }, function(res)
+        vim.schedule(function()
+            local restore = current_restore(session, seq)
+            if not restore then
+                return
+            end
+            if not res.success then
+                fail_restore(session, seq, res.error or "Failed to load session entries")
+                if done then
+                    done(state, false)
+                end
+                return
+            end
+            local data = res.data or {}
+            local what = summarize(restore.boundaries)
+            local entries = data.entries or {}
+            local index = Restore.index(entries)
+
+            local function rebuild(commands)
+                if not current_restore(session, seq) then
+                    return
+                end
+                session.changed_files = {}
+                session._pending_file_change_args = nil
+                session._message = nil
+                if what.switch then
+                    session.chat:clear()
+                else
+                    session.chat:clear_for_compaction_rebuild()
+                end
+                show_startup_block(session, commands)
+                replay_entries(session, data)
+                if what.compaction then
+                    session.chat:set_compacting(false)
+                end
+                session.chat:resume_activity(state)
+                if what.compaction and what.flush then
+                    session.chat:flush_compaction_queue(false)
+                end
+                if what.focus then
+                    session.chat:ensure_shown_and_focus_prompt()
+                end
+                local apply, dropped_user = Restore.filter(restore.held, index)
+                -- A user message the snapshot already shows won't arrive again; if it
+                -- was this chat's own prompt, stop waiting for its echo.
+                session.chat:drop_local_echoes(dropped_user)
+                release_held(session, apply)
+                if done then
+                    done(state, true)
+                end
+            end
+
+            if what.switch then
+                -- A switch may reach another pi with other commands.
+                session.commands:fetch(session.rpc, rebuild)
+            else
+                rebuild(session.commands:list())
+            end
+        end)
+    end)
+    if not sent then
+        vim.schedule(function()
+            fail_restore(session, seq, "Failed to load session entries")
+            if done then
+                done(state, false)
+            end
+        end)
+    end
+end
+
 ---@param session pi.Session
 ---@param _result table
 ---@param will_retry boolean
 rebuild_after_compaction = function(session, _result, will_retry)
-    session._compaction_rebuilding = true
-    session._compaction_event_queue = {}
     if will_retry then
         session.chat:flush_compaction_queue(true)
     end
+    take_snapshot(session, begin_restore(session, { kind = "compaction", will_retry = will_retry }))
+end
 
-    local sent = session.rpc:send({ type = "get_entries" }, function(res)
+--- Send a command that replaces the conversation (`switch_session`,
+--- `new_session`), then restore the chat from what pi reports. Records are held
+--- from the moment the command is sent: a bridge may answer by moving the
+--- connection to another pi, which can be mid-run.
+---@param session pi.Session
+---@param cmd pi.RpcCommand
+---@param opts { failed: string, cancelled: string, fresh?: boolean, focus?: boolean, on_failed?: fun(err: string) }
+switch_and_restore = function(session, cmd, opts)
+    if sessions[session.tab] ~= session or not session.rpc:is_running() then
+        return
+    end
+    Attention.begin_session_transition(session)
+    local sent = session.rpc:send(cmd, function(res)
+        -- Runs while the response is dispatched, before any later record, so
+        -- the hold starts exactly at the boundary. Records before the response
+        -- belong to the conversation being replaced and were handled live.
+        local switched = res.success == true and not (res.data or {}).cancelled
+        local seq = switched and begin_restore(session, { kind = "switch", focus = opts.focus == true }) or nil
         vim.schedule(function()
             if not res.success then
-                local err = res.error or "Failed to load compacted session entries"
-                Notify.error(err)
-                session.chat:on_error(err, { pad_top = true, pad_bottom = true })
-                finish_compaction_rebuild(session, not will_retry, will_retry)
+                Attention.end_session_transition(session, false)
+                if opts.on_failed then
+                    opts.on_failed(res.error or opts.failed)
+                else
+                    Notify.error(res.error or opts.failed)
+                end
                 return
             end
-
-            local data = res.data or {}
-            session.changed_files = {}
-            session._pending_file_change_args = nil
-            session.chat:clear_for_compaction_rebuild()
-            show_startup_block(session, session.commands:list())
-            replay_entries(session, data)
-            M.refresh_state(session)
-            vim.schedule(function()
-                finish_compaction_rebuild(session, not will_retry, will_retry)
-            end)
+            if not seq then
+                Attention.end_session_transition(session, false)
+                Notify.warn(opts.cancelled)
+                return
+            end
+            Attention.end_session_transition(session, true)
+            if opts.fresh then
+                session.startup_announcements = {}
+                session.system_errors = {}
+            end
+            if not current_restore(session, seq) then
+                return
+            end
+            session.chat:clear()
+            session.chat:show_loading()
+            take_snapshot(session, seq)
         end)
     end)
     if not sent then
-        finish_compaction_rebuild(session, false)
-    end
-end
-
---- Load a session by path: switch_session -> clear chat -> get_entries -> replay.
----@param session pi.Session
----@param session_path string
-local function load_session(session, session_path)
-    Attention.begin_session_transition(session)
-
-    local sent_switch = session.rpc:send({ type = "switch_session", sessionPath = session_path }, function(msg)
-        local data = msg.data or {}
-        if not msg.success then
-            vim.schedule(function()
-                Attention.end_session_transition(session, false)
-                Notify.error(msg.error or "Failed to switch session")
-            end)
-            return
-        end
-        if data.cancelled then
-            vim.schedule(function()
-                Attention.end_session_transition(session, false)
-                Notify.warn("Session switch was cancelled")
-            end)
-            return
-        end
-
-        Attention.end_session_transition(session, true)
-        M.refresh_state(session)
-
-        vim.schedule(function()
-            session.changed_files = {}
-            session._pending_file_change_args = nil
-            session.chat:clear()
-            session.chat:show_loading()
-        end)
-
-        local sent_entries = session.rpc:send({ type = "get_entries" }, function(res)
-            vim.schedule(function()
-                session.chat:clear_placeholder()
-                if not res.success then
-                    local err = res.error or "Failed to load session entries"
-                    Notify.error(err)
-                    session.chat:on_error(err, { pad_top = true, pad_bottom = true })
-                    session.chat:ensure_shown_and_focus_prompt()
-                    return
-                end
-
-                local data = res.data or {}
-                -- Fetch commands, show startup block, then replay.
-                session.commands:fetch(session.rpc, function(commands)
-                    show_startup_block(session, commands)
-                    replay_entries(session, data)
-                    session.chat:ensure_shown_and_focus_prompt()
-                end)
-            end)
-        end)
-        if not sent_entries then
-            vim.schedule(function()
-                session.chat:clear()
-                Notify.error("Failed to load session entries")
-                session.chat:on_error("Failed to load session entries", { pad_top = true, pad_bottom = true })
-                session.chat:ensure_shown_and_focus_prompt()
-            end)
-        end
-    end)
-
-    if not sent_switch then
         Attention.end_session_transition(session, false)
     end
 end
+
+--- Load a session by path: switch_session, then restore the chat from pi.
+---@param session pi.Session
+---@param session_path string
+local function load_session(session, session_path)
+    switch_and_restore(session, { type = "switch_session", sessionPath = session_path }, {
+        failed = "Failed to switch session",
+        cancelled = "Session switch was cancelled",
+        focus = true,
+    })
+end
+
+--- Session switch, reachable for tests.
+M._load_session = load_session
 
 --- A saved session in the picker or for continue. `path` is the session file
 --- as pi sees it (what `switch_session` receives); `file` is the same file
@@ -1121,6 +1761,10 @@ end
 ---@param opts? pi.SessionCreateOpts
 function M.continue_session(opts)
     local existing = M.get()
+    if existing and gave_up(existing) then
+        -- Retries ran out; this command creates a new connection, which it owns.
+        existing = nil
+    end
     M.get_or_create(opts, function(session)
         if not session then
             return
@@ -1161,6 +1805,10 @@ end
 ---@param opts? pi.SessionCreateOpts
 function M.resume_session(opts)
     local existing = M.get()
+    if existing and gave_up(existing) then
+        -- Retries ran out; this command creates a new connection, which it owns.
+        existing = nil
+    end
     M.get_or_create(opts, function(session)
         if not session then
             return
@@ -1303,9 +1951,15 @@ function M.cleanup()
     end
     for tab, session in pairs(sessions) do
         if not valid_tabs[tab] then
+            cancel_reconnect(session)
             Attention.clear_session(session)
             stop_launch(session)
             sessions[tab] = nil
+        end
+    end
+    for tab in pairs(carried_dialogs) do
+        if not valid_tabs[tab] then
+            carried_dialogs[tab] = nil
         end
     end
     for tab in pairs(recovered_drafts) do

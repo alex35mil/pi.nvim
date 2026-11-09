@@ -67,7 +67,11 @@ function NvimCommands.setup()
 
     vim.api.nvim_create_user_command("PiStop", function()
         Pi.stop()
-    end, { desc = "Stop π process and close chat" })
+    end, { desc = "Stop π (an attached π through its terminate command) and close chat" })
+
+    vim.api.nvim_create_user_command("PiDetach", function()
+        Pi.detach()
+    end, { desc = "Disconnect from an attached π, leaving it running" })
 
     vim.api.nvim_create_user_command("PiAttention", function()
         Pi.attention()

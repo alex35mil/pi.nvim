@@ -1,5 +1,5 @@
 local Compat = require("pi.compat")
-local Cli = require("pi.cli")
+local Spec = require("pi.execution.spec")
 
 local M = {}
 
@@ -23,9 +23,23 @@ end
 M.check = function()
     vim.health.start("pi.nvim")
 
-    local bin = Cli.bin()
+    -- The spec as a tab in the current directory would run it, with placeholders filled.
+    local process = Spec.global(vim.fn.getcwd()).process
+    local bin = process.cmd[1]
     local bin_found = vim.fn.executable(bin) == 1
-    if bin_found then
+    -- A spawned command whose executable is pi itself (with any extra pi
+    -- arguments) can be asked for its version; a wrapper or a connector to an
+    -- attached pi can't.
+    local default_cmd = process.kind == "spawned" and vim.fs.basename(bin) == "pi"
+    if bin_found and not default_cmd then
+        vim.health.ok("`" .. bin .. "` executable found")
+        vim.health.info(
+            ("`process` runs a custom %s command (`%s`); pi's version behind it isn't checked"):format(
+                process.kind == "attached" and "connector" or "launch",
+                Spec.display(process.cmd)
+            )
+        )
+    elseif bin_found then
         vim.health.ok("`" .. bin .. "` executable found")
 
         local version, err = get_pi_version(bin)
@@ -71,7 +85,7 @@ M.check = function()
         end
     else
         vim.health.error("`" .. bin .. "` executable not found in PATH", {
-            "Install pi from https://pi.dev",
+            default_cmd and "Install pi from https://pi.dev" or "Check `process.cmd` in your pi.nvim setup()",
         })
     end
 
