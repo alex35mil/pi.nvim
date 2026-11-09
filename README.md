@@ -1107,7 +1107,7 @@ Here's the part to understand before the rest of this section makes sense: **pi 
 
 In other words, **without a permission extension, there is no diff review**. The agent will apply edits directly, and you'll see them in the chat history as completed tool calls, not as reviewable diffs.
 
-If you want a drop-in, fully-featured solution, use my reference implementation: [**alex35mil/pi-af/extensions/permissions**](https://github.com/alex35mil/pi-af/tree/main/extensions/permissions). It is very similar to Claude Code's allow / ask / deny model with glob rules, per-tool argument matching, skill-derived allowances, bash argument splitting and redirection safety, and an auto-accept toggle.
+If you want a drop-in, fully-featured solution, use my reference implementation: [**alex35mil/piton/pi/extensions/permissions**](https://github.com/alex35mil/piton/tree/main/pi/extensions/permissions). It is very similar to Claude Code's allow / ask / deny model with glob rules, per-tool argument matching, skill-derived allowances, bash argument splitting and redirection safety, and an auto-accept toggle.
 
 If you'd rather roll your own, here's a minimal extension that wraps the built-in `edit` and `write` tools, routes them through pi.nvim's diff review UI, and returns successful results for already-applied changes. This works for direct calls and nested calls made through codemode.
 
@@ -1876,7 +1876,7 @@ If your callback covers it, set `process.stop.report_failures_on_start = false` 
 
 ### Extensions & custom rendering
 
-pi extensions are small TypeScript (or Node-compatible) modules that the backend loads at session start. They can intercept tool calls, register slash commands, expose keybindings, surface UI to the user, and inject arbitrary content into the chat. The permission extension in [Diff review](#diff-review) is one example; the `rules:load` / progressive-disclosure hooks in [pi-af](https://github.com/alex35mil/pi-af) are others.
+pi extensions are small TypeScript (or Node-compatible) modules that the backend loads at session start. They can intercept tool calls, register slash commands, expose keybindings, surface UI to the user, and inject arbitrary content into the chat. The permission extension in [Diff review](#diff-review) is one example; the `rules:load` / progressive-disclosure hooks in [piton](https://github.com/alex35mil/piton/tree/main/pi) are others.
 
 pi.nvim is extension-aware. When pi runs under `--mode rpc`, extensions can address the client (pi.nvim) via the [extension UI protocol](https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/docs/rpc-extension-ui.md), and pi.nvim routes each method to the right surface in your editor:
 
@@ -1932,7 +1932,7 @@ A `pi.CustomBlockLine` is a list of styled chunks, and each chunk is a `{ text, 
 
 #### Example
 
-Let's walk through a concrete case. My [rules extension](https://github.com/alex35mil/pi-af/tree/main/extensions/rules) discovers Markdown rule files under `~/.pi/agent/rules/` (global) and `<repo>/.agents/rules/` (project). Some rules are always-on — their bodies are injected into the system prompt on every turn. Others are **path-scoped**: they have a `paths:` glob list in the frontmatter and are only delivered when the agent reads a file that matches one of those globs. In that case the extension appends the rule body to the `read` tool result (so the agent sees it) _and_ appends a custom entry listing the **paths of the rule files** so **you** can see, inline in the chat, which rules just got loaded for which file:
+Let's walk through a concrete case. My [rules extension](https://github.com/alex35mil/piton/tree/main/pi/extensions/rules) discovers Markdown rule files under `~/.pi/agent/rules/` (global) and `<repo>/.agents/rules/` (project). Some rules are always-on — their bodies are injected into the system prompt on every turn. Others are **path-scoped**: they have a `paths:` glob list in the frontmatter and are only delivered when the agent reads a file that matches one of those globs. In that case the extension appends the rule body to the `read` tool result (so the agent sees it) _and_ appends a custom entry listing the **paths of the rule files** so **you** can see, inline in the chat, which rules just got loaded for which file:
 
 ```ts
 pi.appendEntry("rules:load", {
