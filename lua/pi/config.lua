@@ -222,7 +222,7 @@
 ---@field cmd string[] Complete argument list, run as given in the tab's workspace (default `{ "pi", "--mode", "rpc" }`).
 ---@field env? table<string, string> Variables added to the started process's environment (for `attached`, the connector's).
 ---@field terminate? string[] `attached` only: command `:PiStop` runs to end the attached pi; may contain `${{SESSION_ID}}` and `${{SESSION_FILE}}`.
----@field reconnect? pi.ReconnectConfig `attached` only: automatic reconnect.
+---@field reconnect? pi.ReconnectConfig `attached` only: automatic reconnect after an unexpected connection loss (default enabled, give up after 60 s). After a reconnect that reaches a fresh, empty conversation, pi.nvim switches back to the one the tab was on.
 ---@field descriptor pi.DescriptorConfig
 ---@field stop pi.StopConfig
 

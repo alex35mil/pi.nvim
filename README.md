@@ -200,6 +200,7 @@ require("pi").setup({
     -- pi.nvim stops it. See "Execution environments".
     process = {
         -- "spawned": pi.nvim starts `cmd` and owns the process.
+        -- "attached": `cmd` is a connector to a pi your tooling keeps running. See "Attached pi".
         kind = "spawned",
         -- The complete command, run exactly as given (no shell) in the tab's workspace.
         -- It must start pi in RPC mode; pi.nvim adds no arguments.
@@ -207,6 +208,10 @@ require("pi").setup({
         cmd = { "pi", "--mode", "rpc" },
         -- Optional variables added to the command's environment.
         env = nil,
+        -- "attached" only: how :PiStop ends the attached pi (may use ${{SESSION_ID}}, ${{SESSION_FILE}}).
+        terminate = nil,
+        -- "attached" only: automatic reconnect after the connection drops.
+        -- reconnect = { enabled = true, give_up_after_ms = 60000 }, -- false: retry until detached
         -- Workspace descriptors (containers, sandboxes).
         descriptor = {
             -- Descriptor path relative to the tab's workspace.
@@ -626,7 +631,7 @@ While the agent is running, the prompt statusline keeps the available controls v
 
 Rejected messages return to the prompt with their attachments. Messages already accepted by Pi aren’t automatically recovered after a crash.
 
-An unexpected process exit is rendered in the chat with instructions for restarting the session: run `:PiStop`, then reopen `:Pi`. When the process has already exited, this restart carries the recovered draft and its images into the new session in the same tab. Recovery is kept in memory while Neovim stays open; closing the tab discards it.
+An unexpected exit of a pi that pi.nvim started is rendered in the chat with instructions for restarting the session: run `:PiStop`, then reopen `:Pi`. An attached pi reconnects instead (see [Losing the connection](#losing-the-connection)). When the process has already exited, this restart carries the recovered draft and its images into the new session in the same tab. Recovery is kept in memory while Neovim stays open; closing the tab discards it.
 
 ### Mentions
 
@@ -1685,20 +1690,22 @@ A container has its own filesystem, so it also declares `paths`. Mounting the wo
 
 Fields:
 
-- **`process`** (required): this workspace's pi process. It has the same fields and checks as the [`process` setup options](#configuration) `kind`, `cmd`, `env`, and `stop.grace_ms`, and replaces them as a whole for this workspace: a field the descriptor leaves out takes its default, not the `setup()` value, except `stop.grace_ms`, which falls back to the `setup()` one.
-  - **`kind`** (required): `"spawned"`, meaning pi.nvim starts the command and owns the process. It's the only supported kind; `"attached"`, for a pi your own tooling started that pi.nvim only connects to, is planned.
-  - **`cmd`** (required): the command as an array of arguments, run without a shell. pi.nvim adds nothing, so it must start pi with `--mode rpc`. For shell features, spell it out: `["sh", "-c", "…"]`.
-  - **`env`** (optional): string variables added to the command's environment. The command also inherits Neovim's environment. Inside a container, pi sees a variable only if the command forwards it (`-e NAME`).
-  - **`stop.grace_ms`** (optional): how long this pi may take to clean up after its input closes, overriding the `setup()` option `process.stop.grace_ms` for this workspace. An integer from 0 to 60000 (milliseconds); the cap keeps a descriptor from stalling Neovim's exit indefinitely.
+- **`process`** (required): this workspace's pi process. It has the same fields and checks as the [`process` setup options](#configuration) `kind`, `cmd`, `env`, `stop.grace_ms`, `terminate`, and `reconnect`, and replaces them as a whole for this workspace: a field the descriptor leaves out takes its default, not the `setup()` value, except `stop.grace_ms`, which falls back to the `setup()` one.
+  - **`kind`** (required): `"spawned"`, meaning pi.nvim starts the command and owns the process, or `"attached"`, meaning the command is a connector to a pi your own tooling keeps running (see [Attached pi](#attached-pi)).
+  - **`cmd`** (required): the command as an array of arguments, run without a shell. pi.nvim adds nothing, so a spawned command must start pi with `--mode rpc`. For shell features, spell it out: `["sh", "-c", "…"]`.
+  - **`env`** (optional): string variables added to the command's environment. The command also inherits Neovim's environment. Inside a container, pi sees a variable only if the command forwards it (`-e NAME`). For an attached pi this is the connector's environment; the bridge decides pi's.
+  - **`stop.grace_ms`** (optional): how long this pi (or connector) may take to clean up after its input closes, overriding the `setup()` option `process.stop.grace_ms` for this workspace. An integer from 0 to 60000 (milliseconds); the cap keeps a descriptor from stalling Neovim's exit indefinitely.
+  - **`terminate`** (optional, `"attached"` only): the command `:PiStop` runs to end the attached pi. It may use `${{SESSION_ID}}` and `${{SESSION_FILE}}`.
+  - **`reconnect`** (optional, `"attached"` only): `{ "enabled": true, "give_up_after_ms": 60000 }`; see [Attached pi](#attached-pi).
 - **`paths`** (optional): declare it when pi runs in a separate filesystem, such as a container, even if folders are mounted at the same paths. Omit it when pi runs on your machine's filesystem.
   - **`workspace`** (required): the absolute path where the workspace appears to pi.
   - **`mounts`** (optional): other folders as `{ "host", "path" }`. `path` is absolute; `host` is absolute or relative to the workspace.
 
-`${{WORKSPACE}}` expands to the tab's workspace in `process.cmd`, `process.env`, and `paths`, always as part of a single argument, so paths with spaces are safe. The double braces are never valid shell syntax, so they can't clash with anything meant for a shell or tool. Placeholder names are uppercase and case-sensitive; any other `${{…}}` (including `${{workspace}}`), or a `${{` without its closing `}}`, is rejected as a likely typo.
+`${{WORKSPACE}}` expands to the tab's workspace in `process.cmd`, `process.env`, `process.terminate`, and `paths`, always as part of a single argument, so paths with spaces are safe. `${{SESSION_ID}}` and `${{SESSION_FILE}}` are allowed only in `process.terminate`, filled with the session the tab is on when `:PiStop` runs. The double braces are never valid shell syntax, so they can't clash with anything meant for a shell or tool. Placeholder names are uppercase and case-sensitive; any other `${{…}}` (including `${{workspace}}`), or a `${{` without its closing `}}`, is rejected as a likely typo.
 
 Other `$` forms depend on who reads the field:
 
-- In `process.cmd` and `process.env`, `$VAR`, `${VAR}`, and `${VAR:-default}` reach the command unchanged, for example a shell in `["sh", "-c", "…"]`.
+- In `process.cmd`, `process.env`, and `process.terminate`, `$VAR`, `${VAR}`, and `${VAR:-default}` reach the command unchanged, for example a shell in `["sh", "-c", "…"]`.
 - In `paths`, pi.nvim reads the value itself and nothing would expand a variable, so any other `$` is rejected, and so is a leading `~`. Use absolute paths or `${{WORKSPACE}}`.
 
 Unknown fields and wrong types are reported naming the field, and nothing starts.
@@ -1713,7 +1720,7 @@ A descriptor runs a command on your machine, so it's used only when you trust it
 
 Descriptors under a directory in `process.descriptor.trusted_paths` (for example where your tooling creates worktrees) skip the prompt on a workspace's first use only. Changes after that still ask, and an explicit deny always wins.
 
-When a descriptor is untrusted, invalid, or fails, pi.nvim says why and starts nothing; it never falls back to local pi. A workspace without a descriptor runs local pi as usual, unless it used one before: then pi.nvim asks before starting local pi, and confirming forgets that the workspace used one. This stops an agent from switching its own workspace to your host by deleting the descriptor.
+When a descriptor is untrusted, invalid, or fails, pi.nvim says why and starts nothing; it never falls back to the `setup()` command. A workspace without a descriptor runs the `process` setting from `setup()` as usual (by default local pi), unless it used a descriptor before: then pi.nvim asks before running that command, and confirming forgets that the workspace used one. This stops an agent from switching its own workspace to your host by deleting the descriptor.
 
 #### Paths
 
@@ -1791,6 +1798,49 @@ vim.keymap.set("n", "<leader>pq", function()
 end, { desc = "Let go of π" })
 vim.keymap.set("n", "<leader>pQ", "<cmd>PiStop<cr>", { desc = "Stop π" })
 ```
+
+##### Losing the connection
+
+When a connector exits without pi.nvim asking, the chat says so and pi.nvim reconnects with the same command, retrying after 500 ms and then at doubling intervals up to 10 s. Each reconnect restores the chat from pi again.
+
+```lua
+process = {
+    kind = "attached",
+    cmd = { "my-bridge", "attach" },
+    reconnect = {
+        enabled = true, -- false: don't retry
+        give_up_after_ms = 60000, -- false: retry until :PiDetach or :PiStop
+    },
+},
+```
+
+- **Back to your conversation:** a bridge that gives every connection a fresh pi would put you in an empty conversation, so when the conversation reached is empty and idle and the one you were in had messages, pi.nvim switches back to it. When the conversation reached is in use (another frontend switched a shared pi while you were away), pi.nvim stays there and warns; `:PiResume` brings yours back.
+- **Pi ended:** a connector exit code of 3 means the pi behind it ended (terminated or crashed). That isn't reconnected; `:PiDetach` or `:PiStop` closes the tab's session.
+- **Retries ran out:** the chat says so, and `:Pi`, `pi.show()`, or sending a prompt creates a new connection, reading the descriptor or `setup()` again under the usual trust rules.
+- **While disconnected**, a prompt you send stays in the prompt and is never sent on its own; send it again once pi is back.
+
+##### Questions from pi
+
+An extension's question (a `select`, `confirm`, `input`, or `editor` dialog) waits in pi until a client answers. When the connection ends while one is open or queued, pi.nvim closes it without answering and warns that pi is still waiting. It shows the question again when the tab attaches again to a pi in the same conversation (after reconnecting, `:PiDetach` and `:Pi`, or a new connection), unless its deadline has passed. A question that another client answered meanwhile is ignored by pi when answered again.
+
+pi can't tell a newly connected client about questions it asked earlier, so a question asked while pi.nvim wasn't connected appears only if your bridge sends it again (see below). Without that, the run looks stuck until you abort it.
+
+##### Connector contract
+
+What pi.nvim needs from a connector command and the bridge behind it:
+
+- One connector process is one client connection. Its standard input and output carry pi RPC records unchanged and in pi's order; responses are never reordered relative to events. Diagnostics go to standard error, which pi.nvim shows.
+- It runs in the tab's workspace (`:tcd`, otherwise Neovim's directory).
+- Closing its input means "this client disconnects", never "stop pi"; the connector then exits promptly.
+- When the connection to the bridge is lost, it exits promptly with a non-zero code other than 3. When the pi behind it ended, it exits 3, after writing pi's last error lines to its own standard error.
+- `terminate` should exit 0 only once pi has stopped.
+
+Optional bridge behavior, each with what you lose without it:
+
+- **Replay on connect.** As the first records to a new connection (and right after the success response when the bridge moves a connection to another pi), send pi's original records for: a running `compaction_start`; the reply being streamed (its `message_start` and `message_update`s so far); running tools (`tool_execution_start` and updates so far); the latest `queue_update`; each pending `extension_ui_request` with its original id; the latest `setStatus` and `setWidget` per key. Without it, a reply that started before you connected shows "response in progress" until it finishes, questions asked while you were away stay invisible, and extension status stays empty until it's set again. With the deprecated `on_widget`, a replayed widget is shown again.
+- **Moving the connection.** A bridge may answer `switch_session` (to a conversation another live pi has) or `new_session` (on a pi shared with another client) by moving this connection to another pi, answering this client's commands still in flight on the old one with `success: false` first. pi.nvim restores the chat from whatever it then talks to, even mid-run. The old pi's `session_before_switch` extension hook doesn't run for such a move.
+
+Without moves, several frontends sharing one pi share one conversation: `:PiNewSession` there still asks for confirmation while a run is active (including one another frontend started), and confirming stops that run. User messages other clients send appear in the chat either way. pi.nvim never sends `fork` or `clone`.
 
 #### Several workers for one project
 
@@ -1927,8 +1977,8 @@ When something misbehaves — the agent doesn't respond, a tool doesn't render c
 
 The health check verifies the basics:
 
-- The `pi` executable (from the `bin` config option, defaults to `"pi"`) exists and is in `$PATH`.
-- pi backend compatibility against the plugin's tracked versions:
+- The executable of `process.cmd` (its first element, with placeholders filled; `pi` by default) exists and is in `$PATH`.
+- When that command runs `pi` itself, pi backend compatibility against the plugin's tracked versions:
     - minimum supported: `1.3.0`
     - last validated: `1.3.0`
     - newer versions are reported as unvalidated (warning), not hard-failed.
@@ -1983,7 +2033,7 @@ A rough triage checklist for common symptoms:
 
 | Symptom | First thing to check |
 | --- | --- |
-| `:Pi` does nothing / reports no executable | `:checkhealth pi` — is `bin` resolvable? |
+| `:Pi` does nothing / reports no executable | `:checkhealth pi` — does the first element of `process.cmd` resolve? |
 | Chat opens but never gets a response | Enable debug logging and watch the tab's RPC log — are commands going out? Are events coming back? |
 | Diff review doesn't open on edit/write | Is a permission extension loaded? See [Diff review](#diff-review). |
 | Extension UI request ignored | Check the extension's `widgetKey` / method — is it something pi.nvim knows how to route? See [Extensions & custom rendering](#extensions--custom-rendering). |
