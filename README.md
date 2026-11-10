@@ -131,7 +131,7 @@ https://github.com/user-attachments/assets/f210246a-2427-4fdb-b679-eeb6ceae4538
 ## Requirements
 
 - Neovim 0.10+
-- `pi` 1.3.0+ in `$PATH`
+- `pi` 1.3.0+ in `$PATH` (validated with 1.5.2)
 - Node.js 22.19.0+ for npm installations of pi
 
 Optional but useful:
@@ -700,7 +700,7 @@ Arguments, if the command takes any, follow on the same line:
 /some-command arg1 arg2
 ```
 
-Only the first line is recognized as a command — everything else in the same message is treated as plain prompt text. Backend commands follow this [Pi RPC convention](https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/docs/rpc-commands.md#get_commands). If you want a command and a regular prompt to take effect together, send them as two separate messages.
+Only the first line is recognized as a command — everything else in the same message is treated as plain prompt text. Backend commands follow this [Pi RPC convention](https://github.com/earendil-works/pi/blob/v1.5.2/packages/coding-agent/docs/rpc-commands.md#get_commands). If you want a command and a regular prompt to take effect together, send them as two separate messages.
 
 That said, this only applies to the explicit `/command` invocation path. Skills in particular are surfaced to the model as part of the system context: per the [Agent Skills spec](https://agentskills.io/specification), each skill's `name` and `description` are loaded at startup for _all_ available skills ("progressive disclosure"), and the full `SKILL.md` body is only loaded once the model decides to activate that skill. As a result, most models will pick up the right skill even when you _mention_ it inline ("please use the `commit` skill to write the message"), without you having to invoke `/skill:commit` explicitly. How reliably this works depends on the model and on how much other context it's juggling, so for anything load-bearing it's still safer to invoke the command explicitly on the first line.
 
@@ -1881,7 +1881,7 @@ If your callback covers it, set `process.stop.report_failures_on_start = false` 
 
 pi extensions are small TypeScript (or Node-compatible) modules that the backend loads at session start. They can intercept tool calls, register slash commands, expose keybindings, surface UI to the user, and inject arbitrary content into the chat. The permission extension in [Diff review](#diff-review) is one example; the `rules:load` / progressive-disclosure hooks in [piton](https://github.com/alex35mil/piton/tree/main/pi) are others.
 
-pi.nvim is extension-aware. When pi runs under `--mode rpc`, extensions can address the client (pi.nvim) via the [extension UI protocol](https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/docs/rpc-extension-ui.md), and pi.nvim routes each method to the right surface in your editor:
+pi.nvim is extension-aware. When pi runs under `--mode rpc`, extensions can address the client (pi.nvim) via the [extension UI protocol](https://github.com/earendil-works/pi/blob/v1.5.2/packages/coding-agent/docs/rpc-extension-ui.md), and pi.nvim routes each method to the right surface in your editor:
 
 | Extension UI method | Where pi.nvim surfaces it |
 | --- | --- |
@@ -1983,7 +1983,7 @@ The health check verifies the basics:
 - The executable of `process.cmd` (its first element, with placeholders filled; `pi` by default) exists and is in `$PATH`.
 - When that command runs `pi` itself, pi backend compatibility against the plugin's tracked versions:
     - minimum supported: `1.3.0`
-    - last validated: `1.3.0`
+    - last validated: `1.5.2`
     - newer versions are reported as unvalidated (warning), not hard-failed.
 - Neovim is at version 0.10 or newer.
 
