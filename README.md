@@ -1728,6 +1728,8 @@ Without `paths`, pi shares your filesystem and every path it reports is used as 
 
 Continue and resume list the session folder the running pi reports, translated through the mapping. Keep the sessions in a mounted folder (inside the workspace, or listed in `mounts`), or pi.nvim reports that the folder isn't reachable.
 
+pi.nvim reads and writes the workspace and session files itself, so pi must see them at the same paths as Neovim, or at mapped paths through `paths`. For pi on another machine that doesn't share your filesystem, run Neovim on that machine (over SSH, or with a remote UI such as `nvim --remote-ui` or `neovide --server`), where pi is local again. pi.nvim has no remote file access.
+
 #### Who owns what
 
 pi.nvim owns only the process it starts: the descriptor's `cmd`. Whether that process is just pi or also its environment is up to the command, and stopping never touches anything the command didn't start.
@@ -1761,7 +1763,7 @@ To start pi inside a container that's already running, such as a dev container w
 
 #### Attached pi
 
-With `kind = "attached"`, `cmd` is a **connector** to a pi that your own tooling keeps running, for example a session bridge or daemon: a command whose standard input and output carry pi RPC records unchanged (`socat - UNIX-CONNECT:/run/pi.sock`, `ssh host my-bridge-client`, or a bridge's own `attach` command). pi.nvim owns only that connector process. Set it globally to attach every tab, or in a workspace's descriptor:
+With `kind = "attached"`, `cmd` is a **connector** to a pi that your own tooling keeps running, for example a session bridge or daemon: a command whose standard input and output carry pi RPC records unchanged (`socat - UNIX-CONNECT:/run/pi.sock`, or a bridge's own `attach` command). pi.nvim owns only that connector process. Set it globally to attach every tab, or in a workspace's descriptor:
 
 ```lua
 require("pi").setup({
@@ -1831,6 +1833,7 @@ What pi.nvim needs from a connector command and the bridge behind it:
 
 - One connector process is one client connection. Its standard input and output carry pi RPC records unchanged and in pi's order; responses are never reordered relative to events. Diagnostics go to standard error, which pi.nvim shows.
 - It runs in the tab's workspace (`:tcd`, otherwise Neovim's directory).
+- The pi behind it runs on a machine that shares Neovim's files: the same paths, or folders your machine reaches that a descriptor's `paths` maps (see [Paths](#paths)). pi.nvim can't tell where a connector leads: a connector that reaches pi on a machine that doesn't share these files with yours makes diff review, edit previews, and `pi.changed_files()` read and write files on your machine that aren't the ones pi edits. `paths` can't fix that, since it only maps to folders your machine shares. For such a pi, run Neovim on its machine instead.
 - Closing its input means "this client disconnects", never "stop pi"; the connector then exits promptly.
 - When the connection to the bridge is lost, it exits promptly with a non-zero code other than 3. When the pi behind it ended, it exits 3, after writing pi's last error lines to its own standard error.
 - `terminate` should exit 0 only once pi has stopped.
