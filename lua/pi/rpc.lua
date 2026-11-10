@@ -1,4 +1,4 @@
---- https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/src/modes/rpc/rpc-types.ts
+--- https://github.com/earendil-works/pi/blob/v1.5.2/packages/coding-agent/src/modes/rpc/rpc-types.ts
 ---@alias pi.RpcEventType
 ---| "agent_start"
 ---| "agent_end"
@@ -29,7 +29,7 @@
 ---| "_process_exit"
 ---| "_stderr"
 
---- https://github.com/earendil-works/pi/blob/v1.3.0/packages/ai/src/types.ts
+--- https://github.com/earendil-works/pi/blob/v1.5.2/packages/ai/src/types.ts
 ---@alias pi.AssistantMessageEventType
 ---| "start"
 ---| "text_start"
@@ -44,7 +44,7 @@
 ---| "done"
 ---| "error"
 
---- https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/src/modes/rpc/rpc-types.ts
+--- https://github.com/earendil-works/pi/blob/v1.5.2/packages/coding-agent/src/modes/rpc/rpc-types.ts
 ---@alias pi.RpcCommandType
 ---| "prompt"
 ---| "steer"
@@ -98,7 +98,7 @@
 ---@field cancelled? boolean
 ---@field [string] any
 
---- https://github.com/earendil-works/pi/blob/v1.3.0/packages/coding-agent/docs/json.md
+--- https://github.com/earendil-works/pi/blob/v1.5.2/packages/coding-agent/docs/json.md
 ---@class pi.RpcEvent
 ---@field type pi.RpcEventType
 ---@field assistantMessageEvent? { type: pi.AssistantMessageEventType, contentIndex?: integer, delta?: string, content?: string, toolCall?: pi.ToolCall, id?: string, toolName?: string }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-11
+
+- **CHANGED:** Validated with pi 1.5.2. `:checkhealth pi` no longer reports pi 1.3.1 through 1.5.2 as unvalidated; 1.3.0 is still the minimum, and no configuration changes are needed.
+
 ## 2026-11-08
 
 - **ADDED:** `process.kind = "attached"` (in `setup()` or a workspace descriptor) connects to a pi your own tooling keeps running through a connector command, restoring the chat from that pi's current conversation. Closing the tab or quitting Neovim only disconnects. `:PiStop` ends an attached pi through `process.terminate` (with `${{SESSION_ID}}` and `${{SESSION_FILE}}`) after a confirmation. See "Attached pi" in the README.
