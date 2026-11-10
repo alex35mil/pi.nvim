@@ -1823,7 +1823,7 @@ process = {
 
 ##### Questions from pi
 
-An extension's question (a `select`, `confirm`, `input`, or `editor` dialog) waits in pi until a client answers. When the connection ends while one is open or queued, pi.nvim closes it without answering and warns that pi is still waiting. It shows the question again when the tab attaches again to a pi in the same conversation (after reconnecting, `:PiDetach` and `:Pi`, or a new connection), unless its deadline has passed. A question that another client answered meanwhile is ignored by pi when answered again.
+An extension's question (a `select`, `confirm`, `input`, or `editor` dialog) waits in pi until a client answers. When the connection ends while one is open or queued, pi.nvim closes it without answering and warns that pi is still waiting. It shows the question again when the tab attaches again to a pi in the same conversation (after reconnecting, `:PiDetach` and `:Pi`, or a new connection), unless its deadline has passed. A question that another client answered meanwhile is ignored by pi when answered again. pi doesn't announce that another client answered, so while connected a question answered elsewhere stays open in pi.nvim until you dismiss or answer it; either is harmless.
 
 pi can't tell a newly connected client about questions it asked earlier, so a question asked while pi.nvim wasn't connected appears only if your bridge sends it again (see below). Without that, the run looks stuck until you abort it.
 
