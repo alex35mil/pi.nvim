@@ -1,0 +1,133 @@
+[branches]
+format = "identifier-title"
+
+[tracker]
+provider = "github"
+mcp_server = "github"
+repository = { owner = "alex35mil", repo = "pi.nvim" }
+project = { owner = "alex35mil", owner_type = "user", number = 6 }
+
+[tracker.labels.groups.kind]
+applies_to = ["epic", "deliverable"]
+cardinality = "exactlyOne"
+
+[tracker.labels.groups.kind.values.epic]
+name = "Kind: Epic"
+color = "#8250DF"
+description = "A multi-deliverable initiative."
+
+[tracker.labels.groups.kind.values.feature]
+name = "Kind: Feature"
+color = "#0969DA"
+description = "New user-visible or system capability."
+
+[tracker.labels.groups.kind.values.bugfix]
+name = "Kind: Bugfix"
+color = "#CF222E"
+description = "Correction of defective behavior."
+
+[tracker.labels.groups.kind.values.research]
+name = "Kind: Research"
+color = "#1A7F37"
+description = "Investigation producing evidence and conclusions."
+
+[tracker.labels.groups.kind.values.refactor]
+name = "Kind: Refactor"
+color = "#BC4C00"
+description = "Behavior-preserving structural improvement."
+
+[tracker.labels.groups.kind.values.audit]
+name = "Kind: Audit"
+color = "#9A6700"
+description = "Evidence-based assessment and recommendations."
+
+[tracker.labels.groups.kind.values.chore]
+name = "Kind: Chore"
+color = "#57606A"
+description = "Maintenance or operational work."
+
+[tracker.labels.groups.area]
+applies_to = ["epic", "deliverable"]
+cardinality = "oneOrMore"
+
+[tracker.labels.groups.area.values.history]
+name = "Area: Chat History"
+color = "#006B75"
+description = "Chat history rendering: messages, tool blocks, fences, spinners, compaction, replay"
+
+[tracker.labels.groups.area.values.prompt]
+name = "Area: Prompt"
+color = "#006B75"
+description = "Prompt input: mentions, completion, attachments, statusline, queue"
+
+[tracker.labels.groups.area.values.diff]
+name = "Area: Diff Review"
+color = "#006B75"
+description = "Pre-execution diff review of edit/write tools"
+
+[tracker.labels.groups.area.values.sessions]
+name = "Area: Sessions"
+color = "#006B75"
+description = "Session lifecycle, resume, naming, session tree"
+
+[tracker.labels.groups.area.values.runtime]
+name = "Area: Runtime"
+color = "#006B75"
+description = "Pi process, RPC transport, execution environments, workspaces, connectors, pi compatibility"
+
+[tracker.labels.groups.area.values.extensions]
+name = "Area: Extensions"
+color = "#006B75"
+description = "Extension UI requests, dialogs/attention flow, entries/widgets"
+
+[tracker.labels.groups.area.values.config]
+name = "Area: Config & API"
+color = "#006B75"
+description = "Setup options, public Lua API, commands, keymaps, health"
+
+[tracker.labels.groups.area.values.layout]
+name = "Area: Layout"
+color = "#006B75"
+description = "Side/float layouts, zen mode, window isolation, highlights"
+
+[tracker.labels.groups.area.values.tooling]
+name = "Area: Tooling"
+color = "#006B75"
+description = "Repository tooling: agent instructions, workflows, tests, examples, CI"
+
+[tracker.labels.groups.area.values.docs]
+name = "Area: Docs"
+color = "#006B75"
+description = "User-facing docs not tied to one area: README overview, demos, screenshots, CHANGELOG/UPGRADING"
+
+[tracker.labels.groups.breaking]
+applies_to = ["deliverable"]
+cardinality = "zeroOrOne"
+
+[tracker.labels.groups.breaking.values.breaking]
+name = "Breaking"
+color = "#B60205"
+description = "Changes public config or API; requires an UPGRADING.md entry."
+
+[tracker.fields]
+priority = { scope = "project", field = "Priority", values = ["Urgent", "High", "Medium", "Low"] }
+
+[tracker.fields.status]
+field = "Status"
+
+[tracker.fields.status.values]
+backlog = "Backlog"
+todo = "Todo"
+in_progress = "In Progress"
+in_review = "In Review"
+done = "Done"
+canceled = "Canceled"
+
+[tracker.fields.phase]
+field = "Phase"
+values = { planning = "Planning", execution = "Execution", self_review = "Self-Review" }
+
+[forge]
+provider = "github"
+mcp_server = "github"
+repository = { owner = "alex35mil", repo = "pi.nvim" }
