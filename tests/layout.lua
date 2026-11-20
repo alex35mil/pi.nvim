@@ -104,8 +104,19 @@ function T.state()
 end
 
 --- Leave the chat for the outside window, in normal mode.
+--- The float chat sends focus back from a normal window, so with the float
+--- open this takes the one route that leaves the outside window current under
+--- it: leave from the side layout, then switch to float without focus.
 function T.go_outside()
+    local chat = T.chat()
+    local float = chat:is_visible() and chat:layout() == "float"
+    if float then
+        chat:set_layout("side", { focus = false })
+    end
     vim.api.nvim_set_current_win(T.outside)
+    if float then
+        chat:set_layout("float", { focus = false })
+    end
 end
 
 function T.set_prompt(lines, cursor)

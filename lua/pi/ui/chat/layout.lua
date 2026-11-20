@@ -8,6 +8,8 @@
 ---@field _history pi.ChatHistory
 ---@field _prompt pi.ChatPrompt
 ---@field _attachments pi.ChatAttachments
+---@field _focus_trap_aucmd integer? Float layout only: autocmd keeping focus inside the chat.
+---@field _last_chat_win integer? Float layout only: chat window focus last left, the trap's return target.
 local Layout = {}
 Layout.__index = Layout
 
@@ -96,6 +98,8 @@ function Layout.new(mode, history, prompt, attachments)
     self._history = history
     self._prompt = prompt
     self._attachments = attachments
+    self._focus_trap_aucmd = nil
+    self._last_chat_win = nil
 
     attachments:set_on_change(function()
         self:_refresh_attachments()
@@ -159,6 +163,75 @@ function Layout:_open_attachments_in_float_layout(col, row, width, border)
     vim.wo[self._attachments_win].number = false
     vim.wo[self._attachments_win].relativenumber = false
     vim.wo[self._attachments_win].cursorline = false
+end
+
+--- Whether `win` is a chat window, including the zen float (the prompt's
+--- window while zen is active). Matched by window, not buffer: a window
+--- opened with `enter` still shows the previous buffer during its WinEnter.
+---@param win integer
+---@return boolean
+function Layout:_is_chat_win(win)
+    return win == self:history_win()
+        or win == self:prompt_win()
+        or win == self:attachments_win()
+        or win == self._prompt:win()
+end
+
+--- Keep focus inside the float chat: entering a normal window in the chat's
+--- tab sends focus back to the chat window that had it last. Other floats
+--- (pickers, dialogs, completion), the command-line window, and other tabs
+--- are left alone. Installed while the float windows are open.
+function Layout:_install_focus_trap()
+    self:_remove_focus_trap()
+    self._focus_trap_aucmd = vim.api.nvim_create_autocmd("WinEnter", {
+        desc = "Keep focus inside the π float chat",
+        callback = function()
+            return self:_on_trap_win_enter()
+        end,
+    })
+end
+
+function Layout:_remove_focus_trap()
+    if self._focus_trap_aucmd then
+        pcall(vim.api.nvim_del_autocmd, self._focus_trap_aucmd)
+        self._focus_trap_aucmd = nil
+    end
+    self._last_chat_win = nil
+end
+
+---@return boolean? remove true when the trap should delete itself
+function Layout:_on_trap_win_enter()
+    local hwin = self:history_win()
+    if not hwin then
+        -- The floats were closed without `hide` (e.g. `:q`, or their tab closed).
+        self._focus_trap_aucmd = nil
+        self._last_chat_win = nil
+        return true
+    end
+    local win = vim.api.nvim_get_current_win()
+    if vim.api.nvim_win_get_tabpage(win) ~= vim.api.nvim_win_get_tabpage(hwin) then
+        return
+    end
+    if self:_is_chat_win(win) then
+        self._last_chat_win = win
+        return
+    end
+    if vim.api.nvim_win_get_config(win).relative ~= "" or vim.fn.win_gettype(win) == "command" then
+        return
+    end
+    local trap = self._focus_trap_aucmd
+    vim.schedule(function()
+        if self._focus_trap_aucmd ~= trap or vim.api.nvim_get_current_win() ~= win then
+            return
+        end
+        local target = self._last_chat_win
+        if not (target and vim.api.nvim_win_is_valid(target)) then
+            target = self:prompt_win() or self:history_win()
+        end
+        if target then
+            pcall(vim.api.nvim_set_current_win, target)
+        end
+    end)
 end
 
 function Layout:_close_history_win()
@@ -475,6 +548,7 @@ function Layout:_open_in_float_layout()
     vim.wo[self._prompt_win].winhighlight = Highlights.CHAT_PROMPT_WINHIGHLIGHT
     self._prompt:set_layout("float")
     self._prompt:set_win(self._prompt_win)
+    self:_install_focus_trap()
 end
 
 --- Handle editor resize. Re-evaluates layout config (which may be a function)
@@ -511,6 +585,8 @@ function Layout:show()
 end
 
 function Layout:hide()
+    -- Closing the chat moves focus to a normal window; the trap must not bounce it.
+    self:_remove_focus_trap()
     -- Clear winbars before closing to prevent window-buffer-local
     -- winbar state from leaking into the next layout's windows.
     local awin = self:attachments_win()
@@ -611,6 +687,10 @@ function Layout:set_mode(mode)
                 set_cursor_clamped(target, focused_cursor)
             elseif pwin then
                 vim.api.nvim_set_current_win(pwin)
+            end
+            -- WinEnter is suppressed for the swap, so the trap can't see it.
+            if self._focus_trap_aucmd then
+                self._last_chat_win = vim.api.nvim_get_current_win()
             end
         end
     end
