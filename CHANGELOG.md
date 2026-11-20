@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-11-21
+
+- **FIXED:** Focus no longer escapes the float chat to the editor behind it, for example after a Snacks picker closes. Focus returns to the chat window you were in; the prompt returns in insert mode. Floats such as pickers and dialogs can still take focus. To use the editor behind the float, hide the chat, switch to the side layout, or switch tabs.
+
 ## 2026-11-11
 
 - **CHANGED:** Validated with pi 1.5.2. `:checkhealth pi` no longer reports pi 1.3.1 through 1.5.2 as unvalidated; 1.3.0 is still the minimum, and no configuration changes are needed.
