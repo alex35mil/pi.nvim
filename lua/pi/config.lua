@@ -243,9 +243,13 @@
 ---@field attention pi.UiAttentionConfig
 ---@field zen pi.ZenConfig
 ---@field dialog pi.DialogConfig
+---@field draft pi.DraftConfig
 ---@field verbs pi.VerbsConfig Verb pairs for status messages, picked randomly per run
 ---@field entry_renderers table<string, pi.EntryRenderer> Renderers for extension custom entries, keyed by `customType`. Entries render inline in history live and when a session is resumed or rebuilt after compaction.
 ---@field on_widget? fun(key: string, lines: string[]?, placement: string?): pi.CustomBlock? Deprecated: use `entry_renderers`. Handle extension setWidget calls. Return a custom block to render inline in history, or nil to ignore. Not called for `:startup` widgets (keys ending with `:startup`), which are always stored as startup announcements and rendered in the system preamble.
+
+---@class pi.DraftConfig
+---@field debounce_ms integer Pause in typing, in milliseconds, before `User PiDraftChanged` reports the prompt draft
 
 ---@class pi.ConfigModule
 ---@field options pi.Options
@@ -401,6 +405,9 @@ local defaults = {
             { "Agently replacing you", "Agently replaced you" },
         },
     },
+    draft = {
+        debounce_ms = 500,
+    },
     entry_renderers = {},
     on_widget = nil,
 }
@@ -494,6 +501,11 @@ function M.setup(opts)
         else
             vim.api.nvim_create_autocmd("VimEnter", { once = true, callback = warn })
         end
+    end
+
+    local debounce_ms = M.options.draft.debounce_ms
+    if type(debounce_ms) ~= "number" or debounce_ms < 0 or debounce_ms ~= math.floor(debounce_ms) then
+        error("pi.nvim: `draft.debounce_ms` must be a non-negative integer, got " .. vim.inspect(debounce_ms), 2)
     end
 
     local _, spec_err = require("pi.execution.spec").parse_setup(M.options.process, vim.fn.getcwd())

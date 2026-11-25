@@ -101,8 +101,8 @@ function Layout.new(mode, history, prompt, attachments)
     self._focus_trap_aucmd = nil
     self._last_chat_win = nil
 
-    attachments:set_on_change(function()
-        self:_refresh_attachments()
+    attachments:on_change(function(change)
+        self:_refresh_attachments(change)
     end)
 
     return self
@@ -363,7 +363,11 @@ function Layout:_reposition_float_stack(target_width, target_height, float_cfg)
     end
 end
 
-function Layout:_refresh_attachments()
+--- Fit the attachments window to the list. When the list becomes empty, the
+--- prompt is focused in insert mode, except after a replacement from outside,
+--- which never moves focus.
+---@param change? pi.AttachmentChange nil when the layout itself is rebuilt
+function Layout:_refresh_attachments(change)
     if not self._prompt_win or not vim.api.nvim_win_is_valid(self._prompt_win) then
         return
     end
@@ -372,8 +376,10 @@ function Layout:_refresh_attachments()
     if self._attachments:count() == 0 then
         local was_visible = self:attachments_win() ~= nil
         self:_close_attachments_win()
-        vim.api.nvim_set_current_win(self._prompt_win)
-        vim.cmd("startinsert")
+        if change ~= "replaced" then
+            vim.api.nvim_set_current_win(self._prompt_win)
+            vim.cmd("startinsert")
+        end
         if was_visible then
             if is_float then
                 self:_reposition_float_stack()

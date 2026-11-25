@@ -3,10 +3,23 @@
 ---@field data string base64-encoded
 ---@field mime string
 
+--- An attachment in the prompt, with a digest of its data computed once when
+--- it enters the list, so drafts compare without touching the data.
+---@class pi.ChatAttachment: pi.Attachment
+---@field digest string sha256 of `data`
+
+--- What changed the attachment list.
+---@alias pi.AttachmentChange
+---| "added" # the user added one (file, drag-and-drop, clipboard)
+---| "removed" # the user removed one
+---| "cleared" # emptied because the draft was sent
+---| "restored" # input put back (failed send, crash recovery)
+---| "replaced" # replaced from outside (`pi.set_draft`); never moves focus
+
 ---@class pi.ChatAttachments
----@field _items pi.Attachment[]
+---@field _items pi.ChatAttachment[]
 ---@field _buf integer
----@field _on_change fun()?
+---@field _listeners fun(change: pi.AttachmentChange)[]
 ---@field _rerendering boolean
 ---@field _clipboard_counter integer
 local Attachments = {}
@@ -34,6 +47,12 @@ local function mime_from_path(path)
     return ext and mime_map[ext:lower()] or nil
 end
 
+---@param item pi.Attachment
+---@return pi.ChatAttachment
+local function with_digest(item)
+    return { name = item.name, data = item.data, mime = item.mime, digest = vim.fn.sha256(item.data) }
+end
+
 ---@param path string
 ---@return string? base64
 local function read_and_encode(path)
@@ -50,7 +69,7 @@ end
 function Attachments.new()
     local self = setmetatable({}, Attachments)
     self._items = {}
-    self._on_change = nil
+    self._listeners = {}
     self._rerendering = false
     self._clipboard_counter = 0
 
@@ -106,14 +125,15 @@ function Attachments:_update_buffer()
     end
 end
 
-function Attachments:_rerender()
+---@param change pi.AttachmentChange
+function Attachments:_rerender(change)
     if self._rerendering then
         return
     end
     self._rerendering = true
     self:_update_buffer()
-    if self._on_change then
-        self._on_change()
+    for _, listener in ipairs(self._listeners) do
+        listener(change)
     end
     self._rerendering = false
 end
@@ -132,8 +152,8 @@ function Attachments:add_file(path)
         return false
     end
     local name = vim.fn.fnamemodify(path, ":t")
-    self._items[#self._items + 1] = { name = name, data = data, mime = mime }
-    self:_rerender()
+    self._items[#self._items + 1] = with_digest({ name = name, data = data, mime = mime })
+    self:_rerender("added")
     return true
 end
 
@@ -165,8 +185,8 @@ function Attachments:add_from_clipboard()
 
     self._clipboard_counter = self._clipboard_counter + 1
     local name = "cb-image-" .. self._clipboard_counter .. ".png"
-    self._items[#self._items + 1] = { name = name, data = data, mime = "image/png" }
-    self:_rerender()
+    self._items[#self._items + 1] = with_digest({ name = name, data = data, mime = "image/png" })
+    self:_rerender("added")
     return true
 end
 
@@ -174,18 +194,42 @@ end
 function Attachments:remove(index)
     if index >= 1 and index <= #self._items then
         table.remove(self._items, index)
-        self:_rerender()
+        self:_rerender("removed")
     end
 end
 
+--- Empty the list because its draft was sent.
 function Attachments:clear()
     self._items = {}
-    self:_rerender()
+    self:_rerender("cleared")
 end
 
+--- Replace the whole list from outside.
+---@param items pi.Attachment[]
+function Attachments:replace(items)
+    local replaced = {}
+    for i, item in ipairs(items) do
+        replaced[i] = with_digest(item)
+    end
+    self._items = replaced
+    self:_rerender("replaced")
+end
+
+--- Independent copies of the attachments, without digests.
 ---@return pi.Attachment[]
 function Attachments:snapshot()
-    return vim.deepcopy(self._items)
+    local out = {}
+    for i, item in ipairs(self._items) do
+        out[i] = { name = item.name, data = item.data, mime = item.mime }
+    end
+    return out
+end
+
+--- The current attachments, digests included. Read-only: callers must not
+--- modify the returned list or its items.
+---@return pi.ChatAttachment[]
+function Attachments:items()
+    return self._items
 end
 
 --- Restore rejected attachments ahead of any attachments added since submission.
@@ -195,9 +239,13 @@ function Attachments:restore(items)
         return
     end
     local current = self._items
-    self._items = vim.deepcopy(items)
-    vim.list_extend(self._items, current)
-    self:_rerender()
+    local restored = {}
+    for i, item in ipairs(items) do
+        restored[i] = with_digest(item)
+    end
+    vim.list_extend(restored, current)
+    self._items = restored
+    self:_rerender("restored")
 end
 
 ---@return pi.RpcImageContent[]
@@ -220,9 +268,10 @@ function Attachments:buf()
     return self._buf
 end
 
----@param fn fun()
-function Attachments:set_on_change(fn)
-    self._on_change = fn
+--- Run `fn` after every change to the list.
+---@param fn fun(change: pi.AttachmentChange)
+function Attachments:on_change(fn)
+    self._listeners[#self._listeners + 1] = fn
 end
 
 return Attachments

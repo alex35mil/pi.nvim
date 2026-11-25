@@ -951,6 +951,7 @@ local function start_session(tab, workspace, execution, opts)
     if draft then
         chat:restore_draft(draft)
         recovered_drafts[tab] = nil
+        chat:report_draft()
     end
 
     local kind = execution:connection()

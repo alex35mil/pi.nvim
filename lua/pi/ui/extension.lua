@@ -86,7 +86,14 @@ function M.handle(session, msg)
         end
         return
     end
-    if method == "setTitle" or method == "set_editor_text" then
+    if method == "set_editor_text" then
+        -- Fire-and-forget: refused over local edits without a reply.
+        if type(msg.text) == "string" then
+            session.chat:replace_draft_text(msg.text)
+        end
+        return
+    end
+    if method == "setTitle" then
         Notify.warn("Unhandled extension UI method: " .. method)
         return
     end

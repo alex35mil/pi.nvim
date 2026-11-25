@@ -174,7 +174,9 @@ end
 function M.set_layout(mode, opts)
     opts = check_layout_switch_opts(opts, "set_layout")
     if mode ~= "side" and mode ~= "float" then
-        require("pi.notify").error("set_layout: unknown layout " .. vim.inspect(mode) .. ' (expected "side" or "float")')
+        require("pi.notify").error(
+            "set_layout: unknown layout " .. vim.inspect(mode) .. ' (expected "side" or "float")'
+        )
         return
     end
     local session = require("pi.sessions.manager").get()
@@ -565,6 +567,64 @@ function M.invoke(command)
         command = "/" .. command
     end
     session.rpc:send({ type = "prompt", message = command })
+end
+
+---@param draft any
+---@return string? error
+local function check_draft_input(draft)
+    if type(draft) ~= "table" then
+        return "expects a draft table, got " .. type(draft)
+    end
+    if type(draft.text) ~= "string" then
+        return "draft.text must be a string, got " .. type(draft.text)
+    end
+    if draft.attachments == nil then
+        return nil
+    end
+    if type(draft.attachments) ~= "table" then
+        return "draft.attachments must be a list, got " .. type(draft.attachments)
+    end
+    for i, item in ipairs(draft.attachments) do
+        if
+            type(item) ~= "table"
+            or type(item.name) ~= "string"
+            or type(item.data) ~= "string"
+            or type(item.mime) ~= "string"
+        then
+            return ("draft.attachments[%d] must have string name, data, and mime"):format(i)
+        end
+    end
+    return nil
+end
+
+--- Replace a tab's prompt draft (text and attachments) from outside, unless
+--- the user edited it since it was last reported (`User PiDraftChanged`) or
+--- replaced ("local edits win"). Never shows the chat, moves focus, or moves
+--- the cursor; a hidden chat shows the new draft when it opens. An applied
+--- draft isn't reported back. Must run on the main loop: wrap calls from
+--- `vim.uv` callbacks in `vim.schedule`.
+---@param tab pi.TabId|0 0 for the current tab
+---@param draft pi.DraftInput
+---@return pi.SetDraftResult
+function M.set_draft(tab, draft)
+    if vim.in_fast_event() then
+        error("pi.nvim: set_draft can't run in a fast event; wrap it in vim.schedule", 2)
+    end
+    if type(tab) ~= "number" then
+        error("pi.nvim: set_draft(tab, draft) expects a tab number, got " .. type(tab), 2)
+    end
+    local err = check_draft_input(draft)
+    if err then
+        error("pi.nvim: set_draft " .. err, 2)
+    end
+    if tab == 0 then
+        tab = vim.api.nvim_get_current_tabpage()
+    end
+    local session = require("pi.sessions.manager").get_for_tab(tab)
+    if not session then
+        return { status = "no_session" }
+    end
+    return { status = session.chat:replace_draft(draft) }
 end
 
 --- Return the absolute paths of files modified by edit/write tools during the current session.
