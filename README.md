@@ -20,6 +20,7 @@ Use the [pi coding agent](https://pi.dev) without leaving Neovim.
 - [Usage](#usage)
     - [Chat & layouts](#chat--layouts)
     - [Prompt](#prompt)
+    - [Syncing the draft](#syncing-the-draft)
     - [Mentions](#mentions)
     - [Slash commands](#slash-commands)
     - [Completion](#completion)
@@ -398,6 +399,13 @@ require("pi").setup({
         },
     },
 
+    -- Prompt draft sync (see "Syncing the draft")
+    draft = {
+        -- Pause in typing, in milliseconds, before `User PiDraftChanged`
+        -- reports the prompt draft.
+        debounce_ms = 500,
+    },
+
     -- Verb pairs for status messages, picked randomly per run.
     verbs = {
         -- When true, user pairs are appended to the built-in list;
@@ -634,6 +642,59 @@ While the agent is running, the prompt statusline keeps the available controls v
 Rejected messages return to the prompt with their attachments. Messages already accepted by Pi aren’t automatically recovered after a crash.
 
 An unexpected exit of a pi that pi.nvim started is rendered in the chat with instructions for restarting the session: run `:PiStop`, then reopen `:Pi`. An attached pi reconnects instead (see [Losing the connection](#losing-the-connection)). When the process has already exited, this restart carries the recovered draft and its images into the new session in the same tab. Recovery is kept in memory while Neovim stays open; closing the tab discards it.
+
+### Syncing the draft
+
+Plugins can keep the prompt draft (its text and image attachments) in sync with other clients of the same session. pi.nvim reports the draft through a `User` autocmd and accepts a replacement through `pi.set_draft()`. Each tab is its own draft source, including several tabs attached to the same pi.
+
+#### `User PiDraftChanged`
+
+```lua
+vim.api.nvim_create_autocmd("User", {
+    pattern = "PiDraftChanged",
+    callback = function(event)
+        local data = event.data
+        -- data.tab           the tab whose prompt changed
+        -- data.session_id    pi's session id, or nil before pi reports it
+        -- data.session_file  pi's session file as pi sees it, or nil before pi reports it
+        --                    (and when pi runs without a session file)
+        -- data.text          the prompt text, trimmed ("" when empty)
+        -- data.attachments   list of { name, data (base64), mime }; {} when none
+    end,
+})
+```
+
+It fires at these points, and only when the draft differs from the last one reported or applied for that tab:
+
+- when typing in the prompt pauses for `draft.debounce_ms` (default 500);
+- right away when an attachment is added or removed;
+- when you leave the prompt (another window or buffer, another tab, zen mode), or the chat is hidden (`:PiToggleChat`, `pi.toggle()`);
+- when the draft empties because the message was sent;
+- when a [crash-recovered draft](#prompt) is restored into the prompt by the next `:Pi`. pi hasn't reported the session yet at that point, so `session_id` and `session_file` are nil.
+
+A draft sent before it was ever reported isn't reported at all: the prompt is empty again, which is what other clients already have.
+
+#### `pi.set_draft(tab, draft)`
+
+```lua
+local result = require("pi").set_draft(tab, {
+    text = "replacement text",
+    attachments = { { name = "shot.png", data = base64, mime = "image/png" } }, -- optional; nil or {} clears them
+})
+-- result.status:
+--   "applied"      the text and attachments were replaced
+--   "no_session"   the tab has no pi session
+--   "local_edits"  the user changed the draft since it was last reported; nothing was replaced
+```
+
+- `tab` is a tabpage handle, or `0` for the current tab.
+- It replaces the whole text and all attachments. It never opens the chat, takes focus, changes the mode, or moves the cursor beyond the end of the new text. If the chat is hidden, the new draft is there when it's shown.
+- An applied draft isn't reported back as `PiDraftChanged`; the caller already has it.
+- Call it on the main loop. From a `vim.uv` callback, wrap it in `vim.schedule`; called in a fast event, it raises an error. Invalid arguments raise an error too.
+
+**Local edits win.** A replacement applies only when the draft still equals the last one reported through `PiDraftChanged` or applied by `set_draft`. Anything typed or attached since then, and not yet reported, is kept, and the call returns `local_edits`. The pending report follows after the typing pause or when you leave the prompt, and the caller can decide again from there. Typing something and deleting it back counts as no edit, because the draft is the same.
+
+pi extensions can set the prompt text too, through `ctx.ui.setEditorText()` (see [Extensions & custom rendering](#extensions--custom-rendering)).
 
 ### Mentions
 
@@ -1894,7 +1955,8 @@ pi.nvim is extension-aware. When pi runs under `--mode rpc`, extensions can addr
 | `select` | Dialog or [diff review](#diff-review), depending on the payload |
 | `confirm` | Confirmation dialog |
 | `input` / `editor` | Input dialog |
-| `setTitle`, `set_editor_text` | Currently ignored (warned once) |
+| `set_editor_text` | Replaces the prompt text and keeps the attachments, under the same "local edits win" rule (see [Syncing the draft](#syncing-the-draft)) as `pi.set_draft()`, then reports it as `PiDraftChanged`. Dropped silently over unreported local edits |
+| `setTitle` | Currently ignored (warned once) |
 
 Dialog-style methods (`select`, `confirm`, `input`, `editor`) flow through the [Attention & dialogs](#attention--dialogs) queue described above. This section focuses on the piece that hasn't been covered yet: inline annotations in the conversation.
 
@@ -2113,6 +2175,7 @@ pi.send_mention(args?, opts?) -- insert an @-mention for the current buffer / se
 pi.attach_image(path)         -- queue an image file as an attachment
 pi.paste_image()              -- queue an image from the clipboard (requires img-clip.nvim)
 pi.invoke("/command")         -- invoke a backend slash command programmatically
+pi.set_draft(tab, draft)      -- replace a tab's draft { text, attachments? }; returns { status = "applied"|"no_session"|"local_edits" }
 
 -- Models
 pi.cycle_model()              -- step to the next model in the configured (or all) list

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-26
+
+- **ADDED:** `User PiDraftChanged` reports a tab's prompt draft (`tab`, `session_id`, `session_file`, `text`, `attachments`) when typing pauses, an attachment is added or removed, you leave the prompt or hide the chat, the message is sent, or a crash-recovered draft is restored. It fires only when the draft changed. The new `draft.debounce_ms` option (default 500) sets the typing pause. See "Syncing the draft" in the README.
+- **ADDED:** `pi.set_draft(tab, { text, attachments? })` replaces a tab's draft without showing the chat or moving focus, and returns `{ status = "applied" | "no_session" | "local_edits" }`. Edits that haven't been reported yet are never overwritten.
+- **ADDED:** pi extensions' `setEditorText` (`set_editor_text`) now replaces the prompt text, keeping attachments, under the same rule. It was previously ignored with a warning.
+
 ## 2026-11-21
 
 - **FIXED:** Focus no longer escapes the float chat to the editor behind it, for example after a Snacks picker closes. Focus returns to the chat window you were in; the prompt returns in insert mode. Floats such as pickers and dialogs can still take focus. To use the editor behind the float, hide the chat, switch to the side layout, or switch tabs.

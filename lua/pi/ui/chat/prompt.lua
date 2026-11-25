@@ -319,6 +319,25 @@ function Prompt:restore_text(text)
     self:_render_statusline()
 end
 
+--- Replace the whole prompt text. The current window and mode stay as they
+--- are; a visible prompt keeps its cursor position, clamped to the new text.
+---@param text string
+function Prompt:replace_text(text)
+    if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then
+        return
+    end
+    local win = self:win()
+    local cursor = win and vim.api.nvim_win_get_cursor(win) or nil
+    vim.api.nvim_buf_set_lines(self._buf, 0, -1, false, vim.split(text, "\n", { plain = true }))
+    if win and cursor then
+        local row = math.min(cursor[1], vim.api.nvim_buf_line_count(self._buf))
+        local line = vim.api.nvim_buf_get_lines(self._buf, row - 1, row, false)[1] or ""
+        pcall(vim.api.nvim_win_set_cursor, win, { row, math.min(cursor[2], #line) })
+    end
+    self:resize()
+    self:_render_statusline()
+end
+
 ---@return integer
 function Prompt:content_height()
     if not self._buf or not vim.api.nvim_buf_is_valid(self._buf) then

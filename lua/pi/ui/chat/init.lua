@@ -39,6 +39,7 @@
 ---@field _inflight_prompt? pi.SubmittedMessage
 ---@field _local_echoes pi.SubmittedMessage[] Prompts rendered when sent whose user `message_start` hasn't arrived yet, oldest first.
 ---@field _attachments pi.ChatAttachments
+---@field _draft pi.ChatDraftSync
 ---@field _zen pi.Zen
 ---@field _deferred_actions fun()[] Window actions waiting for the chat's tab to become current.
 ---@field _deferred_autocmd? integer TabEnter autocmd that runs `_deferred_actions`.
@@ -58,6 +59,7 @@ local Prompt = require("pi.ui.chat.prompt")
 local Attachments = require("pi.ui.chat.attachments")
 local Mentions = require("pi.ui.chat.mentions")
 local Zen = require("pi.ui.chat.zen")
+local DraftSync = require("pi.ui.chat.draft")
 
 ---@class pi.CompactionQueuedMessage
 ---@field mode "steer"|"follow_up"
@@ -75,6 +77,10 @@ function Chat.new(tab, mode, agent)
     self._prompt = Prompt.new(tab, self._attachments)
     self._history = History.new(tab)
     self._layout = Layout.new(mode, self._history, self._prompt, self._attachments)
+    self._draft = DraftSync.new(tab, self._prompt, self._attachments, function()
+        local session = require("pi.sessions.manager").get_for_tab(tab)
+        return session and session.chat == self and session or nil
+    end)
     self._keymaps_set = false
     self._streaming = false
     self._replaying = false
@@ -294,6 +300,7 @@ end
 
 function Chat:hide()
     self:_clear_deferred()
+    self._draft:report()
     if self._zen:is_active() then
         self._zen:exit()
     end
@@ -506,6 +513,28 @@ function Chat:restore_draft(draft)
     self._attachments:restore(draft.attachments)
 end
 
+--- Report the draft as `PiDraftChanged` now, unless it was already reported.
+function Chat:report_draft()
+    self._draft:report()
+end
+
+--- Replace the text and attachments, unless the user edited the draft since
+--- its last checkpoint. Never shows the chat or moves focus. The caller already
+--- has this draft, so it isn't reported back.
+---@param draft pi.DraftInput
+---@return "applied"|"local_edits"
+function Chat:replace_draft(draft)
+    return self._draft:replace(draft.text, draft.attachments or {}, "caller")
+end
+
+--- Replace only the text for pi (`set_editor_text`), under the same rule, and
+--- report the result.
+---@param text string
+---@return "applied"|"local_edits"
+function Chat:replace_draft_text(text)
+    return self._draft:replace(text, nil, "pi")
+end
+
 ---@return boolean opened
 function Chat:_auto_dispatch_attention_on_prompt_focus()
     local attention_config = Config.options.attention
@@ -590,6 +619,7 @@ end
 
 function Chat:toggle()
     if self._layout:is_visible() then
+        self._draft:report()
         self._layout:hide()
     else
         self:ensure_shown_and_focus_prompt()
@@ -737,6 +767,7 @@ function Chat:_capture_submission()
     }
     self._prompt:clear_text()
     self._attachments:clear()
+    self._draft:report()
     self._pending_submissions[#self._pending_submissions + 1] = submission
     return submission
 end
